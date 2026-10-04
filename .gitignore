@@ -36,3 +36,7 @@ packaging/payload-manifest.json
 packaging/test-install/
 packaging/test-install-legacy/
 desktop-trust.bin
+
+# Non-secret local developer storage policy; never ship/publish it.
+.rovarin-development-state.json
+.rovarin-development-state.json.tmp

@@ -58,7 +58,7 @@
         const actions = document.createElement('div'); actions.className = 'diagnostics-actions';
         const recheck = document.createElement('button'); recheck.type = 'button'; recheck.textContent = 'Re-check';
         recheck.addEventListener('click', () => refresh(true));
-        const note = document.createElement('p'); note.textContent = 'If installed, open Tailscale and connect, then re-check. Rovarin does not change your network settings.';
+        const note = document.createElement('p'); note.textContent = 'If installed, open Tailscale and connect, then re-check. Away from home, your phone needs Tailscale Connected too. Rovarin does not change your network settings.';
         actions.append(recheck, note); card.append(actions);
       }
       list.append(card);

@@ -15,6 +15,8 @@ internal static class NativeDesktopTest
     static Form form; static Type window; static string origin; static int result = 1;
     static BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hwnd,int message,IntPtr wparam,IntPtr lparam);
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hwnd,int message,IntPtr wparam,IntPtr lparam);
+    [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd,int attribute,out int value,int size);
     [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hwnd,int index);
     static WebView2 View { get { return (WebView2)window.GetField("view", flags).GetValue(form); } }
     static void Check(bool test, string message) { if (!test) throw new Exception(message); }
@@ -48,6 +50,8 @@ internal static class NativeDesktopTest
         window = assembly.GetType("DesktopWindow");
         form = (Form)Activator.CreateInstance(window, true);
         var json = new JavaScriptSerializer();
+        var package = json.Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"package.json")));
+        string currentVersion = json.Serialize((string)package["version"]);
         var saved = json.Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","data","config.json")));
         string pin = (string)saved["pin"];
         form.Shown += async delegate {
@@ -61,15 +65,86 @@ internal static class NativeDesktopTest
                 await View.CoreWebView2.ExecuteScriptAsync("window.__qaAuth=null;void fetch('/api/metrics').then(r=>window.__qaAuth=r.status)");
                 await Wait("window.__qaAuth===401", "Native shell bypassed authentication");
                 await Task.Delay(200);
-                Check(form.Width==480 && form.Height==600 && form.MinimumSize.Width==440,"PIN window not compact");
+                Check(form.Width==360 && form.Height>=320 && form.Height<480,"PIN window not sized around the shared card");
+                Check(form.FormBorderStyle==FormBorderStyle.None && !form.ControlBox && form.ClientSize==form.Size,"Lock window has an outer native frame");
+                bool dwmCorners=(bool)window.GetField("lockUsesDwmCorners",flags).GetValue(form);
+                if(dwmCorners) {
+                    int corners,policy;
+                    Check(form.Region==null && DwmGetWindowAttribute(form.Handle,33,out corners,4)==0 && corners==2 && DwmGetWindowAttribute(form.Handle,1,out policy,4)==0 && policy==1,"Smooth native DWM corners/frame policy missing");
+                } else Check(form.Region!=null && !form.Region.IsVisible(0,0) && form.Region.IsVisible(form.Width/2,form.Height/2),"Safe rounded fallback missing");
+                await Wait("document.querySelectorAll('.lock-window-controls button').length===2 && document.getElementById('lock-window-minimize').getAttribute('aria-label')==='Minimize Rovarin' && document.getElementById('lock-window-exit').getAttribute('aria-label')==='Exit desktop app' && getComputedStyle(document.querySelector('.lock-window-drag')).getPropertyValue('app-region')==='drag' && ['pinInput','unlockBtn','errMsg','lock-window-minimize','lock-window-exit'].every(id=>getComputedStyle(document.getElementById(id)).getPropertyValue('app-region')==='no-drag')", "Integrated lock controls/drag exclusions missing");
+                await Wait("!document.querySelector('.lock-window-controls button[aria-label*=Maximize]') && (()=>{const c=document.querySelector('.lock-window-controls').getBoundingClientRect(),i=document.querySelector('.login-icon').getBoundingClientRect();return c.left>=i.right && c.right<=innerWidth-12})()", "Lock controls overlap icon or add maximize");
+                SendMessage(form.Handle,0xA3,new IntPtr(2),IntPtr.Zero);
+                SendMessage(form.Handle,0x112,new IntPtr(0xF030),IntPtr.Zero);
+                Check(form.WindowState==FormWindowState.Normal,"Locked drag double click/system action maximized window");
+                // Navigation sizes the card asynchronously. Begin interaction
+                // only once its measured native client bounds are ready.
+                await Wait("(()=>{const r=document.querySelector('.login-card').getBoundingClientRect();return Math.abs(r.top)<1 && Math.abs(r.bottom-innerHeight)<2})()", "Measured lock window not ready for interaction");
+                var centeredLockBounds=form.Bounds;
+                IntPtr moveHandle=form.Handle;
+                var moveKeys=Task.Run(async delegate {
+                    await Task.Delay(150);PostMessage(moveHandle,0x100,new IntPtr(0x27),IntPtr.Zero);
+                    await Task.Delay(50);PostMessage(moveHandle,0x100,new IntPtr(0x28),IntPtr.Zero);
+                    await Task.Delay(50);PostMessage(moveHandle,0x100,new IntPtr(0x0D),IntPtr.Zero);
+                    await Task.Delay(800);PostMessage(moveHandle,0x100,new IntPtr(0x1B),IntPtr.Zero);
+                });
+                SendMessage(form.Handle,0x112,new IntPtr(0xF010),IntPtr.Zero);
+                await moveKeys;
+                Check(form.Location!=centeredLockBounds.Location && form.Size==centeredLockBounds.Size,"Native system move did not move compact window");
+                var movedLockBounds=form.Bounds;
+                Check((GetWindowLong(form.Handle,-16)&0x40000)==0,"Locked window retained WS_THICKFRAME");
+                for(int restoreCycle=0;restoreCycle<5;restoreCycle++) {
+                    await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('lock-window-minimize').click()");
+                    await Task.Delay(300);Check(form.WindowState==FormWindowState.Minimized,"Integrated lock minimize did not minimize actual window");
+                    Invoke("OpenWindow");await Task.Delay(300);
+                    Check(form.Bounds==movedLockBounds && form.WindowState==FormWindowState.Normal,"Minimize/reopen changed lock bounds: before="+movedLockBounds+" after="+form.Bounds+" state="+form.WindowState);
+                    Check(form.ClientSize==movedLockBounds.Size,"Locked client dimensions changed after restore");
+                }
+                Console.WriteLine("PASS five minimize/restore cycles: "+movedLockBounds.Width+"x"+movedLockBounds.Height+" unchanged, including moved position and client bounds");
+                Invoke("SaveBounds");
+                var lockedSaved=json.Deserialize<System.Collections.Generic.Dictionary<string,int>>(File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","data","desktop-window.json")));
+                Check(lockedSaved["width"]==900 && lockedSaved["height"]==680 && lockedSaved["x"]!=movedLockBounds.X,"Moved lock bounds contaminated saved normal bounds");
+                Console.WriteLine("PASS desktop integrated controls, native move, drag/input exclusions, maximize guard, minimize/restore position and saved bounds; corner mode="+(dwmCorners?"Windows 11 DWM":"rounded fallback"));
+                Check(!((Button)window.GetField("desktopExit",flags).GetValue(form)).Visible && !((Button)window.GetField("desktopMinimize",flags).GetValue(form)).Visible,"Lock window shows native caption controls");
+                Check(View.Bounds==form.ClientRectangle,"Locked WebView does not fill the native client area");
+                await Wait("!document.querySelector('.native-app-bar') && (()=>{const r=document.querySelector('.login-card').getBoundingClientRect();return Math.abs(r.top)<1 && Math.abs(r.bottom-innerHeight)<2 && r.left===0 && r.right===innerWidth})()", "Outer background/padding remains around native lock card");
+                using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-lock.png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
                 await Wait("document.documentElement.scrollHeight<=innerHeight+1", "Compact PIN page overflows");
+                await View.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia", "{\"features\":[{\"name\":\"prefers-reduced-motion\",\"value\":\"no-preference\"},{\"name\":\"prefers-contrast\",\"value\":\"no-preference\"}]}");
+                var loginSize=form.Size; var loginMinimum=form.MinimumSize;
+                form.MinimumSize=new System.Drawing.Size(320,240);
+                await View.CoreWebView2.ExecuteScriptAsync("document.documentElement.classList.remove('native-shell');document.querySelector('.login-container').style.paddingTop='47px';document.querySelector('.login-container').style.paddingBottom='34px';window.dispatchEvent(new Event('resize'))");
+                foreach(var phoneSize in new System.Drawing.Size[]{new System.Drawing.Size(320,568),new System.Drawing.Size(375,812),new System.Drawing.Size(390,844),new System.Drawing.Size(430,932)}) {
+                    int width=phoneSize.Width; form.Size=phoneSize;
+                    await Wait("innerWidth==="+width+" && document.documentElement.scrollWidth<=innerWidth && getComputedStyle(document.querySelector('.login-container')).justifyContent==='center' && getComputedStyle(document.querySelector('.login-container')).overflowY==='hidden' && getComputedStyle(document.querySelector('.lock-window-controls')).display==='none' && getComputedStyle(document.querySelector('.lock-window-drag')).display==='none'", "Stable phone PIN layout at "+width);
+                    await Wait("!document.getElementById('pinInput').autofocus && (matchMedia('(prefers-reduced-motion: reduce)').matches ? getComputedStyle(document.querySelector('.pin-input')).transitionDuration==='0s' : getComputedStyle(document.querySelector('.pin-input')).transitionProperty==='border-color, box-shadow') && parseFloat(getComputedStyle(document.querySelector('.pin-input')).letterSpacing)<=6", "Phone PIN keyboard/animation settings at "+width);
+                    await View.CoreWebView2.ExecuteScriptAsync("(()=>{const p=document.getElementById('pinInput');p.focus();window.__qaPinTop=p.getBoundingClientRect().top;for(const d of '123456'){p.value+=d;p.dispatchEvent(new Event('input',{bubbles:true}));}window.__qaTyped=p.value==='123456' && p.getBoundingClientRect().top===window.__qaPinTop;window.__qaAuto=window.__qaAuto||document.getElementById('unlockBtn').disabled;p.value='';p.blur()})()");
+                    await Wait("window.__qaTyped && window.__qaAuto && document.documentElement.scrollWidth<=innerWidth", "Phone PIN typing shifted/cleared or did not auto-submit at "+width);
+                    await Wait("(()=>{const c=document.querySelector('.login-container'),r=document.querySelector('.login-card').getBoundingClientRect(),p=getComputedStyle(c);return r.top>=47 && r.bottom<=innerHeight-34 && Math.abs((r.top+r.bottom)/2-(47+(innerHeight-47-34)/2))<2})()", "Phone login is not centered within safe areas at "+width);
+                    await View.CoreWebView2.ExecuteScriptAsync("scrollTo(0,200);document.querySelector('.login-container').scrollTop=200");
+                    await Wait("scrollY===0 && document.body.scrollTop===0 && document.querySelector('.login-container').scrollTop===0", "Phone login scroll lock failed at "+width);
+                    if(width==390) using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"login-mobile.png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                    form.Height=320;
+                    await Wait("innerHeight===320 && (()=>{const p=document.getElementById('pinInput').getBoundingClientRect(),b=document.getElementById('unlockBtn').getBoundingClientRect();return p.top>=47 && b.bottom<=innerHeight-34 && b.height>=44 && scrollY===0})()", "Keyboard-height PIN and unlock button hidden at "+width);
+                    await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('errMsg').textContent='Incorrect PIN. Please try again.'");
+                    await Wait("document.getElementById('errMsg').getBoundingClientRect().bottom<=innerHeight-34", "Keyboard-height error clipped at "+width);
+                    if(width==390) using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"login-keyboard.png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                    await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('errMsg').textContent=''");
+                }
+                form.MinimumSize=loginMinimum;form.Size=loginSize;
+                await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('.login-container').style.removeProperty('padding-top');document.querySelector('.login-container').style.removeProperty('padding-bottom');document.documentElement.classList.add('native-shell');window.dispatchEvent(new Event('resize'))");
+                Console.WriteLine("PASS phone PIN 320x568/375x812/390x844/430x932: safe-area centered, no page/pane scrolling, stable typing; reduced-height 320px controls/errors visible (physical iOS keyboard remains manual)");
                 await View.CoreWebView2.ExecuteScriptAsync("window.__qaLogin=null;void fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:"+json.Serialize(pin)+"})}).then(r=>window.__qaLogin=r.status)");
                 await Wait("window.__qaLogin===200", "Native PIN login failed");
                 View.CoreWebView2.Navigate(origin+"/");
                 await Wait("document.readyState==='complete' && !!window.monitoringLeaseId", "Dashboard did not acquire lease",30);
                 await WaitLeases(true);
+                Check(form.Region==null && form.Size==new System.Drawing.Size(900,680),"Unlock did not restore normal window bounds/outline");
+                await Wait("!document.documentElement.classList.contains('login-page') && !document.documentElement.style.getPropertyValue('--login-viewport-height')", "Login-only scroll styles leaked into dashboard");
                 await Wait("eventSource?.readyState===1", "Native SSE did not connect");
                 Console.WriteLine("PASS native dashboard/authentication ready");
+                await View.CoreWebView2.ExecuteScriptAsync("chrome.webview.postMessage('lock-window-minimize')");
+                await Task.Delay(150);Check(form.WindowState==FormWindowState.Normal,"Locked-only message affected authenticated desktop");
                 Check(form.FormBorderStyle==FormBorderStyle.None && !form.ControlBox,"Windows caption/control box remains");
                 Check((GetWindowLong(form.Handle,-16)&0xC00000)==0,"Windows caption style remains");
                 Check(form.ClientSize==form.Size,"Native UI does not reach window edges");
@@ -106,6 +181,15 @@ internal static class NativeDesktopTest
                 await Wait("!document.querySelector('[data-enhanced-actions]').children.length", "Remote client must not offer driver installation/download");
                 await View.CoreWebView2.ExecuteScriptAsync("window.fetch=window.__qaOriginalFetch;document.getElementById('refreshDiagnostics').click()");
                 Console.WriteLine("PASS Diagnostics official missing-tool downloads, existing confirmed installer action, cancelled confirmation, installed-driver and remote-client guards (mocked; no driver installed)");
+                await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('updatesSettingsTab').click()");
+                await Wait("!document.getElementById('updatesSettingsPanel').hidden && document.getElementById('updateCurrentVersion').textContent===" + currentVersion + " && !document.getElementById('nativeUpdateControls').hidden && !document.getElementById('autoCheckUpdates').disabled && !document.getElementById('autoCheckUpdates').checked", "Native Updates status/preference unavailable");
+                await View.CoreWebView2.ExecuteScriptAsync("window.chrome.webview.postMessage('updates-preference')");
+                await Wait("document.getElementById('autoCheckUpdates').checked", "Native update preference did not persist");
+                await View.CoreWebView2.ExecuteScriptAsync("window.chrome.webview.postMessage('updates-preference')");
+                await Wait("!document.getElementById('autoCheckUpdates').checked", "Native update preference could not disable checking");
+                await View.CoreWebView2.ExecuteScriptAsync("renderUpdateStatus({currentVersion:'0.1.1',latestVersion:'0.1.2',available:true,autoCheck:false,installed:true,message:'Test fixture: update available',releaseNotes:'Disposable UI fixture',releaseUrl:'https://github.com/DontMovePlease/Rovarin/releases/tag/v0.1.2'});document.getElementById('updateLater').click()");
+                await Wait("document.getElementById('installUpdate').hidden && document.getElementById('updateLater').hidden && document.getElementById('updateStatus').textContent.includes('when ready')", "Later did not dismiss the update offer");
+                Console.WriteLine("PASS native Updates current version, authenticated bridge, persistent auto preference and Later (no installer executed)");
                 await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('securitySettingsTab').click()");
                 await Wait("!document.getElementById('securitySettingsPanel').hidden && !document.getElementById('nativeSecurityControls').hidden && !document.getElementById('desktopPinPreference').disabled && document.getElementById('desktopPinPreference').checked", "Native Security did not load authenticated default preference");
                 await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('generalSettingsTab').click()");
@@ -123,7 +207,10 @@ internal static class NativeDesktopTest
                 await preferenceOn;
                 View.CoreWebView2.Navigate(origin+"/");
                 await Wait("document.readyState==='complete' && !!document.getElementById('pinInput')", "Re-enabled native PIN did not show login");
-                await Task.Delay(200); Check(form.Width==480 && form.Height==600,"Lock/re-enable did not return to compact PIN window");
+                await Task.Delay(200); Check(form.Width==360 && form.Height<480 && ((bool)window.GetField("lockUsesDwmCorners",flags).GetValue(form) || form.Region!=null),"Lock/re-enable did not return to rounded compact PIN window");
+                Invoke("SaveBounds");
+                var normalSaved=json.Deserialize<System.Collections.Generic.Dictionary<string,int>>(File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","data","desktop-window.json")));
+                Check(normalSaved["width"]==900 && normalSaved["height"]==680,"Locked bounds overwrote normal authenticated saved bounds");
                 await View.CoreWebView2.ExecuteScriptAsync("window.__qaLogin=null;void fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:"+json.Serialize(pin)+"})}).then(r=>window.__qaLogin=r.status)");
                 await Wait("window.__qaLogin===200", "Canonical PIN failed after re-enable");
                 View.CoreWebView2.Navigate(origin+"/");
@@ -172,27 +259,103 @@ internal static class NativeDesktopTest
                 // Phone-sized presentation of the SAME document; no native bar.
                 var desktopSize=form.Size; var desktopMinimum=form.MinimumSize;
                 form.MinimumSize=new System.Drawing.Size(320,400); form.Size=new System.Drawing.Size(390,844);
-                await View.CoreWebView2.ExecuteScriptAsync("document.documentElement.classList.remove('native-shell');document.body.style.setProperty('--app-safe-top','47px');scrollTo(0,0)");
+                await View.CoreWebView2.ExecuteScriptAsync("document.documentElement.classList.remove('native-shell');syncPhoneSurface();document.body.style.setProperty('--app-safe-top','47px');scrollTo(0,0)");
                 await Wait("innerWidth<=430 && document.documentElement.scrollWidth<=innerWidth && !document.body.classList.contains('sidebar-expanded') && getComputedStyle(document.querySelector('.app-sidebar')).visibility==='hidden'", "Shared mobile presentation overflow/closed drawer");
-                await Wait("document.querySelector('.native-app-bar').getBoundingClientRect().height===93 && document.getElementById('sidebarToggle').getBoundingClientRect().top>=47 && document.getElementById('sidebarToggle').contains(document.elementFromPoint(document.getElementById('sidebarToggle').getBoundingClientRect().left+22,document.getElementById('sidebarToggle').getBoundingClientRect().top+22))", "iPhone safe-area menu button obscured");
+                await Wait("(()=>{const b=document.getElementById('sidebarToggle'),r=b.getBoundingClientRect();return r.width===48 && r.height===48 && getComputedStyle(b).borderRadius==='50%' && r.left>=18 && r.left<=22 && r.top>=47 && b.contains(document.elementFromPoint(r.left+24,r.top+24)) && getComputedStyle(document.querySelector('.native-app-identity')).display==='flex' && document.querySelector('.native-app-identity').textContent.trim()==='Rovarin' && document.querySelector('.native-app-bar').getBoundingClientRect().height===60 && document.querySelector('.dashboard-container').contains(b)})()", "Phone glass header must retain the circular menu, readable shared brand and safe-area placement");
                 await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('sidebarToggle').click()");
-                await Wait("document.body.classList.contains('sidebar-expanded') && !document.getElementById('sidebarBackdrop').hidden", "Mobile drawer did not open");
-                await Wait("document.getElementById('appSidebar').getBoundingClientRect().top===93 && Math.abs(document.getElementById('appSidebar').getBoundingClientRect().left)<1 && document.getElementById('sidebarBackdrop').getBoundingClientRect().top===93 && getComputedStyle(document.getElementById('sidebarBackdrop')).opacity==='1'", "Phone drawer/backdrop safe-area alignment or animation failed");
-                await Wait("!document.getElementById('appSidebar').inert", "Open phone drawer must enable interaction");
-                await Wait("matchMedia('(prefers-reduced-motion: reduce)').matches ? getComputedStyle(document.getElementById('appSidebar')).transitionProperty==='none' : getComputedStyle(document.getElementById('appSidebar')).transitionProperty.includes('transform')", "Phone drawer must slide or respect reduced motion");
+                await Wait("document.body.classList.contains('sidebar-expanded') && !document.getElementById('appSidebar').inert && document.querySelector('.phone-page-surface').getBoundingClientRect().left>=document.getElementById('appSidebar').getBoundingClientRect().width-1 && getComputedStyle(document.getElementById('sidebarBackdrop')).opacity==='1' && document.getElementById('dashboardPage').inert", "Menu must push page aside and expose accessible navigation");
+                await Wait("(()=>{const n=document.getElementById('appSidebar');return n.getBoundingClientRect().top===0 && ['Dashboard','Processes','Maintenance','Diagnostics','Settings'].every(label=>Array.from(n.querySelectorAll('button')).some(b=>b.textContent.trim()===label && b.getBoundingClientRect().height>=44 && b.getBoundingClientRect().bottom<=innerHeight))})()", "Push drawer must expose every existing task and Settings");
                 using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-mobile-drawer.png")))
                     await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
                 await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('sidebarBackdrop').click()");
-                await Wait("!document.body.classList.contains('sidebar-expanded') && getComputedStyle(document.getElementById('sidebarBackdrop')).pointerEvents==='none' && getComputedStyle(document.getElementById('appSidebar')).visibility==='hidden'", "Phone drawer did not close cleanly on outside tap");
-                await Wait("document.getElementById('appSidebar').inert", "Closed phone menu remains keyboard accessible");
-                await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('sidebarToggle').click()");
-                await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('[data-page=diagnosticsPage]').click()");
-                await Wait("!document.body.classList.contains('sidebar-expanded') && !document.getElementById('diagnosticsPage').hidden", "Mobile drawer did not close after navigation");
-                await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('[data-page=dashboardPage]').click()");
+                await Wait("!document.body.classList.contains('sidebar-expanded') && document.getElementById('appSidebar').inert && !document.getElementById('dashboardPage').inert && Math.abs(document.querySelector('.phone-page-surface').getBoundingClientRect().left)<1", "Dismiss must return the whole dashboard without disabling its actions");
                 using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-mobile.png")))
                     await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                foreach(var phoneSize in new System.Drawing.Size[]{new System.Drawing.Size(320,568),new System.Drawing.Size(375,812),new System.Drawing.Size(390,844),new System.Drawing.Size(430,932)}) {
+                    int width=phoneSize.Width;
+                    form.Size=phoneSize;
+                    await Wait("innerWidth==="+width+" && document.documentElement.scrollWidth<=innerWidth", "Closed phone width/overflow at "+width);
+                    await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('sidebarToggle').click()");
+                    await Wait("document.body.classList.contains('sidebar-expanded') && document.querySelector('.phone-page-surface').getBoundingClientRect().left>=document.getElementById('appSidebar').getBoundingClientRect().width-1", "Phone push animation at "+width);
+                    await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('[data-page=maintenancePage]').click()");
+                    await Wait("!document.body.classList.contains('sidebar-expanded') && !document.getElementById('maintenancePage').hidden && !document.getElementById('maintenancePage').inert", "Phone maintenance navigation at "+width);
+                    await Wait("document.documentElement.scrollWidth<=innerWidth && Array.from(document.querySelectorAll('.maint-action-card')).every(c=>c.getBoundingClientRect().left>=-1 && c.getBoundingClientRect().right<=innerWidth+1 && getComputedStyle(c).backdropFilter==='none')", "Phone maintenance card fit at "+width);
+                    await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('sidebarToggle').click()");
+                    await Wait("(()=>{const b=document.getElementById('nativeSettingsButton'),r=b.getBoundingClientRect();return r.height>=44 && r.bottom<=innerHeight && b.contains(document.elementFromPoint(r.left+22,r.top+22))})()", "Phone Settings must remain reachable at "+width);
+                    await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('nativeSettingsButton').click()");
+                    await Wait("!document.getElementById('diagnosticsPage').hidden && !document.body.classList.contains('sidebar-expanded') && !document.getElementById('diagnosticsPage').inert", "Phone Settings navigation at "+width);
+                    foreach(var page in new string[]{"dashboardPage","processesPage","diagnosticsPage"}) {
+                        await View.CoreWebView2.ExecuteScriptAsync("showAppPage('"+page+"');document.querySelector('.dashboard-container').scrollTop=0");
+                        await Wait("!document.getElementById('"+page+"').hidden && document.documentElement.scrollWidth<=innerWidth && document.querySelector('.native-app-bar').getBoundingClientRect().right<=innerWidth && getComputedStyle(document.querySelector('.metric-card')).backdropFilter==='none'", "Midnight phone page fit "+page+" at "+width+"x"+phoneSize.Height);
+                    }
+                    await View.CoreWebView2.ExecuteScriptAsync("showAppPage('dashboardPage');document.getElementById('openCpuDetailButton').click()");
+                    await Wait("cpuDetailDialog.open && (()=>{const r=cpuDetailDialog.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight})()", "Phone detail dialog must fit at "+width);
+                    await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('closeCpuDetailButton').click()");
+                    await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('[data-page=dashboardPage]').click();document.querySelector('.dashboard-container').scrollTop=200");
+                    await Wait("document.querySelector('.dashboard-container').scrollTop===200 && document.querySelector('.native-app-bar').getBoundingClientRect().bottom<document.querySelector('.dashboard-container').getBoundingClientRect().top", "In-page menu must scroll away without resizing the viewport at "+width);
+                    await Task.Delay(350);
+                    await Wait("document.querySelector('.dashboard-container').scrollTop===200 && document.querySelector('.native-app-bar').getBoundingClientRect().bottom<document.querySelector('.dashboard-container').getBoundingClientRect().top && !document.body.classList.contains('phone-header-hidden')", "Stopped scrolling must not restore menu or bounce the page at "+width);
+                    await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('.dashboard-container').scrollTop=0");
+                }
+                await View.CoreWebView2.ExecuteScriptAsync("window.testPhoneSwipe=(target,x1,y1,x2,y2)=>{const fire=(type,x,y)=>{const t=new Touch({identifier:1,target,clientX:x,clientY:y});target.dispatchEvent(new TouchEvent(type,{bubbles:true,cancelable:true,touches:type==='touchend'?[]:[t],changedTouches:[t]}));};fire('touchstart',x1,y1);fire('touchmove',x2,y2);fire('touchend',x2,y2);}");
+                await View.CoreWebView2.ExecuteScriptAsync("testPhoneSwipe(document.querySelector('.dashboard-container'),100,240,108,340)");
+                await Wait("!document.body.classList.contains('sidebar-expanded')", "Vertical scrolling must not push the drawer open");
+                await View.CoreWebView2.ExecuteScriptAsync("testPhoneSwipe(document.querySelector('canvas'),100,240,220,244)");
+                await Wait("!document.body.classList.contains('sidebar-expanded')", "Graph gestures must not trigger the drawer");
+                await View.CoreWebView2.ExecuteScriptAsync("testPhoneSwipe(document.querySelector('.dashboard-container'),100,240,240,244)");
+                await Wait("document.body.classList.contains('sidebar-expanded') && document.querySelector('.phone-page-surface').getBoundingClientRect().left>=document.getElementById('appSidebar').getBoundingClientRect().width-1", "Anywhere right swipe must push the dashboard aside");
+                await View.CoreWebView2.ExecuteScriptAsync("testPhoneSwipe(document.querySelector('#appSidebar [data-page=dashboardPage]'),200,240,60,244)");
+                await Wait("!document.body.classList.contains('sidebar-expanded') && Math.abs(document.querySelector('.phone-page-surface').getBoundingClientRect().left)<1 && !document.getElementById('dashboardPage').inert", "Reverse swipe must smoothly return the page");
+                await View.CoreWebView2.ExecuteScriptAsync("delete window.testPhoneSwipe;document.body.style.setProperty('--app-safe-top','0px')");
+                await Wait("document.getElementById('sidebarToggle').getBoundingClientRect().top===14", "Zero safe inset must not clip circular menu");
+                await View.CoreWebView2.ExecuteScriptAsync("document.body.style.setProperty('--app-safe-top','47px')");
+                await Wait("document.getElementById('sidebarToggle').getBoundingClientRect().top===61", "Safe-area changes must reposition menu without doubled spacing");
+                form.Size=new System.Drawing.Size(1440,900);
+                await View.CoreWebView2.ExecuteScriptAsync("document.body.style.removeProperty('--app-safe-top')");
+                await Wait("innerWidth===1440 && document.documentElement.scrollWidth<=innerWidth && getComputedStyle(document.body).backgroundAttachment.split(',').every(v=>v.trim()==='fixed') && getComputedStyle(document.querySelector('.metric-card')).backdropFilter==='none'", "Desktop canvas and solid data material changed unexpectedly");
+                Console.WriteLine("PASS Midnight Glass phone 320x568/375x812/390x844/430x932: branded header, safe areas, stable scroll, push/reverse drawer, pages, settings, dialogs, touch targets and solid data surfaces (WebView2, not physical iOS)");
+                form.Size=new System.Drawing.Size(390,844);
+                await View.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia", "{\"features\":[{\"name\":\"prefers-reduced-motion\",\"value\":\"reduce\"},{\"name\":\"prefers-contrast\",\"value\":\"more\"}]}");
+                await Wait("matchMedia('(prefers-reduced-motion: reduce)').matches && matchMedia('(prefers-contrast: more)').matches && getComputedStyle(document.querySelector('.phone-page-surface')).transitionDuration==='0s' && getComputedStyle(document.querySelector('.native-app-bar')).backdropFilter==='none' && getComputedStyle(document.documentElement).getPropertyValue('--text-secondary').trim()==='#c4d2e2'", "Accessible motion/contrast glass fallback missing");
+                await View.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia", "{\"features\":[{\"name\":\"prefers-reduced-transparency\",\"value\":\"reduce\"}]}");
+                if(await Condition("matchMedia('(prefers-reduced-transparency: reduce)').matches")) {
+                    await Wait("getComputedStyle(document.querySelector('.native-app-bar')).backdropFilter==='none' && getComputedStyle(document.documentElement).getPropertyValue('--surface-glass').trim()==='#172232'", "Reduced-transparency material must be solid");
+                    Console.WriteLine("PASS phone reduced-transparency solid material fallback");
+                } else Console.WriteLine("NOTE runtime does not expose reduced-transparency media; solid default/contrast fallback checked");
+                await View.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia", "{\"features\":[{\"name\":\"prefers-reduced-motion\",\"value\":\"no-preference\"},{\"name\":\"prefers-contrast\",\"value\":\"no-preference\"}]}");
+                foreach(var scene in new string[]{"dashboardPage","processesPage","maintenancePage","diagnosticsPage"}) {
+                    form.Size=new System.Drawing.Size(390,844);
+                    await View.CoreWebView2.ExecuteScriptAsync("showAppPage('"+scene+"');document.querySelector('.dashboard-container').scrollTop=0");
+                    if(scene=="processesPage") {
+                        await Wait("document.querySelector('.processes-table tr.is-selectable')!==null", "Real process rows should load",20);
+                        await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('.processes-table tr.is-selectable').click();document.getElementById('processesFreezeButton').click()");
+                        await Wait("document.getElementById('processesFreezeButton').getAttribute('aria-pressed')==='true' && !!document.querySelector('.processes-table tr.is-selected')", "Selected process and frozen state must remain visible");
+                    }
+                    await Task.Delay(600);
+                    using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"midnight-"+scene+".png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                    if(scene=="processesPage") {
+                        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('processesFreezeButton').click()");
+                        await Wait("document.getElementById('processesFreezeButton').getAttribute('aria-pressed')==='false'", "Resume live control must recover");
+                    }
+                }
+                await View.CoreWebView2.ExecuteScriptAsync("showAppPage('processesPage')");
+                await Wait("document.getElementById('processesFreezeButton').getAttribute('aria-pressed')==='false'", "Returning to Processes should remain live");
+                await View.CoreWebView2.ExecuteScriptAsync("showAppPage('maintenancePage');document.getElementById('maint-btn-empty_recycle_bin').click()");
+                await Wait("getComputedStyle(document.getElementById('maintModal')).display!=='none' && (()=>{const r=document.querySelector('.maint-modal').getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight})()", "Maintenance confirmation must fit without running an action");
+                using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"midnight-confirmation.png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('maintModalCancel').click();document.getElementById('nativeSettingsButton').click()");
+                using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"midnight-settings.png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await View.CoreWebView2.ExecuteScriptAsync("document.documentElement.classList.add('native-shell');syncPhoneSurface()");
+                foreach(var size in new System.Drawing.Size[]{new System.Drawing.Size(900,680),new System.Drawing.Size(980,740),new System.Drawing.Size(1440,900)}) {
+                    form.Size=size;
+                    foreach(var page in new string[]{"dashboardPage","processesPage","maintenancePage","diagnosticsPage"}) {
+                        await View.CoreWebView2.ExecuteScriptAsync("showAppPage('"+page+"');document.querySelector('.dashboard-container').scrollTop=0");
+                        await Wait("innerWidth==="+size.Width+" && document.documentElement.scrollWidth<=innerWidth && !document.getElementById('"+page+"').hidden && getComputedStyle(document.querySelector('.metric-card')).backdropFilter==='none' && getComputedStyle(document.querySelector('.native-app-bar')).backdropFilter==='none'", "Dense native desktop page fit "+page+" at "+size.Width+"x"+size.Height);
+                    }
+                }
+                Console.WriteLine("PASS Midnight desktop 900x680/980x740/1440x900 all pages; reduced-motion/high-contrast no-blur fallback; confirmation cancel only");
                 form.MinimumSize=desktopMinimum; form.Size=desktopSize;
-                await View.CoreWebView2.ExecuteScriptAsync("document.body.style.removeProperty('--app-safe-top');document.documentElement.classList.add('native-shell')");
+                await View.CoreWebView2.ExecuteScriptAsync("document.body.style.removeProperty('--app-safe-top');document.documentElement.classList.add('native-shell');syncPhoneSurface()");
                 // The same SC_CLOSE path used by Alt+F4 hides to tray, preserving Node.
                 SendMessage(form.Handle,0x112,new IntPtr(0xF060),IntPtr.Zero);
                 await Task.Delay(100);
@@ -220,17 +383,44 @@ internal static class NativeDesktopTest
                 await Wait("window.__qaRevoked===401", "Revoked native cookie accepted");
                 await View.CoreWebView2.ExecuteScriptAsync("window.__qaLogin=null;void fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:"+json.Serialize(pin)+"})}).then(r=>window.__qaLogin=r.status)");
                 await Wait("window.__qaLogin===200", "Session persistence setup failed");
+                for(int cycle=0;cycle<2;cycle++) {
+                    var expectedBounds=form.Bounds;
+                    if(cycle==1) form.WindowState=FormWindowState.Maximized;
+                    await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('logoutButton').click()");
+                    await Wait("!!document.getElementById('pinInput') && document.readyState==='complete'", "Relock did not navigate to login");
+                    await Task.Delay(200);
+                    Check(((bool)window.GetField("lockUsesDwmCorners",flags).GetValue(form) || form.Region!=null) && form.Width==360 && form.Height<480 && form.WindowState==FormWindowState.Normal,"Repeated relock presentation failed");
+                    await Wait("getComputedStyle(document.querySelector('.login-container')).overflowY==='hidden' && !document.querySelector('.native-app-bar')", "Relock did not restore login scroll lock");
+                    await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('pinInput').value="+json.Serialize(pin)+";document.getElementById('pinInput').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))");
+                    await Wait("!!window.monitoringLeaseId && !!document.getElementById('dashboardPage')", "Enter unlock did not restore dashboard",30);
+                    await Task.Delay(200);
+                    Check(form.Region==null && form.WindowState==(cycle==1?FormWindowState.Maximized:FormWindowState.Normal),"Unlock did not restore normal native state");
+                    if(cycle==0) Check(form.Bounds==expectedBounds,"Unlock changed normal window position/size");
+                    Invoke("SaveBounds");
+                    var persisted=json.Deserialize<System.Collections.Generic.Dictionary<string,int>>(File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","data","desktop-window.json")));
+                    Check(persisted["width"]==expectedBounds.Width && persisted["height"]==expectedBounds.Height && persisted["maximized"]==(cycle==1?1:0),"Login dimensions/state contaminated saved normal bounds");
+                    if(cycle==1) form.WindowState=FormWindowState.Normal;
+                    await WaitLeases(true);
+                }
+                Console.WriteLine("PASS rounded native lock-only window, repeated lock/Enter-unlock, exact normal/maximized restoration and saved bounds isolation");
                 var exitButton=(Button)window.GetField("desktopExit",flags).GetValue(form);
                 Check(exitButton.Visible && exitButton.AccessibleName=="Exit desktop app","Native top-right X missing");
                 Console.WriteLine("PASS native borderless edges, draggable shared top bar, existing Settings, hidden scrollbars with scrolling, system-close/tray reopen, PIN auth/revocation, APIs, CPU detail, SSE, processes navigation, lease release, restricted navigation");
-                result=0;
-                // Deliberately stall only this fixture's visibility event to prove
-                // the native X does not depend on the browser finishing a call.
+                await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('logoutButton').click()");
+                await Wait("!!document.getElementById('lock-window-exit') && document.readyState==='complete'", "Locked exit control missing after relock");
+                // Preserve the existing subsequent real-EXE saved-session test:
+                // authenticate this disposable cookie jar without navigating away
+                // from the locked document whose integrated X we are exercising.
+                await View.CoreWebView2.ExecuteScriptAsync("window.__qaLogin=null;void fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:"+json.Serialize(pin)+"})}).then(r=>window.__qaLogin=r.status)");
+                await Wait("window.__qaLogin===200", "Saved-session fixture authentication failed");
                 await View.CoreWebView2.ExecuteScriptAsync("window.addEventListener('pc-monitor-desktop-visibility',()=>{const until=Date.now()+3500;while(Date.now()<until){}})");
                 var closed=new TaskCompletionSource<bool>();form.FormClosed+=delegate{closed.TrySetResult(true);};
-                exitButton.PerformClick();
-                Check((bool)window.GetField("exiting",flags).GetValue(form),"Top-right X did not request shell-only exit");
+                await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('lock-window-exit').click()");
+                await Task.Delay(100);
+                Check((bool)window.GetField("exiting",flags).GetValue(form),"Integrated locked X did not request shell-only exit");
                 Check(await Task.WhenAny(closed.Task,Task.Delay(2000))==closed.Task,"Native X waited indefinitely for a stalled view");
+                Console.WriteLine("PASS integrated locked X uses existing bounded shell-only Exit semantics (stalled visibility handler)");
+                result=0;
             } catch(Exception error) { result=1; Console.Error.WriteLine(error.Message); }
             finally { Invoke("ExitShell"); }
         };

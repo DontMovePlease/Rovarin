@@ -1,8 +1,10 @@
-#define AppVersion "0.1.1"
+#define AppVersion "0.2.0"
 [Setup]
 AppId={{C51A4180-26D2-4F48-93BD-B40B182B78DA}
 AppName=Rovarin
 AppVersion={#AppVersion}
+VersionInfoVersion={#AppVersion}.0
+VersionInfoProductVersion={#AppVersion}.0
 AppPublisher=Rovarin
 Uninstallable=yes
 CreateUninstallRegKey=yes

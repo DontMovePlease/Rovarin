@@ -4,9 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="Rovarin">
-  <meta name="theme-color" content="#080c14">
+  <meta name="theme-color" content="#0c1420">
   <title>Rovarin Dashboard</title>
   <meta name="application-name" content="Rovarin">
   <meta name="apple-mobile-web-app-title" content="Rovarin">
@@ -18,6 +18,15 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💻</text></svg>">
 </head>
 <body class="dark-theme">
+    <nav id="appSidebar" class="page-nav app-sidebar" aria-label="Dashboard pages"><div class="sidebar-phone-brand">Rovarin</div>
+      <button class="page-nav-button is-active" type="button" data-page="dashboardPage" aria-current="page" title="Dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg><span>Dashboard</span></button>
+      <button class="page-nav-button" type="button" data-page="processesPage" title="Processes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18V9h4v9M10 18V4h4v14M17 18v-6h4v6"/></svg><span>Processes</span></button>
+      <button class="page-nav-button" type="button" data-page="maintenancePage" title="Maintenance"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 10-10M13 3a6 6 0 0 0 8 8l-4-4 1-3-3 1Z"/></svg><span>Maintenance</span></button>
+      <button class="page-nav-button" type="button" data-page="diagnosticsPage" title="Diagnostics"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4ZM7 12h3l2-5 2 10 2-5h2"/></svg><span>Diagnostics</span></button>
+      <button id="nativeSettingsButton" class="page-nav-button native-settings-button" type="button" aria-label="Open settings" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m9 3-.7 2.3-2 .9-2.2-.6-1.5 2.6 1.6 1.8-.2 2.2-1.6 1.8L4 17l2.3-.5 1.8 1.3.5 2.2h3l.8-2.2 2.1-.8 2.1.7 1.6-2.5-1.5-1.9.1-2.3 1.7-1.6-1.4-2.7-2.3.5-1.8-1.3L12 3Z"/><circle cx="10.5" cy="11.5" r="3"/></svg><span>Settings</span></button>
+    </nav>
+  <div class="phone-page-surface">
+    <button id="sidebarBackdrop" class="sidebar-backdrop" type="button" aria-label="Close navigation" hidden></button>
   <div class="native-app-bar" aria-label="Rovarin application">
     <button id="sidebarToggle" type="button" class="native-navigation-button sidebar-toggle" aria-label="Open navigation" aria-controls="appSidebar" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
     <div class="native-history" aria-label="Page history">
@@ -30,15 +39,6 @@
     <div id="reconnectBanner" class="reconnect-banner">
       ⚡ Reconnecting to Rovarin Server...
     </div>
-
-    <button id="sidebarBackdrop" class="sidebar-backdrop" type="button" aria-label="Close navigation" hidden></button>
-    <nav id="appSidebar" class="page-nav app-sidebar" aria-label="Dashboard pages">
-      <button class="page-nav-button is-active" type="button" data-page="dashboardPage" aria-current="page" title="Dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg><span>Dashboard</span></button>
-      <button class="page-nav-button" type="button" data-page="processesPage" title="Processes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18V9h4v9M10 18V4h4v14M17 18v-6h4v6"/></svg><span>Processes</span></button>
-      <button class="page-nav-button" type="button" data-page="maintenancePage" title="Maintenance"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 10-10M13 3a6 6 0 0 0 8 8l-4-4 1-3-3 1Z"/></svg><span>Maintenance</span></button>
-      <button class="page-nav-button" type="button" data-page="diagnosticsPage" title="Diagnostics"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4ZM7 12h3l2-5 2 10 2-5h2"/></svg><span>Diagnostics</span></button>
-      <button id="nativeSettingsButton" class="page-nav-button native-settings-button" type="button" aria-label="Open settings" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m9 3-.7 2.3-2 .9-2.2-.6-1.5 2.6 1.6 1.8-.2 2.2-1.6 1.8L4 17l2.3-.5 1.8 1.3.5 2.2h3l.8-2.2 2.1-.8 2.1.7 1.6-2.5-1.5-1.9.1-2.3 1.7-1.6-1.4-2.7-2.3.5-1.8-1.3L12 3Z"/><circle cx="10.5" cy="11.5" r="3"/></svg><span>Settings</span></button>
-    </nav>
 
     <div id="dashboardPage" class="app-page is-active" data-profile="dashboard">
     <!-- PC Health Summary -->
@@ -336,6 +336,23 @@
         <div class="settings-tabs" role="tablist" aria-label="Settings">
           <button id="generalSettingsTab" type="button" role="tab" aria-selected="true" aria-controls="generalSettingsPanel">Monitoring</button>
           <button id="securitySettingsTab" type="button" role="tab" aria-selected="false" aria-controls="securitySettingsPanel">Security</button>
+          <button id="updatesSettingsTab" type="button" role="tab" aria-selected="false" aria-controls="updatesSettingsPanel">Updates</button>
+        </div>
+        <div id="updatesSettingsPanel" role="tabpanel" aria-labelledby="updatesSettingsTab" hidden>
+          <h2>Updates</h2>
+          <p>Current version: <strong id="updateCurrentVersion">—</strong><span id="updateLatestVersion"></span></p>
+          <p id="updateStatus" role="status" aria-live="polite">Updates are checked against official Rovarin releases.</p>
+          <p id="updateReleaseSummary"></p>
+          <div id="nativeUpdateControls" hidden>
+            <label><input id="autoCheckUpdates" type="checkbox" checked disabled> Automatically check for updates</label>
+            <div class="diagnostics-toolbar">
+              <button id="checkUpdates" type="button">Check for updates</button>
+              <button id="installUpdate" type="button" hidden>Update Now</button>
+              <button id="updateLater" type="button" hidden>Later</button>
+              <button id="viewUpdateNotes" type="button" hidden>View Release Notes</button>
+            </div>
+          </div>
+          <p id="remoteUpdateHint">Manage updates from the trusted Rovarin desktop app on this PC.</p>
         </div>
         <div id="securitySettingsPanel" role="tabpanel" aria-labelledby="securitySettingsTab" hidden>
           <h2>Security</h2>
@@ -409,6 +426,8 @@
     </section>
   </div>
 
+  </div>
+
   <dialog id="cpuDetailDialog" class="cpu-detail-dialog" aria-labelledby="cpuDetailTitle">
     <section class="cpu-detail-panel">
       <header class="cpu-detail-header">
@@ -436,6 +455,21 @@
         <span id="cpuDetailCoreCount">--</span>
       </div>
       <div id="cpuDetailCores" class="cpu-detail-cores" aria-label="Per-core CPU usage"></div>
+    </section>
+  </dialog>
+
+  <dialog id="mobileOnboardingDialog" class="mobile-onboarding-dialog" aria-labelledby="mobileOnboardingTitle">
+    <section class="mobile-onboarding-sheet">
+      <h2 id="mobileOnboardingTitle">Finish setting up Rovarin</h2>
+      <div class="mobile-onboarding-section">
+        <h3>Away from home</h3>
+        <p>Using Rovarin away from home? Open Tailscale on this phone and make sure it shows <strong>Connected</strong> before opening Rovarin. Your PC must also stay online and connected to Tailscale.</p>
+      </div>
+      <div class="mobile-onboarding-section" id="mobileOnboardingInstall">
+        <h3>Add Rovarin to your Home Screen</h3>
+        <ol id="mobileOnboardingSteps"></ol>
+      </div>
+      <button id="mobileOnboardingDismiss" type="button" class="mobile-onboarding-dismiss">Got it</button>
     </section>
   </dialog>
 

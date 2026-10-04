@@ -10,7 +10,7 @@
 ![Experimental alpha](https://img.shields.io/badge/status-experimental_alpha-d99b36)
 ![Source available](https://img.shields.io/badge/license-PolyForm_Noncommercial-617184)
 
-[**Download for Windows**](https://github.com/DontMovePlease/Rovarin/releases/download/v0.1.1/RovarinSetup.exe) · [Release notes](https://github.com/DontMovePlease/Rovarin/releases) · [Report a bug](https://github.com/DontMovePlease/Rovarin/issues/new/choose)
+[**Download for Windows**](https://github.com/DontMovePlease/Rovarin/releases/download/v0.2.0/RovarinSetup.exe) · [Release notes](https://github.com/DontMovePlease/Rovarin/releases) · [Report a bug](https://github.com/DontMovePlease/Rovarin/issues/new/choose)
 
 </div>
 
@@ -109,6 +109,8 @@ Tailscale reachability is not authentication. Rovarin currently serves HTTP; Tai
 The installer contains application/runtime files and required third-party assets/licenses. It does **not** contain a developer PIN, local configuration, credentials, private Tailscale address, logs, runtime state or AGENTS.md. Each fresh installation generates its own configuration and PIN.
 
 ## Upgrade or uninstall
+
+The unreleased development build adds **Settings → Updates** in the trusted native desktop app. Automatic checks are on by default (at startup and at most daily); installation always needs your approval. Experimental Alpha checks published official prereleases and full releases, choosing the highest valid numeric version with a verified installer checksum. The centralized Stable policy excludes prereleases and will be reviewed before Beta/V1. Remote browsers can view the installed version but cannot configure or execute updates. Source checkouts cannot upgrade themselves.
 
 Run a newer installer over the existing installation to preserve your PIN and preferences. Use **Windows Settings → Apps → Installed apps → Rovarin → Uninstall** for normal removal.
 

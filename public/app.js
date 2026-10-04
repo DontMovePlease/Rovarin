@@ -186,7 +186,7 @@ function drawSparkline(canvasId, seriesList, options = {}) {
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     ctx.shadowColor = series.color;
-    ctx.shadowBlur = 4;
+    ctx.shadowBlur = 0;
     ctx.stroke();
     ctx.shadowBlur = 0;
   });
@@ -476,7 +476,7 @@ function updateUI(data) {
       if (chartData.cpu.length > MAX_POINTS) chartData.cpu.shift();
       rememberCpuDetailSample(cpu);
       drawSparkline('cpu', [
-        { data: chartData.cpu, name: 'CPU load', format: 'percent', color: '#38bdf8', fillColor: 'rgba(56, 189, 248, 0.25)' }
+        { data: chartData.cpu, name: 'CPU load', format: 'percent', color: '#66c7ff', fillColor: 'rgba(102, 199, 255, 0.14)' }
       ], { max: 100, fixedMax: true });
       if (cpuDetailActive) renderCpuDetail();
     }
@@ -526,8 +526,8 @@ function updateUI(data) {
       if (chartData.gpu.length > MAX_POINTS) chartData.gpu.shift();
       if (chartData.gpuTemp.length > MAX_POINTS) chartData.gpuTemp.shift();
       drawSparkline('gpu', [
-        { data: chartData.gpu, name: 'GPU load', format: 'percent', color: '#a855f7', fillColor: 'rgba(168, 85, 247, 0.2)' },
-        ...(gpu.available && gpu.temperatureC !== null ? [{ data: chartData.gpuTemp, name: 'GPU temp', format: 'temperature', color: '#fbbf24' }] : [])
+        { data: chartData.gpu, name: 'GPU load', format: 'percent', color: '#8b92ee', fillColor: 'rgba(139, 146, 238, 0.12)' },
+        ...(gpu.available && gpu.temperatureC !== null ? [{ data: chartData.gpuTemp, name: 'GPU temp', format: 'temperature', color: '#e8be70' }] : [])
       ], { max: 100, fixedMax: true });
     }
   }
@@ -550,7 +550,7 @@ function updateUI(data) {
       chartData.ram.push(ram.usedPercent);
       if (chartData.ram.length > MAX_POINTS) chartData.ram.shift();
       drawSparkline('ram', [
-        { data: chartData.ram, name: 'RAM use', format: 'percent', color: '#10b981', fillColor: 'rgba(16, 185, 129, 0.2)' }
+        { data: chartData.ram, name: 'RAM use', format: 'percent', color: '#60d6ab', fillColor: 'rgba(96, 214, 171, 0.12)' }
       ], { max: 100, fixedMax: true });
     }
   }
@@ -570,8 +570,8 @@ function updateUI(data) {
       if (chartData.netUp.length > MAX_POINTS) chartData.netUp.shift();
 
       drawSparkline('net', [
-        { data: chartData.netDown, name: 'Download', format: 'speed', color: '#10b981', fillColor: 'rgba(16, 185, 129, 0.15)' },
-        { data: chartData.netUp, name: 'Upload', format: 'speed', color: '#38bdf8' }
+        { data: chartData.netDown, name: 'Download', format: 'speed', color: '#60d6ab', fillColor: 'rgba(96, 214, 171, 0.1)' },
+        { data: chartData.netUp, name: 'Upload', format: 'speed', color: '#66c7ff' }
       ], { fixedMax: false });
     }
   }
@@ -634,7 +634,7 @@ function updateCpuDetailCores(perCore) {
     row.querySelector('.cpu-detail-core-fill').style.width = `${value}%`;
     row.querySelector('.cpu-detail-core-fill').style.background = value > 85
       ? 'linear-gradient(90deg, #f59e0b, #fb7185)'
-      : 'linear-gradient(90deg, #38bdf8, #818cf8)';
+      : 'linear-gradient(90deg, #66c7ff, #818cf8)';
     row.querySelector('.cpu-detail-core-value').textContent = `${Math.round(value)}%`;
   });
 }
@@ -670,7 +670,7 @@ function renderCpuDetail() {
     sampleTimes: samples.map(sample => sample.sampledAt),
     name: 'Overall CPU',
     format: 'percent',
-    color: '#38bdf8',
+    color: '#66c7ff',
     fillColor: 'rgba(56, 189, 248, 0.2)'
   }], {
     max: 100,
@@ -1018,6 +1018,10 @@ function showAppPage(pageId, recordHistory = true) {
   }
   updatePageHistoryControls();
   currentAppPage = nextPage;
+  // Phone content scrolls below the chrome, not behind the status bar.
+  document.querySelector('.dashboard-container')?.scrollTo(0, 0);
+  phoneScrollPosition = 0;
+  phoneScrollTravel = 0;
   document.querySelectorAll('.app-page').forEach(page => {
     const active = page.id === nextPage;
     page.hidden = !active;
@@ -1034,9 +1038,71 @@ function showAppPage(pageId, recordHistory = true) {
   window.dispatchEvent(new CustomEvent('pc-monitor-pagechange', { detail: { page: nextPage } }));
 }
 
+// Only presentation moves: one dashboard, no new telemetry or lease work.
+const phoneChromeQuery = matchMedia('(max-width: 699px)');
+const phoneScrollPane = document.querySelector('.dashboard-container');
+const phonePageSurface = document.querySelector('.phone-page-surface');
+const phoneMenu = document.querySelector('.native-app-bar');
+function isPhoneSurface() {
+  return phoneChromeQuery.matches && !document.documentElement.classList.contains('native-shell');
+}
+function syncPhoneSurface() {
+  if (isPhoneSurface()) phoneScrollPane.prepend(phoneMenu);
+  else phonePageSurface.insertBefore(phoneMenu, phoneScrollPane);
+}
+syncPhoneSurface();
+function finishPhoneDrawerDrag() {
+  document.body.classList.remove('phone-drawer-dragging');
+  document.body.style.removeProperty('--phone-drawer-offset');
+  document.body.style.removeProperty('--phone-drawer-progress');
+}
+let phoneDrawerSwipe = null;
+document.addEventListener('touchstart', event => {
+  phoneDrawerSwipe = null;
+  finishPhoneDrawerDrag();
+  if (!isPhoneSurface() || event.touches.length !== 1) return;
+  const target = event.target instanceof Element ? event.target : null;
+  const open = document.body.classList.contains('sidebar-expanded');
+  if (!target || (target.closest('input, textarea, select, button, a, canvas, video, [role="slider"], .processes-table') && !target.closest('#sidebarBackdrop') && !(open && target.closest('#appSidebar')))) return;
+  if (!target.closest(open ? '.phone-page-surface, #appSidebar' : '.dashboard-container')) return;
+  const point = event.touches[0];
+  phoneDrawerSwipe = { x: point.clientX, y: point.clientY, open, horizontal: false, width: document.getElementById('appSidebar').getBoundingClientRect().width, time: performance.now() };
+}, { passive: true });
+document.addEventListener('touchmove', event => {
+  if (!phoneDrawerSwipe) return;
+  if (event.touches.length !== 1) { phoneDrawerSwipe = null; finishPhoneDrawerDrag(); return; }
+  const swipe = phoneDrawerSwipe;
+  const point = event.touches[0];
+  const dx = point.clientX - swipe.x;
+  const dy = point.clientY - swipe.y;
+  if (!swipe.horizontal && Math.abs(dy) > 12 && Math.abs(dy) >= Math.abs(dx)) { phoneDrawerSwipe = null; return; }
+  if (!swipe.horizontal && (swipe.open ? dx < -12 : dx > 12) && Math.abs(dx) > Math.abs(dy) * 1.4) swipe.horizontal = true;
+  if (!swipe.horizontal) return;
+  if (event.cancelable) event.preventDefault();
+  const offset = Math.max(0, Math.min(swipe.width, (swipe.open ? swipe.width : 0) + dx));
+  document.body.classList.add('phone-drawer-dragging');
+  document.body.style.setProperty('--phone-drawer-offset', offset + 'px');
+  document.body.style.setProperty('--phone-drawer-progress', String(offset / swipe.width));
+}, { passive: false });
+document.addEventListener('touchend', event => {
+  const swipe = phoneDrawerSwipe;
+  phoneDrawerSwipe = null;
+  if (!swipe || !swipe.horizontal) return;
+  if (event.touches.length || event.changedTouches.length !== 1) { finishPhoneDrawerDrag(); return; }
+  const point = event.changedTouches[0];
+  const dx = point.clientX - swipe.x;
+  const intentional = (swipe.open ? dx < 0 : dx > 0) && Math.abs(dx) > Math.abs(point.clientY - swipe.y) * 1.4;
+  const committed = intentional && (Math.abs(dx) > swipe.width * .3 || (Math.abs(dx) > 28 && Math.abs(dx) / Math.max(16, performance.now() - swipe.time) > .5));
+  if (event.cancelable) event.preventDefault();
+  setSidebarOpen(committed ? !swipe.open : swipe.open);
+}, { passive: false });
+document.addEventListener('touchcancel', () => { phoneDrawerSwipe = null; finishPhoneDrawerDrag(); }, { passive: true });
 function setSidebarOpen(open) {
+  finishPhoneDrawerDrag();
   document.body.classList.toggle('sidebar-expanded', open);
   document.getElementById('sidebarToggle').setAttribute('aria-expanded', String(open));
+  document.getElementById('sidebarToggle').setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+  document.querySelectorAll('.app-page').forEach(page => { page.inert = open && isPhoneSurface(); });
   document.getElementById('appSidebar').inert = !open && matchMedia('(max-width: 699px)').matches;
   // Keep the mobile backdrop mounted so its closing fade can finish. CSS
   // disables its hit testing immediately; desktop never needs an overlay.
@@ -1047,6 +1113,7 @@ document.getElementById('sidebarToggle')?.addEventListener('click', () => setSid
 document.getElementById('sidebarBackdrop')?.addEventListener('click', () => setSidebarOpen(false));
 document.addEventListener('keydown', event => { if (event.key === 'Escape') setSidebarOpen(false); });
 matchMedia('(max-width: 699px)').addEventListener('change', event => {
+  syncPhoneSurface();
   let expanded = false;
   if (!event.matches) { try { expanded = localStorage.getItem('pc-monitor-sidebar-expanded') === 'true'; } catch (_) {} }
   setSidebarOpen(expanded);
@@ -1057,9 +1124,55 @@ document.querySelectorAll('.page-nav-button[data-page]').forEach(button => butto
   showAppPage(button.dataset.page);
   if (matchMedia('(max-width: 699px)').matches) setSidebarOpen(false);
 }));
+// One-time phone setup sheet after the first successful phone entry; presentation only.
+// MOBILE-ONBOARDING:BEGIN
+const mobileOnboardingSeenKey = 'rovarin.mobileOnboardingSeen';
+function mobileOnboardingVariant(userAgent, platform, touchPoints) {
+  const ua = userAgent || '';
+  const ios = /iPad|iPhone|iPod/.test(ua) || (platform === 'MacIntel' && touchPoints > 1);
+  if (ios && /Safari\//.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser/.test(ua)) return 'ios';
+  if (/Android/.test(ua) && /Chrome\//.test(ua) && !/EdgA\/|SamsungBrowser|Vivaldi|OPR\/|HuaweiBrowser|MiuiBrowser/.test(ua)) return 'android';
+  return 'generic';
+}
+const mobileOnboardingSteps = {
+  ios: ['Tap the Share button', 'Tap "Add to Home Screen"', 'Tap Add'],
+  android: ['Open the browser menu', 'Choose "Add to Home screen" or "Install app"', 'Confirm'],
+  generic: ['Open your browser menu', 'Choose "Add to Home screen" (or "Install app")', 'Confirm']
+};
+function mobileOnboardingState() {
+  const native = !!window.chrome?.webview || document.documentElement.classList.contains('native-shell');
+  const mobileDevice = /iPhone|iPad|iPod|Android/.test(navigator.userAgent || '') ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const phone = !native && mobileDevice && matchMedia('(max-width: 699px)').matches;
+  let seen = false;
+  try { seen = localStorage.getItem(mobileOnboardingSeenKey) === 'true'; } catch (_) {}
+  let standalone = matchMedia('(display-mode: standalone)').matches;
+  if (!standalone && navigator.standalone === true) standalone = true;
+  const variant = mobileOnboardingVariant(navigator.userAgent || '', navigator.platform || '', navigator.maxTouchPoints || 0);
+  return { show: phone && !seen, native, standalone, variant, steps: mobileOnboardingSteps[variant] };
+}
+function maybeShowMobileOnboarding() {
+  try {
+    const state = mobileOnboardingState();
+    const dialog = document.getElementById('mobileOnboardingDialog');
+    if (!state.show || !dialog || dialog.open) return false;
+    const steps = document.getElementById('mobileOnboardingSteps');
+    const install = document.getElementById('mobileOnboardingInstall');
+    const dismiss = document.getElementById('mobileOnboardingDismiss');
+    steps.replaceChildren(...state.steps.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
+    install.hidden = state.standalone;
+    dialog.showModal();
+    dialog.addEventListener('close', () => { try { localStorage.setItem(mobileOnboardingSeenKey, 'true'); } catch (_) {} }, { once: true });
+    dismiss.addEventListener('click', () => dialog.close(), { once: true });
+    return true;
+  } catch (_) { return false; }
+}
+// MOBILE-ONBOARDING:END
 const nativeSecurity = !!window.chrome?.webview;
 document.getElementById('nativeSecurityControls').hidden = !nativeSecurity;
 function showSecuritySettings(security) {
+  document.getElementById('updatesSettingsPanel').hidden = true;
+  document.getElementById('updatesSettingsTab').setAttribute('aria-selected', 'false');
   document.getElementById('securitySettingsPanel').hidden = !security;
   document.getElementById('generalSettingsPanel').hidden = security;
   document.getElementById('securitySettingsTab').setAttribute('aria-selected', String(security));
@@ -1076,6 +1189,55 @@ if (nativeSecurity) window.chrome.webview.addEventListener('message', event => {
   if (event.data?.kind !== 'security-state' || typeof event.data.requireDesktopPin !== 'boolean') return;
   document.getElementById('desktopPinPreference').checked = event.data.requireDesktopPin;
   document.getElementById('desktopPinPreference').disabled = false;
+});
+const updateElement = id => document.getElementById(id);
+updateElement('nativeUpdateControls').hidden = !nativeSecurity;
+updateElement('remoteUpdateHint').hidden = nativeSecurity;
+let lastUpdateStatus = null;
+function renderUpdateStatus(status) {
+  lastUpdateStatus = status;
+  updateElement('updateCurrentVersion').textContent = status.currentVersion || '—';
+  updateElement('updateLatestVersion').textContent = status.latestVersion ? ' · Latest: ' + status.latestVersion : '';
+  updateElement('updateStatus').textContent = status.message || 'Update check unavailable.';
+  updateElement('updateReleaseSummary').textContent = status.releaseNotes || '';
+  if (!nativeSecurity) return;
+  updateElement('autoCheckUpdates').checked = status.autoCheck !== false;
+  updateElement('autoCheckUpdates').disabled = !!status.busy;
+  updateElement('checkUpdates').disabled = !!status.busy;
+  updateElement('installUpdate').hidden = !status.available;
+  updateElement('installUpdate').disabled = !!status.busy || !status.installed;
+  updateElement('updateLater').hidden = !status.available;
+  updateElement('viewUpdateNotes').hidden = !status.releaseUrl;
+  if (!status.installed) updateElement('updateStatus').textContent += ' Install updates through an installed Windows copy; the development project is not replaced.';
+}
+updateElement('updatesSettingsTab').addEventListener('click', () => {
+  showSecuritySettings(false);
+  updateElement('generalSettingsPanel').hidden = true;
+  updateElement('generalSettingsTab').setAttribute('aria-selected', 'false');
+  updateElement('updatesSettingsPanel').hidden = false;
+  updateElement('updatesSettingsTab').setAttribute('aria-selected', 'true');
+  if (nativeSecurity) window.chrome.webview.postMessage('updates-status');
+  else fetch('/api/updates').then(r => r.ok ? r.json() : Promise.reject()).then(renderUpdateStatus).catch(() => { updateElement('updateStatus').textContent = 'Sign in again to view the installed version.'; });
+});
+for (const [id, action] of [['checkUpdates','check'],['installUpdate','install'],['autoCheckUpdates','preference'],['viewUpdateNotes','notes']]) {
+  updateElement(id).addEventListener('click', event => {
+    if (id === 'autoCheckUpdates') event.preventDefault();
+    if (nativeSecurity) {
+      updateElement('checkUpdates').disabled = true;
+      updateElement('installUpdate').disabled = true;
+      updateElement('autoCheckUpdates').disabled = true;
+      if (action === 'check' || action === 'install') updateElement('updateStatus').textContent = action === 'check' ? 'Checking official GitHub releases…' : 'Waiting for native update confirmation…';
+      window.chrome.webview.postMessage('updates-' + action);
+    }
+  });
+}
+updateElement('updateLater').addEventListener('click', () => { updateElement('installUpdate').hidden = true; updateElement('updateLater').hidden = true; updateElement('updateStatus').textContent = 'You can return here to update when ready.'; });
+if (nativeSecurity) window.chrome.webview.addEventListener('message', event => {
+  if (event.data?.kind === 'updates-state') renderUpdateStatus(event.data.status);
+  if (event.data?.kind === 'updates-error') {
+    if (lastUpdateStatus) renderUpdateStatus(lastUpdateStatus);
+    updateElement('updateStatus').textContent = event.data.message;
+  }
 });
 window.showAppPage = showAppPage;
 document.getElementById('nativeBackButton')?.addEventListener('click', () => {
@@ -1138,6 +1300,7 @@ async function startDashboardSession() {
     await fetchInitialMetrics();
     connectStream();
     startLeaseHeartbeat();
+    maybeShowMobileOnboarding();
     if (desiredMonitoringProfile !== appliedMonitoringProfile) {
       const profileApplied = await setMonitoringProfile(desiredMonitoringProfile);
       if (cpuDetailActive) {
@@ -1209,15 +1372,15 @@ function startPolling() {
 // Window resize handler for canvas charts
 window.addEventListener('resize', () => {
   if (chartData.cpu.length > 0) {
-    drawSparkline('cpu', [{ data: chartData.cpu, name: 'CPU load', format: 'percent', color: '#38bdf8', fillColor: 'rgba(56, 189, 248, 0.25)' }], { max: 100, fixedMax: true });
+    drawSparkline('cpu', [{ data: chartData.cpu, name: 'CPU load', format: 'percent', color: '#66c7ff', fillColor: 'rgba(102, 199, 255, 0.14)' }], { max: 100, fixedMax: true });
     drawSparkline('gpu', [
-      { data: chartData.gpu, name: 'GPU load', format: 'percent', color: '#a855f7', fillColor: 'rgba(168, 85, 247, 0.2)' },
-      ...(latestDashboardMetrics?.gpu?.available && latestDashboardMetrics.gpu.temperatureC !== null ? [{ data: chartData.gpuTemp, name: 'GPU temp', format: 'temperature', color: '#fbbf24' }] : [])
+      { data: chartData.gpu, name: 'GPU load', format: 'percent', color: '#8b92ee', fillColor: 'rgba(139, 146, 238, 0.12)' },
+      ...(latestDashboardMetrics?.gpu?.available && latestDashboardMetrics.gpu.temperatureC !== null ? [{ data: chartData.gpuTemp, name: 'GPU temp', format: 'temperature', color: '#e8be70' }] : [])
     ], { max: 100, fixedMax: true });
-    drawSparkline('ram', [{ data: chartData.ram, name: 'RAM use', format: 'percent', color: '#10b981', fillColor: 'rgba(16, 185, 129, 0.2)' }], { max: 100, fixedMax: true });
+    drawSparkline('ram', [{ data: chartData.ram, name: 'RAM use', format: 'percent', color: '#60d6ab', fillColor: 'rgba(96, 214, 171, 0.12)' }], { max: 100, fixedMax: true });
     drawSparkline('net', [
-      { data: chartData.netDown, name: 'Download', format: 'speed', color: '#10b981', fillColor: 'rgba(16, 185, 129, 0.15)' },
-      { data: chartData.netUp, name: 'Upload', format: 'speed', color: '#38bdf8' }
+      { data: chartData.netDown, name: 'Download', format: 'speed', color: '#60d6ab', fillColor: 'rgba(96, 214, 171, 0.1)' },
+      { data: chartData.netUp, name: 'Upload', format: 'speed', color: '#66c7ff' }
     ], { fixedMax: false });
   }
 });

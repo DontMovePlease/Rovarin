@@ -1,6 +1,6 @@
 {
   "name": "rovarin-dashboard",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Lightweight personal Rovarining dashboard for Windows accessible via Tailscale",
   "main": "server.js",
   "scripts": {
@@ -17,6 +17,12 @@
     "test:kill": "node scripts/process-kill-smoke-test.js",
     "test:dev-watcher": "node scripts/dev-watcher-smoke-test.js"
   },
-  "keywords": ["system-monitor", "dashboard", "tailscale", "windows", "hardware"],
+  "keywords": [
+    "system-monitor",
+    "dashboard",
+    "tailscale",
+    "windows",
+    "hardware"
+  ],
   "license": "PolyForm-Noncommercial-1.0.0"
 }

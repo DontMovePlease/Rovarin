@@ -72,3 +72,16 @@
 .processes-table tr.is-selectable:hover td { background: rgba(125, 211, 252, .06); }
 .processes-table tr.is-selected td { background: rgba(248, 113, 113, .13); color: var(--text-primary); }
 @media (max-width: 520px) { .processes-page { min-height: 72vh; padding: 16px 12px; border-radius: 20px; } .processes-heading { align-items: flex-start; } .processes-live-state { padding: 7px 8px; font-size: 10px; } .processes-table { font-size: 11px; } .processes-table th, .processes-table td { padding: 10px 6px; } .processes-table td.process-name { max-width: 120px; } }
+
+/* Stable data table; glass belongs to its controls. */
+.processes-page { background: var(--surface-content); border-color: var(--border-card); box-shadow: var(--shadow-card); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.processes-table tr.is-selected td { background: var(--tint-primary); box-shadow: inset 0 1px 0 rgba(102,199,255,.25), inset 0 -1px 0 rgba(102,199,255,.25); }
+.processes-table tr.is-selectable:active .process-name { transform: none; }
+.processes-sort button.is-selected { color: var(--accent-primary); background: var(--tint-primary); }
+.processes-freeze { background: var(--surface-glass-strong); box-shadow: var(--shadow-control); }
+.processes-freeze[aria-pressed="true"] { background: var(--tint-warning); border-color: rgba(232,190,112,.3); color: var(--state-warning); }
+.processes-kill { color: #ffb0bf; background: var(--tint-danger); border-color: rgba(240,135,155,.35); }
+.processes-kill-status.ok, #processesLiveDot { color: var(--state-success); }
+#processesLiveDot { background: var(--state-success); box-shadow: none; }
+#processesLiveDot.is-stale { background: var(--state-warning); box-shadow: none; }
+@media (max-width: 699px) { .processes-sort button, .processes-kill { min-height: 44px; } }

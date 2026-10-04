@@ -1,29 +1,51 @@
 :root {
   color-scheme: dark;
-  --bg-primary: #0a101b;
-  --bg-card: rgba(20, 29, 44, 0.64);
-  --bg-card-hover: rgba(32, 43, 62, 0.76);
-  --bg-subtle: rgba(255, 255, 255, 0.04);
-  --border-card: rgba(255, 255, 255, 0.08);
-  --border-focus: rgba(99, 102, 241, 0.5);
-  --glass-rim: rgba(211, 228, 255, 0.18);
-
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-
-  --accent-blue: #38bdf8;
-  --accent-indigo: #6366f1;
-  --accent-emerald: #10b981;
-  --accent-amber: #f59e0b;
-  --accent-rose: #f43f5e;
-  --accent-violet: #a855f7;
-
-  --radius-xl: 22px;
+  --bg-canvas: #0a101a;
+  --bg-canvas-deep: #070b12;
+  --chrome-background: #0c1420;
+  --surface-content: linear-gradient(155deg, #141f2d, #101824);
+  --surface-content-raised: #172232;
+  --surface-glass: linear-gradient(145deg, rgba(34, 50, 69, .86), rgba(17, 28, 42, .92));
+  --surface-glass-strong: linear-gradient(150deg, #1d2c3e, #101b29);
+  --glass-border: rgba(191, 218, 241, .19);
+  --glass-highlight: rgba(225, 241, 255, .16);
+  --glass-shadow: inset 0 1px 0 var(--glass-highlight), inset 0 -1px 0 #0002, 0 8px 24px #0003;
+  --shadow-card: inset 0 1px 0 rgba(225, 241, 255, .065), 0 5px 18px #0002;
+  --shadow-control: inset 0 1px 0 var(--glass-highlight), 0 3px 10px #0002;
+  --text-primary: #eaf1f8;
+  --text-secondary: #a4b4c6;
+  --text-muted: #8495a9;
+  --accent-primary: #66c7ff;
+  --accent-secondary: #8b92ee;
+  --state-success: #60d6ab;
+  --state-warning: #e8be70;
+  --state-danger: #f0879b;
+  --tint-primary: rgba(102, 199, 255, .13);
+  --tint-success: rgba(96, 214, 171, .12);
+  --tint-warning: rgba(232, 190, 112, .12);
+  --tint-danger: rgba(240, 135, 155, .12);
+  --radius-control: 12px;
+  --radius-card: 20px;
+  --radius-panel: 24px;
+  /* Compatibility aliases keep the existing modules on one palette. */
+  --bg-primary: var(--bg-canvas);
+  --bg-card: var(--surface-content);
+  --bg-card-hover: var(--surface-content-raised);
+  --bg-subtle: rgba(180, 211, 237, .035);
+  --border-card: rgba(191, 218, 241, .11);
+  --border-focus: var(--accent-primary);
+  --glass-rim: var(--glass-border);
+  --glass-surface: var(--surface-content);
+  --accent-blue: var(--accent-primary);
+  --accent-indigo: var(--accent-secondary);
+  --accent-violet: var(--accent-secondary);
+  --accent-emerald: var(--state-success);
+  --accent-amber: var(--state-warning);
+  --accent-rose: var(--state-danger);
+  --radius-xl: var(--radius-card);
   --radius-lg: 16px;
-  --radius-md: 12px;
+  --radius-md: var(--radius-control);
   --radius-sm: 8px;
-
   --font-system: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, "Courier New", monospace;
 }
@@ -40,8 +62,8 @@
   display: flex; align-items: center; gap: 10px;
   position: sticky; top: 0; z-index: 60; height: 36px;
   margin: 0 -14px; padding: 0 94px 0 14px;
-  color: var(--text-primary); background: rgba(10, 16, 27, 0.94);
-  border-bottom: 1px solid var(--border-card); backdrop-filter: blur(18px);
+  color: var(--text-primary); background: #0c1420;
+  border-bottom: 1px solid var(--border-card); backdrop-filter: none; -webkit-backdrop-filter: none;
   app-region: drag; -webkit-app-region: drag; user-select: none;
 }
 .native-app-identity { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; letter-spacing: .15px; }
@@ -800,6 +822,57 @@ body {
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+.mobile-onboarding-dialog {
+  width: min(420px, calc(100vw - 24px));
+  max-width: 420px;
+  margin: auto;
+  padding: 0;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  overflow: visible;
+}
+.mobile-onboarding-dialog::backdrop { background: rgba(3, 7, 12, .65); }
+.mobile-onboarding-dialog[open] { animation: cpu-detail-enter 0.24s cubic-bezier(.2,.8,.2,1) both; }
+.mobile-onboarding-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding: 22px 20px 18px;
+  max-height: min(84vh, 720px);
+  max-height: min(84dvh, 720px);
+  overflow-y: auto;
+  background: var(--surface-glass-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--glass-shadow);
+}
+.mobile-onboarding-sheet h2 { margin: 0; font-size: 21px; line-height: 1.2; letter-spacing: -.02em; }
+.mobile-onboarding-section h3 {
+  margin: 0 0 5px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+}
+.mobile-onboarding-section p { margin: 0; font-size: 14px; line-height: 1.5; color: var(--text-secondary); }
+.mobile-onboarding-section strong { color: var(--text-primary); }
+.mobile-onboarding-section ol { margin: 0; padding-left: 21px; font-size: 14px; line-height: 1.55; color: var(--text-secondary); }
+.mobile-onboarding-section li + li { margin-top: 4px; }
+.mobile-onboarding-dismiss {
+  width: 100%;
+  min-height: 46px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--accent-primary);
+  color: #0b1420;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--shadow-control);
+}
+
 .cpu-detail-panel {
   max-height: min(90vh, 880px);
   max-height: min(90dvh, 880px);
@@ -1084,11 +1157,11 @@ body.sidebar-expanded { --sidebar-width: 176px; }
   body, .native-shell body { --sidebar-width: 0px; }
   body.sidebar-expanded { --sidebar-width: 0px; }
   .dashboard-container, .native-shell .dashboard-container { margin-left: 0; width: 100%; padding: 8px; }
-  body { --app-bar-height: calc(46px + var(--app-safe-top)); }
+  body { --app-bar-height: calc(46px + var(--app-safe-top) + var(--phone-chrome-clearance, 0px)); }
   .app-sidebar.page-nav { width: 218px; max-width: calc(100vw - 56px); transform: translate3d(-100%,0,0); visibility: hidden; pointer-events: none; transition: transform .24s cubic-bezier(.22,1,.36,1), visibility 0s .24s; }
   .sidebar-expanded .app-sidebar { transform: translate3d(0,0,0); visibility: visible; pointer-events: auto; transition-delay: 0s; }
   .app-sidebar span { opacity: 1; transform: none; }
-  .native-app-bar { padding-top: var(--app-safe-top); }
+  .native-app-bar { padding-top: max(0px, calc(var(--app-safe-top) + var(--phone-chrome-clearance, 0px))); }
   .native-app-bar button { min-height: 44px; min-width: 44px; }
   .native-history { display: none; }
   .processes-page { height: calc(100dvh - 64px - env(safe-area-inset-top)); }
@@ -1109,3 +1182,241 @@ body.sidebar-expanded { --sidebar-width: 176px; }
 .native-shell .login-container { padding: 22px; min-height: calc(100dvh - 36px); }
 .native-shell body:has(.login-container) { padding: 0; }
 .native-shell body:has(.login-container) .native-app-bar { margin: 0; }
+
+/* Phone chrome owns the safe area; no fixed glow or frosted content behind it.
+   Safari supplies the inset when needed; standalone black status-bar mode
+   reserves its own space. The same height positions the drawer and backdrop. */
+@media (max-width: 699px) {
+  html { background-color: #0c1420; height: 100%; overflow: hidden; }
+  body, .native-shell body {
+    display: flex;
+    flex-direction: column;
+    height: 100svh;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+    background-color: #0c1420;
+    background-image: none;
+    background-attachment: scroll;
+  }
+  .native-app-bar, .native-shell .native-app-bar {
+    position: relative;
+    margin: 0;
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+    background: #0c1420;
+    border-bottom: 1px solid var(--border-card);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .native-app-identity { font-size: 14px; }
+  .native-app-identity > svg { width: 20px; height: 20px; }
+  .dashboard-container, .native-shell .dashboard-container {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    padding-bottom: max(18px, env(safe-area-inset-bottom));
+    background: linear-gradient(180deg, #0c1420, #0a101b 60%, #0b111c);
+    padding-inline: max(8px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-right));
+  }
+  .app-sidebar.page-nav {
+    padding-bottom: max(7px, env(safe-area-inset-bottom));
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .health-card, .metric-card, .system-specs-card, .cpu-detail-panel,
+  .app-page.processes-page {
+    background: linear-gradient(145deg, rgba(27, 40, 58, .94), rgba(12, 20, 32, .97));
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+/* One moving phone surface; desktop retains its existing native chrome. */
+.phone-page-surface { display: contents; }
+.sidebar-phone-brand { display: none; }
+@media (max-width: 699px) {
+  html:not(.native-shell) body {
+    --app-bar-height: 0px;
+    --phone-drawer-width: min(280px, calc(100vw - 68px));
+    --phone-drawer-offset: 0px;
+    --phone-drawer-progress: 0;
+  }
+  html:not(.native-shell) body.sidebar-expanded {
+    --phone-drawer-offset: var(--phone-drawer-width);
+    --phone-drawer-progress: 1;
+  }
+  html:not(.native-shell) .phone-page-surface {
+    display: flex; flex-direction: column; position: relative; z-index: 45;
+    width: 100%; height: 100%; min-height: 0; flex: 1;
+    padding-top: var(--app-safe-top); background: #0c1420;
+    transform: translate3d(var(--phone-drawer-offset), 0, 0);
+    transition: transform .34s cubic-bezier(.22,1,.36,1), border-radius .34s ease, box-shadow .34s ease;
+  }
+  html:not(.native-shell) .sidebar-expanded .phone-page-surface { border-radius: 22px 0 0 22px; box-shadow: -12px 0 32px #0005; }
+  html:not(.native-shell) .dashboard-container { position: relative; padding-top: 68px; border-radius: inherit; transition: none; }
+  html:not(.native-shell) .native-app-bar {
+    position: absolute; top: 8px; left: max(12px, env(safe-area-inset-left)); right: auto;
+    z-index: 50; width: 48px; height: 48px; margin: 0; padding: 0;
+    border: 0; background: transparent;
+  }
+  html:not(.native-shell) .native-app-identity,
+  html:not(.native-shell) .native-history { display: none; }
+  html:not(.native-shell) .sidebar-toggle {
+    width: 48px; height: 48px; border-radius: 50%; background: #172334;
+    border: 1px solid #ffffff24; box-shadow: 0 3px 12px #0003;
+    transition: transform .12s ease, background .12s ease;
+  }
+  html:not(.native-shell) .sidebar-toggle svg { width: 24px; height: 24px; }
+  html:not(.native-shell) .sidebar-toggle:active { transform: scale(.93); background: #24384e; }
+  html:not(.native-shell) .app-sidebar.page-nav {
+    z-index: 40; top: 0; width: var(--phone-drawer-width); max-width: none;
+    padding: max(18px, var(--app-safe-top)) 12px max(12px, env(safe-area-inset-bottom));
+    border: 0; transform: none; background: #0b121d; transition: visibility 0s .34s;
+  }
+  html:not(.native-shell) .sidebar-expanded .app-sidebar,
+  html:not(.native-shell) .phone-drawer-dragging .app-sidebar { visibility: visible; transition-delay: 0s; }
+  html:not(.native-shell) .sidebar-phone-brand { display: block; font-size: 22px; font-weight: 700; padding: 12px 10px 20px; }
+  html:not(.native-shell) .app-sidebar .page-nav-button { min-height: 48px; border-radius: 12px; }
+  html:not(.native-shell) .sidebar-backdrop { inset: 0; z-index: 46; background: #0004; opacity: var(--phone-drawer-progress); transition: opacity .34s ease, visibility 0s .34s; }
+  html:not(.native-shell) .phone-drawer-dragging .sidebar-backdrop { visibility: visible; pointer-events: none; }
+  html:not(.native-shell) .phone-drawer-dragging .phone-page-surface,
+  html:not(.native-shell) .phone-drawer-dragging .sidebar-backdrop { transition: none; }
+}
+@media (prefers-reduced-motion: reduce) { .phone-page-surface, .sidebar-toggle { transition: none !important; } }
+/* Midnight Glass: solid information, bounded glass controls, one shared palette. */
+body {
+  background-color: var(--bg-canvas-deep);
+  background-image: radial-gradient(ellipse at 85% 65%, rgba(65, 106, 146, .055), transparent 65%), linear-gradient(160deg, #0a101a, #070b12);
+}
+.metric-card, .health-card, .system-specs-card, .app-page.processes-page,
+.diagnostics-page, .pc-details-footer {
+  background: var(--surface-content);
+  border-color: var(--border-card);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+.metric-card:hover { border-color: var(--border-card); box-shadow: var(--shadow-card); }
+.metric-card:active { transform: none; }
+.metric-card::after { display: none; }
+.detail-chip, .drive-item, .diagnostics-check {
+  background: var(--bg-subtle); border-color: var(--border-card);
+  box-shadow: inset 0 1px 0 rgba(225, 241, 255, .035);
+}
+.val-large { font-weight: 730; font-variant-numeric: tabular-nums; letter-spacing: -.04em; }
+.card-label, .specs-title { font-weight: 600; }
+.bg-blue { background: linear-gradient(90deg, #55b8ff, #88d2ff); }
+.bg-violet { background: linear-gradient(90deg, #828bdc, #a1a8f3); }
+.bg-emerald { background: linear-gradient(90deg, #48b893, #73d9b6); }
+.bg-amber { background: linear-gradient(90deg, #cba25b, #e8be70); }
+.bg-rose { background: linear-gradient(90deg, #d6637c, #f0879b); }
+.health-status-badge, .card-badge, .diagnostics-status, .maint-admin-badge {
+  font-weight: 600; letter-spacing: .015em;
+}
+.health-status-badge.emerald, .card-badge.emerald, .card-badge.temp-normal, .diagnostics-status.supported {
+  color: var(--state-success); background: var(--tint-success); border-color: rgba(96, 214, 171, .25);
+}
+.health-status-badge.amber, .card-badge.amber, .card-badge.temp-high, .diagnostics-status.failed {
+  color: var(--state-warning); background: var(--tint-warning); border-color: rgba(232, 190, 112, .25);
+}
+.health-status-badge.rose, .card-badge.rose, .card-badge.temp-critical {
+  color: var(--state-danger); background: var(--tint-danger); border-color: rgba(240, 135, 155, .25);
+}
+.card-badge.temp-low { color: var(--accent-primary); background: var(--tint-primary); border-color: rgba(102,199,255,.25); }
+.card-badge, .card-badge.sensor-na, .diagnostics-status.unavailable { color: var(--text-secondary); background: rgba(164, 180, 198, .09); }
+.app-sidebar.page-nav {
+  background: var(--surface-glass-strong); border-color: var(--glass-border);
+  box-shadow: inset -1px 0 0 rgba(225, 241, 255, .045);
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+.app-sidebar .page-nav-button.is-active {
+  color: var(--accent-primary); background: var(--tint-primary);
+  box-shadow: inset 0 1px 0 rgba(225, 241, 255, .12), inset 0 0 0 1px rgba(102, 199, 255, .13);
+}
+.settings-tabs, .processes-sort { background: #0d1723; border: 1px solid var(--border-card); border-radius: 15px; padding: 4px; }
+.settings-tabs [aria-selected="true"], .processes-sort button.is-selected {
+  color: var(--accent-primary); border-color: rgba(102, 199, 255, .3); background: var(--tint-primary); box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+.cpu-detail-open-button, .cpu-detail-close-button, .specs-copy-button,
+.diagnostics-toolbar button, .diagnostics-actions button, .diagnostics-actions a,
+.temperature-settings button, .temperature-settings select, .settings-tabs button,
+.processes-freeze, .maint-btn {
+  background: var(--surface-glass-strong); border-color: var(--glass-border);
+  border-radius: var(--radius-control); color: var(--text-primary); box-shadow: var(--shadow-control);
+  transition: background .18s ease, border-color .18s ease, transform .15s ease;
+}
+.cpu-detail-panel, .maint-modal, .maint-toast, .chart-tooltip, .login-card {
+  background: var(--surface-glass-strong); border-color: var(--glass-border); box-shadow: var(--glass-shadow);
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+.cpu-detail-panel { border-radius: var(--radius-panel); }
+.cpu-detail-dialog::backdrop, .maint-modal-overlay {
+  background: rgba(3, 7, 12, .65); backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+.cpu-detail-dialog { overflow: hidden; border-radius: var(--radius-panel); }
+.app-sidebar .page-nav-button:not(:disabled):active, .sidebar-toggle:active,
+.cpu-detail-open-button:active, .cpu-detail-close-button:active, .specs-copy-button:active,
+html .diagnostics-toolbar button:not(:disabled):active, .temperature-settings button:not(:disabled):active,
+.processes-freeze:active { transform: translateY(1px) scale(.99); }
+button:disabled { cursor: not-allowed; }
+button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible {
+  outline: 2px solid var(--accent-primary); outline-offset: 3px;
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .cpu-detail-panel, .maint-modal, .maint-toast, .chart-tooltip {
+    background: var(--surface-glass); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
+}
+@media (max-width: 699px) {
+  html:not(.native-shell) body { background-color: var(--chrome-background); background-attachment: scroll; }
+  html:not(.native-shell) .phone-page-surface { background: var(--chrome-background); }
+  html:not(.native-shell) .dashboard-container { padding-top: 84px; }
+  html:not(.native-shell) .native-app-bar {
+    width: calc(100% - 24px); height: 60px; padding: 5px; gap: 14px;
+    background: var(--surface-glass-strong); border: 1px solid var(--glass-border);
+    border-radius: 22px; box-shadow: var(--glass-shadow); backdrop-filter: none; -webkit-backdrop-filter: none;
+  }
+  html:not(.native-shell) .native-app-identity { display: flex; font-size: 20px; font-weight: 650; letter-spacing: -.035em; }
+  html:not(.native-shell) .native-app-identity > svg { width: 24px; height: 24px; }
+  html:not(.native-shell) .sidebar-toggle {
+    flex-shrink: 0; width: 48px; height: 48px; border-radius: 50%;
+    color: var(--text-primary); background: rgba(215, 235, 250, .055);
+    border: 1px solid rgba(215, 235, 250, .14); box-shadow: inset 0 1px 0 rgba(225, 241, 255, .09);
+  }
+  html:not(.native-shell) .sidebar-toggle:active { transform: scale(.985); background: var(--tint-primary); }
+  html:not(.native-shell) .app-sidebar.page-nav { background: var(--surface-glass-strong); border-right: 1px solid var(--glass-border); }
+  .health-header { flex-wrap: wrap; gap: 10px; }
+  .health-status-badge { font-size: 10px; }
+  .val-sub { overflow-wrap: anywhere; }
+  .specs-copy-button { width: 44px; height: 44px; }
+  .processes-sort button, .processes-kill { min-height: 44px; }
+  .maint-toast-close { min-width: 44px; min-height: 44px; }
+  .cpu-detail-close-button { min-width: 44px; min-height: 44px; }
+  .cpu-detail-dialog, .cpu-detail-panel { max-height: calc(100dvh - var(--app-safe-top, 0px) - 24px); }
+  .mobile-onboarding-dialog { width: calc(100vw - 20px); margin: auto auto max(12px, env(safe-area-inset-bottom)); }
+  .mobile-onboarding-sheet { max-height: calc(100dvh - 36px); padding-bottom: max(18px, env(safe-area-inset-bottom)); }
+  .mobile-onboarding-dismiss { min-height: 48px; }
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    html:not(.native-shell) .native-app-bar { background: var(--surface-glass); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  }
+}
+@media (max-width: 359px) {
+  #dashboardPage .metrics-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "cpu" "gpu" "ram" "storage" "network"; }
+}
+@media (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
+  :root {
+    --text-primary: #f3f7fc; --text-secondary: #c4d2e2; --text-muted: #a5b7cc;
+    --border-card: #71869c; --glass-border: #8296ab; --glass-highlight: transparent;
+    --surface-content: #101824; --surface-glass: #172232; --surface-glass-strong: #172232;
+  }
+  html:not(.native-shell) body .native-app-bar, html.native-shell body .native-app-bar, .cpu-detail-panel, .maint-modal, .maint-toast, .chart-tooltip, .app-sidebar.page-nav {
+    backdrop-filter: none; -webkit-backdrop-filter: none;
+  }
+  .app-sidebar .page-nav-button.is-active, .settings-tabs [aria-selected="true"], .processes-table tr.is-selected td {
+    outline: 1px solid var(--accent-primary); outline-offset: -1px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html body *, html body *::before, html body *::after { animation: none !important; transition: none !important; }
+  html body button:active, html body .maint-action-card:active, html body .processes-table tr.is-selectable:active .process-name { transform: none !important; }
+}

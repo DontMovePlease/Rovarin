@@ -171,25 +171,32 @@ async function main() {
 function testRecycleHelper() {
   if(process.platform !== 'win32') return;
   const helper=require('path').join(__dirname,'empty-recycle-bin.ps1').replace(/'/g,"''");
-  // Execute the real helper control flow, replacing COM/tool/sleep with fixed
-  // test functions. Clear-RecycleBin is ALWAYS shadowed; no files are touched.
+  const source=realFs.readFileSync(require('path').join(__dirname,'empty-recycle-bin.ps1'),'utf8');
+  assert(source.includes('::Empty([IntPtr]::Zero,$null,7)'), 'fixed Windows operation must use current-user/all-drive semantics and suppress UI');
+  assert.doesNotMatch(source,/Clear-RecycleBin|Remove-Item|DeleteFile|\$Recycle\.Bin/, 'no hanging cmdlet or raw filesystem deletion fallback');
+  // Remove BOTH native deletion and enumeration functions before evaluation.
+  // Fixed test functions replace them; no Windows Recycle Bin is ever touched.
   for(const fixture of [
     {counts:[0],code:'already-empty',clears:0}, {counts:[1,0],code:'emptied',clears:1},
     {counts:[5,5,5,0],code:'emptied',clears:1}, {counts:[5,5,5,5,5],code:'items-remain',clears:1},
     {counts:[null,null,null,null,null],code:'verification-unavailable',clears:1},
     {counts:[1],missing:true,code:'tool-unavailable',clears:0},
     {counts:[1],denied:true,code:'permission-denied',clears:1},
+    {counts:[1],accessHresult:true,code:'permission-denied',clears:1},
+    {counts:[1],missingEntry:true,code:'tool-unavailable',clears:1},
+    {counts:[1],bindingUnavailable:true,code:'tool-unavailable',clears:1},
     {counts:[1],failed:true,code:'clear-failed',clears:1}
   ]) {
     const script=`$ErrorActionPreference='Stop'
       $source=[IO.File]::ReadAllText('${helper}');$tokens=$null;$errors=$null
       $ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors);if($errors.Count){throw 'Parse failed'}
-      $fn=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Read-RecycleCount'},$true)
-      $source=$source.Remove($fn.Extent.StartOffset,$fn.Extent.EndOffset-$fn.Extent.StartOffset)
+      $functions=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Read-RecycleCount','Invoke-RecycleClear','Initialize-RecycleApi')},$true))
+      if($functions.Count -ne 3){throw 'Unsafe helper substitution'}
+      foreach($fn in ($functions | Sort-Object { $_.Extent.StartOffset } -Descending)){$source=$source.Remove($fn.Extent.StartOffset,$fn.Extent.EndOffset-$fn.Extent.StartOffset)}
+      if($source -match 'Add-Type|::Empty|Clear-RecycleBin'){throw 'Unmocked deletion binding'}
       $fixture='${JSON.stringify(fixture)}' | ConvertFrom-Json;$script:reads=0;$script:clears=0
       function Read-RecycleCount { $value=$fixture.counts[[Math]::Min($script:reads,$fixture.counts.Count-1)];$script:reads++;return $value }
-      function Get-Command { if(-not $fixture.missing){return @{Name='Clear-RecycleBin'}} }
-      function Clear-RecycleBin { param([switch]$Force,$ErrorAction);$script:clears++;if($fixture.denied){throw [UnauthorizedAccessException]::new('fixture')};if($fixture.failed){throw 'fixture'} }
+      function Invoke-RecycleClear { if($fixture.missing){throw [DllNotFoundException]::new('fixture')};$script:clears++;if($fixture.denied){throw [UnauthorizedAccessException]::new('fixture')};if($fixture.accessHresult){throw [Runtime.InteropServices.COMException]::new('fixture',-2147024891)};if($fixture.missingEntry){throw [EntryPointNotFoundException]::new('fixture')};if($fixture.bindingUnavailable){throw [PlatformNotSupportedException]::new('fixture')};if($fixture.failed){throw 'fixture'} }
       function Start-Sleep {param($Milliseconds)}
       $source=$source.Replace('exit 1','')
       $result=Invoke-Expression $source | ConvertFrom-Json
@@ -199,7 +206,7 @@ function testRecycleHelper() {
     const output=childProcess.execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,timeout:10000,encoding:'utf8'});
     assert.strictEqual(JSON.parse(output).code,fixture.code);
   }
-  console.log('PASS real Recycle Bin helper with safe substituted commands: empty/one/multiple items, delayed Shell, unknown verification, missing/denied/failed clear; one clear and bounded retries');
+  console.log('PASS fixed Shell32 helper with safe substitutions: empty/one/multiple items, delayed verification, unavailable verification, missing DLL/entry/binding, denied/HRESULT/failed clear; one clear and bounded retries');
 }
 
 main().catch((err) => {

@@ -11,7 +11,7 @@ const WATCHED_SERVER_FILES = new Set([
   'process-termination.js',
   'scripts/terminate-process.ps1',
   'enhanced-support.js',
-  'uninstall-manager.js',
+  'uninstall-manager.js', 'update-manager.js', 'scripts/installed-update.ps1',
   'maintenance.js',
   'scripts/empty-recycle-bin.ps1',
   'temperature-manager.js',

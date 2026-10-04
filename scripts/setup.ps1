@@ -13,13 +13,13 @@ function Get-PhoneSetupState($Report, [int]$Port) {
         $parsed.GetAddressBytes()[1] -ge 64 -and $parsed.GetAddressBytes()[1] -le 127
     if ($status.value -eq 'Running' -and $status.status -eq 'supported' -and $validIp -and $Port -ge 1 -and $Port -le 65535) {
         $address = "http://${candidate}:$Port"
-        return @{kind='connected';status='Connected';address=$address;install=$false;instructions="Connect another device`r`n1. Install Tailscale on that device.`r`n2. Sign into the same Tailscale network as this PC.`r`n3. Open $address in its browser (or scan the QR code).`r`n4. Enter your Rovarin PIN."}
+        return @{kind='connected';status='Connected';address=$address;install=$false;instructions="Connect another device`r`n1. Install Tailscale on that device and sign into the same network as this PC.`r`n2. Away from home? Open Tailscale on that device and make sure it shows Connected before opening Rovarin. This PC must also stay online and connected to Tailscale.`r`n3. Open $address in its browser (or scan the QR code).`r`n4. Enter your Rovarin PIN."}
     }
     if ($availability.status -eq 'unavailable' -and -not $candidate -and -not $status.value) {
         return @{kind='missing';status='Not installed';address=$null;install=$true;instructions="Connect another device (optional)`r`nRovarin is installed successfully and works locally.`r`nFor secure remote access, install Tailscale on this PC and your other device, then sign into the same Tailscale network.`r`nYou can finish now and connect later."}
     }
     $explanation = if ($availability.status -eq 'supported') { 'Tailscale is installed but not connected.' } else { 'Tailscale connection status is unconfirmed.' }
-    return @{kind='disconnected';status='Not connected / unconfirmed';address=$null;install=$false;instructions="Connect another device (optional)`r`n$explanation`r`nOpen Tailscale and sign in/connect, then choose Re-check Tailscale.`r`nYour local Rovarin dashboard remains available."}
+    return @{kind='disconnected';status='Not connected / unconfirmed';address=$null;install=$false;instructions="Connect another device (optional)`r`n$explanation`r`nOpen Tailscale and sign in/connect, then choose Re-check Tailscale.`r`nAway from home? Your phone also needs Tailscale open and Connected before opening Rovarin.`r`nYour local Rovarin dashboard remains available."}
 }
 $appDir = Split-Path -Parent $PSScriptRoot
 $installed = Test-Path -LiteralPath (Join-Path $appDir 'installation.json')
@@ -66,12 +66,16 @@ if ($runtime.state -eq 'none') {
     do { $runtime = Get-DashboardRuntime $appDir; if ($runtime.state -eq 'owned' -and $runtime.healthy) { break }; Start-Sleep -Milliseconds 200 } while ((Get-Date) -lt $deadline)
 }
 if ($runtime.state -ne 'owned' -or -not $runtime.healthy) { throw 'Rovarin is not healthy.' }
+# Resolve through the same fixed local helper as the backend (no client path).
+$configFile = & $node (Join-Path $appDir 'pin-manager.js') --config-path
+if ($LASTEXITCODE -ne 0 -or -not $configFile) { throw 'Saved configuration is unavailable.' }
+$configFile = [string]$configFile
 # Recovery is a native user-launched window. No PIN HTTP endpoint or bypass.
 if ($RegeneratePin) {
     & $node (Join-Path $appDir 'pin-manager.js') --regenerate | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'PIN regeneration failed.' }
 }
-$pin = (Get-Content -LiteralPath (Join-Path $dataDir 'config.json') -Raw | ConvertFrom-Json).pin
+$pin = (Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json).pin
 if ($pin -cnotmatch '^(\d{6}|\d{12})$') { throw 'A valid saved PIN is not available.' }
 $local = "http://127.0.0.1:$($runtime.port)"
 $webSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
@@ -182,7 +186,7 @@ $regenerate.Add_Click({
     try {
         & $node (Join-Path $appDir 'pin-manager.js') --regenerate | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'PIN regeneration failed.' }
-        $script:pin = (Get-Content -LiteralPath (Join-Path $dataDir 'config.json') -Raw | ConvertFrom-Json).pin
+        $script:pin = (Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json).pin
         $pinField.Text = $pin -replace '(\d{3})(\d{3})','$1 $2'; $copy.Text='Copy PIN'
     } catch { [Windows.Forms.MessageBox]::Show('Could not update the PIN. Check the local saved configuration.', 'PIN update failed') | Out-Null }
 })

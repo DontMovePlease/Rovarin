@@ -13,6 +13,30 @@ const root = path.resolve(__dirname, '..');
 const payload = path.join(root, 'packaging', 'payload');
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Windows can briefly retain a fixture's current-directory handle after exit.
+// Retry only removal of our validated mkdtemp tree; persistent errors still fail.
+async function removeOwnedFixture(temp) {
+  assert(path.resolve(temp).startsWith(path.resolve(os.tmpdir()) + path.sep));
+  assert(!fs.lstatSync(temp).isSymbolicLink(),'fixture root must not redirect');
+  await fs.promises.rm(temp,{recursive:true,force:true,maxRetries:10,retryDelay:100});
+  assert(!fs.existsSync(temp),'disposable fixture cleanup must complete');
+}
+async function testFixtureCleanup() {
+  if (process.platform !== 'win32') return;
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'rovarin-packaging-cleanup-'));
+  const child=spawn(process.execPath,['-e',"console.log('ready');setTimeout(()=>{},800)"],{cwd:temp,windowsHide:true,stdio:['ignore','pipe','pipe']});
+  const closed=new Promise((resolve,reject)=>{child.once('close',resolve);child.once('error',reject)});
+  try {
+    await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Cleanup fixture readiness timed out')),5000);child.stdout.once('data',()=>{clearTimeout(timer);resolve()});child.once('error',error=>{clearTimeout(timer);reject(error)})});
+    assert.throws(()=>fs.rmSync(temp,{recursive:true,force:true}),error=>error.code==='EPERM','Windows child current-directory handle reproduces deletion failure');
+    await removeOwnedFixture(temp);await closed;
+    assert(!fs.existsSync(temp),'bounded retry leaves no held fixture');
+    console.log('PASS reproduced Windows current-directory EPERM; bounded cleanup waits for owned child release and removes fixture');
+  } finally {
+    if(child.exitCode===null){child.kill();await closed;}
+    if(fs.existsSync(temp))await removeOwnedFixture(temp);
+  }
+}
 // Independent test decoder for the small byte-mode version 2/3 phone QRs.
 // Read format/mask, skip function modules, undo masking and deinterleave data.
 // Production uses only the unmodified upstream encoder, not this test decoder.
@@ -229,10 +253,62 @@ async function testPackagedRuntime() {
     for (const blocker of blockers) await new Promise(resolve => blocker.close(resolve));
     if (stopError) throw stopError; // Retain the fixture; never delete a live app.
     assert(path.resolve(temp).startsWith(path.resolve(os.tmpdir()) + path.sep));
-    fs.rmSync(temp, { recursive: true, force: true });
+    await removeOwnedFixture(temp);
   }
 }
+async function testMigrationPreflight() {
+  if(process.platform!=='win32')return;
+  const fixture=fs.mkdtempSync(path.join(os.tmpdir(),'rovarin-migration-test-'));
+  const local=path.join(fixture,'LocalAppData'),legacy=path.join(local,'PCMonitor'),destination=path.join(local,'Rovarin');
+  fs.mkdirSync(local);const script=path.join(root,'scripts/rebrand-migration.ps1');
+  const quote=value=>"'"+value.replace(/'/g,"''")+"'";
+  const registration='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{C51A4180-26D2-4F48-93BD-B40B182B78DA}_is1';
+  const bootstrap=path.join(fixture,'bootstrap.ps1'),specFile=path.join(fixture,'fixture.json');
+  fs.writeFileSync(bootstrap,
+    '$ErrorActionPreference="Stop"\n'+
+    '$spec=Get-Content -LiteralPath '+quote(specFile)+' -Raw|ConvertFrom-Json\n'+
+    '$registration='+quote(registration)+'\n'+
+    'function global:Test-Path { param([string]$LiteralPath) if($LiteralPath -eq $registration){return $spec.registered}; Microsoft.PowerShell.Management\\Test-Path -LiteralPath $LiteralPath }\n'+
+    'function global:Get-ItemProperty { param([string]$LiteralPath) if($LiteralPath -ne $registration){throw "unexpected-registry-read"};return $spec.entry }\n'+
+    'function global:Get-CimInstance { [CmdletBinding()]param([string]$ClassName,[int]$OperationTimeoutSec) if($ClassName -ne "Win32_Process" -or $OperationTimeoutSec -ne 10){throw "unbounded-process-query"}; if($spec.queryFails){throw "process-query-unavailable"};return $spec.processes }\n'+
+    '& '+quote(script)+' -Mode Prepare -Destination '+quote(destination)+'\nexit $LASTEXITCODE\n');
+  const entry={DisplayName:'PC Monitor',DisplayVersion:'0.1.0',InstallLocation:legacy,UninstallString:'"'+path.join(legacy,'unins000.exe')+'"'};
+  const cases=[
+    {label:'no registration fresh install',registered:false,entry,processes:[],exit:0},
+    {label:'removed default legacy install and unrelated process',registered:true,entry,processes:[{ExecutablePath:'C:\\Windows\\System32\\unrelated.exe',CommandLine:'unrelated.exe'}],exit:0},
+    {label:'ambiguous missing install path',registered:true,entry:{...entry,InstallLocation:path.join(local,'unrelated')},processes:[],exit:1},
+    {label:'wrong legacy uninstall command',registered:true,entry:{...entry,UninstallString:'unrelated.exe'},processes:[],exit:1},
+    {label:'deleted executable still alive',registered:true,entry,processes:[{ExecutablePath:path.join(legacy,'runtime/node.exe'),CommandLine:''}],exit:1},
+    {label:'legacy script reference still alive',registered:true,entry,processes:[{ExecutablePath:'node.exe',CommandLine:'node "'+path.join(legacy,'app/server.js')+'"'}],exit:1},
+    {label:'ownership query unavailable',registered:true,entry,processes:[],queryFails:true,exit:1},
+    {label:'current Rovarin upgrade',registered:true,entry:{...entry,DisplayName:'Rovarin',InstallLocation:destination},processes:[],exit:0}
+  ];
+  try {
+    async function check(test){
+      fs.writeFileSync(specFile,JSON.stringify(test));
+      const result=await new Promise(resolve=>require('child_process').execFile('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',bootstrap],{env:{...process.env,LOCALAPPDATA:local},windowsHide:true,timeout:20000,maxBuffer:16384},(error,stdout,stderr)=>resolve({error,stdout,stderr})));
+      assert.strictEqual(result.error?result.error.code:0,test.exit,test.label+': '+result.stderr);
+      assert(!result.stdout.includes('123456')&&!result.stderr.includes('123456'),'fixture PIN must not enter output');
+    }
+    for(const test of cases)await check(test);
+    // A partially present install is NOT the absent-root exception. Preserve its data.
+    fs.mkdirSync(path.join(legacy,'data'),{recursive:true});
+    const config=path.join(legacy,'data/config.json'),saved=Buffer.from('{"pin":"123456","requireDesktopPin":true,"autoCheckUpdates":false}');
+    fs.writeFileSync(config,saved);
+    await check({label:'partial legacy installation remains fail closed',registered:true,entry,processes:[],exit:1});
+    assert(fs.readFileSync(config).equals(saved),'refusal changed existing PIN/settings');
+    assert(!fs.existsSync(destination),'preflight must not create a second config tree');
+    const helper=fs.readFileSync(script,'utf8');
+    assert(!/Remove-Item[^\n]*registration|Stop-Process|taskkill/i.test(helper),'migration preflight cannot delete registration or stop arbitrary processes');
+    console.log('PASS migration fresh/current/stale registration, bounded process checks, partial/ambiguous/live/query-failure refusal, config preservation and no registry/process mutation');
+  }finally{await fs.promises.rm(fixture,{recursive:true,force:true,maxRetries:10,retryDelay:100});}
+}
+
 async function main() {
+  await testMigrationPreflight();
+  await testFixtureCleanup();
+  execFileSync(process.execPath,[path.join(__dirname,'config-access-smoke-test.js')],{stdio:'inherit',timeout:15000});
+  await require('./update-smoke-test')();
   await require('./release-manager-smoke-test')(root);
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'packaging', 'payload-manifest.json')));
   for (const file of manifest.files) assert.strictEqual(hash(path.join(payload, file.path)), file.sha256, file.path);
@@ -244,7 +320,7 @@ async function main() {
     const text=fs.readFileSync(path.join(payload,file),'utf8').replace(/PC_MONITOR[A-Z_]*|pc_monitor_session|PCMonitor\.NativeDesktop\.v1|x-pc-monitor-(?:desktop|ui-revision)|uninstall-pc-monitor|pc-monitor-(?:ui-revision|sidebar-expanded|stream-state|processes|pagechange|desktop-visibility|uninstalling)|pcMonitorUninstalling/gi,'');
     assert(!/pc[ _-]?monitor/i.test(text),'Unintended legacy branding in '+file);
   }
-  for (const file of ['runtime/node.exe', 'runtime/LICENSE', 'app/installation.json', 'app/scripts/setup.ps1', 'app/scripts/install-enhanced.ps1', 'app/scripts/rebrand-migration.ps1', 'app/desktop.vbs', 'app/startup.vbs', 'app/startup-disable.vbs']) assert(files.includes(file));
+  for (const file of ['runtime/node.exe', 'runtime/LICENSE', 'app/installation.json', 'app/update-manager.js', 'app/scripts/installed-update.ps1', 'app/scripts/setup.ps1', 'app/scripts/install-enhanced.ps1', 'app/scripts/rebrand-migration.ps1', 'app/desktop.vbs', 'app/startup.vbs', 'app/startup-disable.vbs']) assert(files.includes(file));
   for (const asset of ASSETS) assert(files.includes('app/vendor/LibreHardwareMonitor/0.9.6/' + asset));
   for (const file of ['LICENSE', 'THIRD-PARTY-NOTICES.txt', 'licenses/PawnIO.Modules.txt', 'source/LibreHardwareMonitor.zip']) assert(files.includes('app/vendor/LibreHardwareMonitor/0.9.6/' + file));
   assert(!files.some(file => /(?:config\.json|temperature-settings|server\.pid|server-state|server\.instance|\.log$|node_modules|smoke-test|pet-output|AGENTS\.md|PROJECT_STATUS\.md|THE-PLAN\.md)/.test(file)));
@@ -267,6 +343,7 @@ async function main() {
   const terms = fs.readFileSync(path.join(payload, 'app/vendor/PawnIO/2.2.0/NOTICE.txt'), 'utf8');
   assert(terms.includes('redistributed unmodified')); assert(terms.includes('proprietary'));
   const iss = fs.readFileSync(path.join(root, 'packaging/Rovarin.iss'), 'utf8');
+  assert(iss.includes('VersionInfoVersion={#AppVersion}.0')); assert(iss.includes('VersionInfoProductVersion={#AppVersion}.0'));
   assert(iss.includes('PrivilegesRequired=lowest')); assert(iss.includes('PrepareToInstall')); assert(iss.includes('InitializeUninstall'));
   assert(iss.includes('{userstartup}\\Rovarin')); assert(!iss.includes('[Registry]'));
   assert.match(iss, /Name: "startup";[^\r\n]*Flags: checkedonce/);
@@ -450,7 +527,21 @@ async function main() {
     const prior=fs.readFileSync(path.join(releaseRoot,'publish/RovarinSetup.exe'));
     await assert.rejects(verifyAndPublish(releaseRoot,async()=>{throw new Error('mock installer failed');}),/mock installer failed/);assert(fs.readFileSync(path.join(releaseRoot,'publish/RovarinSetup.exe')).equals(prior));
     await assert.rejects(verifyAndPublish(releaseRoot,async()=>{fs.writeFileSync(path.join(releaseRoot,'dist/RovarinSetup.exe'),'changed during verification');}),/Build changed/);assert(fs.readFileSync(path.join(releaseRoot,'publish/RovarinSetup.exe')).equals(prior));
+    // Isolated RC builds promote only distributable bytes into the actual project.
+    const outputProject=path.join(temp,'accessible-rc-project');fs.mkdirSync(outputProject);
+    fs.writeFileSync(path.join(releaseRoot,'dist/RovarinSetup.exe'),prior);
+    await verifyAndPublish(releaseRoot,async()=>{},outputProject);
+    const accessible=path.join(outputProject,'publish');
+    assert.deepStrictEqual(fs.readdirSync(accessible).sort(),['RovarinSetup.exe','RovarinSetup.sha256','release.json'].sort());
+    assert(fs.readFileSync(path.join(accessible,'RovarinSetup.exe')).equals(prior));
+    assert(fs.readFileSync(path.join(accessible,'RovarinSetup.sha256'),'utf8').startsWith(hash(path.join(accessible,'RovarinSetup.exe'))));
+    await assert.rejects(verifyAndPublish(releaseRoot,async()=>{throw new Error('RC validation failed');},outputProject),/RC validation failed/);
+    assert(fs.readFileSync(path.join(accessible,'RovarinSetup.exe')).equals(prior),'Failed RC must preserve accessible candidate');
+    fs.writeFileSync(path.join(accessible,'config.json'),'private fixture');
+    await assert.rejects(verifyAndPublish(releaseRoot,async()=>{},outputProject),/Publish contains unrelated files/);
+    assert(fs.readFileSync(path.join(accessible,'RovarinSetup.exe')).equals(prior));
     console.log('PASS installed-only handoff, fixed arguments, acknowledgement/commit, duplicate guard, launch failure and verify-before-publish preservation (mock release fixture)');
+    console.log('PASS staged RC promotion to established project publish folder, exact checksum, distributable-only assets and failed/private-output refusal');
     const service = new EnhancedSupport({ root: path.join(payload, 'app'), stateDirectory: temp, execute: (command, args, options, callback) => {
       assert(command.endsWith('powershell.exe')); assert(args.includes(path.join(payload, 'app/scripts/install-enhanced.ps1'))); assert(options.timeout === 300000);
       setTimeout(() => callback(null, JSON.stringify({exitCode:3010})), 20);
@@ -479,7 +570,7 @@ async function main() {
     console.log('PASS payload hashes/licenses/no secrets, signed production package selection, fixed UAC flags, local address enforcement, result mapping and in-flight guard');
     // Isolated installed structure, random port, no startup/driver changes.
     const app = path.join(temp, 'app'); fs.mkdirSync(app);
-    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js','enhanced-support.js','uninstall-manager.js','cpu-temperature-provider.js','temperature-manager.js','maintenance.js','process-stats.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(app,name));
+    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','cpu-temperature-provider.js','temperature-manager.js','maintenance.js','process-stats.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(app,name));
     fs.writeFileSync(path.join(app,'installation.json'),'{}');
     let output = '', base;
     child = spawn(process.execPath, [path.join(app,'server.js')], {cwd:app, env:{...process.env,PORT:'0',PC_MONITOR_PIN:''},windowsHide:true,stdio:['ignore','pipe','pipe']});
@@ -528,9 +619,9 @@ async function main() {
     assert.strictEqual((await call('/api/temperature/enhanced','GET',undefined,headers)).status,401);
     assert.strictEqual((await call('/api/system/uninstall','POST',uninstallBody,headers)).status,401);
   } finally {
-    if(child && child.exitCode===null){const exited=new Promise(resolve=>child.once('exit',resolve));child.kill();await exited;}
+    if(child && child.exitCode===null){const closed=new Promise(resolve=>child.once('close',resolve));child.kill();await closed;}
     // Own mkdtemp directory only; resolve containment before removing.
-    assert(path.resolve(temp).startsWith(path.resolve(os.tmpdir())+path.sep));fs.rmSync(temp,{recursive:true,force:true});
+    await removeOwnedFixture(temp);
   }
 }
-main().then(testPackagedRuntime).then(()=>require('./native-desktop-test')(__dirname.replace(/[\\/]scripts$/,''),payload)).catch(error=>{console.error(error);process.exitCode=1;});
+(process.argv[2]==='--migration-only' ? testMigrationPreflight() : main().then(testPackagedRuntime).then(()=>require('./native-desktop-test')(__dirname.replace(/[\\/]scripts$/,''),payload))).catch(error=>{console.error(error);process.exitCode=1;});

@@ -7,6 +7,8 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
   const temp=fs.mkdtempSync(path.join(os.tmpdir(),'rovarin-native-'));
   fs.cpSync(payload,temp,{recursive:true});
   const app=path.join(temp,'app'),data=path.join(temp,'data');fs.mkdirSync(data);
+  const pins = require('../pin-manager'); const testConfig = path.join(data,'config.json');
+  pins.writeConfig(testConfig,{...pins.loadConfig(testConfig),autoCheckUpdates:false});
   fs.writeFileSync(path.join(data,'onboarding-complete.json'),'{"completed":true}');
   let child,desktop,base,retain=false;
   const launch=(file,args,options={})=>spawn(file,args,{windowsHide:true,stdio:['ignore','pipe','pipe'],...options});
@@ -17,7 +19,7 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     if(options.currentSource){
       // Local shell QA without rebuilding or touching the installer payload.
       fs.cpSync(path.join(root,'public'),path.join(app,'public'),{recursive:true});
-      for (const name of ['server.js','pin-manager.js']) fs.copyFileSync(path.join(root,name),path.join(app,name));
+      for (const name of ['server.js','pin-manager.js','update-manager.js']) fs.copyFileSync(path.join(root,name),path.join(app,name));
       fs.copyFileSync(path.join(root,'scripts/native-trust.ps1'),path.join(app,'scripts/native-trust.ps1'));
       execFileSync(compiler,['/nologo','/target:winexe','/platform:x64','/optimize+','/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll',`/r:${path.join(app,'Microsoft.Web.WebView2.Core.dll')}`,`/r:${path.join(app,'Microsoft.Web.WebView2.WinForms.dll')}`,`/win32manifest:${path.join(root,'packaging/desktop.manifest')}`,`/win32icon:${path.join(app,'Rovarin.ico')}`,`/out:${path.join(app,'Rovarin.exe')}`,path.join(root,'packaging/RovarinLauncher.cs'),path.join(root,'packaging/DesktopShell.cs')],{windowsHide:true,timeout:15000});
     }
@@ -28,12 +30,17 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     let output='';child.stdout.on('data',x=>output+=x);child.stderr.on('data',x=>output+=x);
     for(let i=0;i<150;i++){const match=output.match(/Localhost access: http:\/\/127\.0\.0\.1:(\d+)/);if(match){base=`http://127.0.0.1:${match[1]}`;break}await pause(100)}
     assert(base,'Native fixture backend failed');
-    execFileSync(compiler,['/nologo','/target:exe','/platform:x64','/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll',`/r:${path.join(app,'Microsoft.Web.WebView2.Core.dll')}`,`/r:${path.join(app,'Microsoft.Web.WebView2.WinForms.dll')}`,`/out:${path.join(app,'NativeDesktopTest.exe')}`,path.join(root,'scripts/native-desktop-test.cs')],{windowsHide:true,timeout:15000});
+    const remoteLogin=await fetch(base+'/').then(r=>r.text());
+    assert(remoteLogin.includes('class="login-page"'),'Canonical login document missing');
+    assert(!remoteLogin.includes('id="lock-window-minimize"')&&!remoteLogin.includes('id="lock-window-exit"')&&!remoteLogin.includes('class="lock-window-controls"'),'Web/mobile login must not contain native window controls');
+    execFileSync(compiler,['/nologo','/target:exe','/platform:x64',`/win32manifest:${path.join(root,'packaging/desktop.manifest')}`,'/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll',`/r:${path.join(app,'Microsoft.Web.WebView2.Core.dll')}`,`/r:${path.join(app,'Microsoft.Web.WebView2.WinForms.dll')}`,`/out:${path.join(app,'NativeDesktopTest.exe')}`,path.join(root,'scripts/native-desktop-test.cs')],{windowsHide:true,timeout:15000});
     fs.copyFileSync(path.join(app,'Rovarin.exe.config'),path.join(app,'NativeDesktopTest.exe.config'));
     console.log(await wait(launch(path.join(app,'NativeDesktopTest.exe'),[],{cwd:app})));
+    for(const file of ['native-lock.png','login-mobile.png','login-keyboard.png']) fs.copyFileSync(path.join(app,file),path.join(root,'packaging/cache',file));
     fs.copyFileSync(path.join(app,'native-dashboard.png'),path.join(root,'packaging/cache/native-dashboard.png'));
     fs.copyFileSync(path.join(app,'native-mobile.png'),path.join(root,'packaging/cache/native-mobile.png'));
     fs.copyFileSync(path.join(app,'native-mobile-drawer.png'),path.join(root,'packaging/cache/native-mobile-drawer.png'));
+    for(const file of fs.readdirSync(app).filter(file=>/^midnight-.*\.png$/.test(file))) fs.copyFileSync(path.join(app,file),path.join(root,'packaging/cache',file));
     assert.strictEqual((await fetch(base+'/api/metrics')).status,401,'Shell exit leaves protected backend healthy');
     const state=JSON.parse(fs.readFileSync(path.join(data,'server-state.json')));assert.strictEqual(state.pid,child.pid,'Shell reused existing Node');
     // The real fixed-mode EXE, not the harness: two opens reuse a single shell.

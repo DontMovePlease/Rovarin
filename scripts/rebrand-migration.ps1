@@ -76,6 +76,25 @@ try {
         if ($entry.DisplayName -cne 'PC Monitor') { exit 0 }
         $legacy = [IO.Path]::GetFullPath($entry.InstallLocation.TrimEnd('\'))
         Assert-Plain $legacy
+        # A completed old uninstall can leave only Inno's HKCU entry. This is
+        # fresh state, not an installation whose ownership checks can be skipped.
+        # Accept only the fixed default legacy root when it is entirely absent;
+        # no legacy executable/data is executed, copied, removed or regenerated.
+        if (-not (Test-Path -LiteralPath $legacy)) {
+            $expectedLegacy = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'PCMonitor'))
+            if ($legacy -ine $expectedLegacy -or $entry.UninstallString -cne ('"'+(Join-Path $legacy 'unins000.exe')+'"')) { throw 'missing-legacy-identity-unverified' }
+            # A deleted-on-disk executable could still be alive. Query failure or
+            # any legacy-root process reference remains a hard refusal; no kill.
+            $stage='missing-legacy-process-validation'
+            foreach ($process in @(Get-CimInstance Win32_Process -OperationTimeoutSec 10 -ErrorAction Stop)) {
+                $image=[string]$process.ExecutablePath
+                $command=[string]$process.CommandLine
+                if ($image.StartsWith($legacy+'\',[StringComparison]::OrdinalIgnoreCase) -or $command.IndexOf($legacy+'\',[StringComparison]::OrdinalIgnoreCase) -ge 0) { throw 'missing-legacy-process-running' }
+            }
+            # Inno owns replacement of the same stable uninstall registration.
+            Write-Output 'Previous installation is absent; settings migration is not required.'
+            exit 0
+        }
         if ($destinationRoot.StartsWith($legacy+'\',[StringComparison]::OrdinalIgnoreCase) -or $legacy.StartsWith($destinationRoot+'\',[StringComparison]::OrdinalIgnoreCase)) { throw 'overlapping-installations' }
         $oldApp = Join-Path $legacy 'app'
         $oldData = Join-Path $legacy 'data'

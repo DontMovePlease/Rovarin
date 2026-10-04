@@ -14,7 +14,7 @@ async function testNativeDesktopSecurity() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rovarin-native-security-'));
   let child, url, captured = '';
   try {
-    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js','enhanced-support.js','uninstall-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(directory,name));
+    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(directory,name));
     fs.mkdirSync(path.join(directory,'scripts'));
     fs.copyFileSync(path.join(root,'scripts/native-trust.ps1'),path.join(directory,'scripts/native-trust.ps1'));
     const configFile = path.join(directory,'config.json');
@@ -50,6 +50,17 @@ async function testNativeDesktopSecurity() {
     const cookieOf=response=>response.headers.getSetCookie().find(c=>c.startsWith('pc_monitor_session=')).split(';')[0];
     const login=async pin=>{const r=await call('/api/login',{pin},'',null);assert.strictEqual(r.status,200);return cookieOf(r);};
     const cookie=await login('654321');
+    assert.strictEqual((await fetch(url+'/api/updates')).status,401);
+    assert.strictEqual((await fetch(url+'/api/updates',{headers:{Cookie:cookie}})).status,200);
+    assert.strictEqual((await call('/api/desktop/updates',{action:'download'},cookie,null)).status,401);
+    assert.strictEqual((await call('/api/desktop/updates',{action:'status'},'',credential)).status,401);
+    assert.strictEqual((await call('/api/desktop/updates',{action:'check'},cookie,credential,'http://evil.invalid')).status,403);
+    assert.strictEqual((await call('/api/desktop/updates',{action:'download',url:'https://evil.invalid/a',path:'C:/x'},cookie)).status,400);
+    assert.strictEqual((await call('/api/desktop/updates',{action:'download'},cookie)).status,409,'development copy cannot install');
+    const preference = await call('/api/desktop/updates',{action:'preference'},cookie);
+    assert.strictEqual(preference.status,200);assert.strictEqual((await preference.json()).autoCheck,false);
+    assert.strictEqual(pins.readConfig(configFile).pin,'654321');
+    assert.strictEqual((await call('/api/desktop/updates',{action:'status'},cookie)).status,200);
     assert.strictEqual((await call('/api/desktop/auth')).status,401,'PIN required by default');
     const malformed=await fetch(url+'/api/desktop/security',{method:'POST',headers:{'Content-Type':'application/json',Origin:url,'X-PC-Monitor-Desktop':credential,Cookie:cookie},body:'{broken'});
     assert.strictEqual(malformed.status,400);
@@ -83,7 +94,8 @@ async function testNativeDesktopSecurity() {
     console.log('PASS Windows DPAPI native trust, browser rejection, default/optional PIN, confirmation, lock, preference revocation and canonical PIN rotation');
   } finally {
     if(child&&child.exitCode===null){const exited=new Promise(resolve=>child.once('exit',resolve));child.kill();await exited;}
-    fs.rmSync(directory,{recursive:true,force:true});
+    // Windows may briefly retain a scanner/file handle after the owned child exits.
+    fs.rmSync(directory,{recursive:true,force:true,maxRetries:10,retryDelay:100});
   }
 }
 
@@ -102,7 +114,9 @@ async function testLocalPinManagement() {
     fs.writeFileSync(file, '{broken');
     assert.throws(() => pins.loadConfig(file)); assert.strictEqual(fs.readFileSync(file, 'utf8'), '{broken');
     pins.writeConfig(file, legacy);
-    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js','enhanced-support.js','uninstall-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root, name), path.join(directory, name));
+    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root, name), path.join(directory, name));
+    fs.mkdirSync(path.join(directory,'public'));
+    fs.copyFileSync(path.join(root,'public/login.html'),path.join(directory,'public/login.html'));
     let output = '', url;
     await new Promise((resolve, reject) => {
       const env = { ...process.env, PORT: '0' }; delete env.PC_MONITOR_PIN;
@@ -113,6 +127,10 @@ async function testLocalPinManagement() {
     });
     const call = (route, cookie, body) => fetch(url + route, { method: body ? 'POST' : 'GET', headers: { ...(cookie ? { Cookie: cookie } : {}), 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
     const signin = async pin => { const r = await call('/api/login', null, { pin }); assert.strictEqual(r.status, 200); return r.headers.getSetCookie().find(c => c.startsWith('pc_monitor_session=')).split(';')[0]; };
+    const legacyPage=await call('/');const legacyHtml=await legacyPage.text();
+    assert(legacyHtml.includes('<meta name="rovarin-pin-mode" content="12">'));
+    assert(!legacyHtml.includes(legacy.pin),'PIN value must never be rendered');
+    assert.strictEqual(legacyPage.headers.get('Cache-Control'),'no-store');
     const a = await signin(legacy.pin), b = await signin(legacy.pin);
     const lease = await call('/api/monitoring/lease', a, { action: 'acquire' }); assert.strictEqual(lease.status, 201);
     const leaseId = (await lease.json()).leaseId;
@@ -137,6 +155,7 @@ async function testLocalPinManagement() {
     const helperOutput = await new Promise((resolve, reject) => execFile(process.execPath, ['pin-manager.js','--regenerate'], { cwd: directory, timeout: 5000 }, (error, stdout) => error ? reject(error) : resolve(stdout)));
     const updated = pins.readConfig(file);
     for (const held of pending) { held.socket.end(held.bytes.subarray(held.bytes.length-1)); assert.match(await held.done, /^HTTP\/1\.1 401/, 'revoked in-flight body cannot create a lease or run maintenance'); }
+    const currentPage=await call('/');const currentHtml=await currentPage.text();assert(currentHtml.includes('<meta name="rovarin-pin-mode" content="6">'));assert(!currentHtml.includes(updated.pin));
     assert.match(updated.pin, /^\d{6}$/); assert.notStrictEqual(updated.pin, legacy.pin); assert.deepStrictEqual(updated.unrelated, legacy.unrelated);
     assert(!helperOutput.includes(updated.pin) && !output.includes(updated.pin) && !output.includes(legacy.pin));
     assert.strictEqual((await call('/api/monitoring/status', a)).status, 401);
@@ -156,7 +175,7 @@ async function testLocalPinManagement() {
     console.log('PASS fresh cryptographic 6-digit PIN, legacy PIN, native-local regeneration, no recovery API, all-session/SSE/lease revocation, settings preservation and atomic failure');
   } finally {
     if (child && child.exitCode === null) { child.kill(); await new Promise(resolve => child.once('exit', resolve)); }
-    fs.rmSync(directory, { recursive: true, force: true });
+    fs.rmSync(directory, { recursive: true, force: true, maxRetries:10, retryDelay:100 });
   }
 }
 
@@ -469,7 +488,10 @@ async function testExpirationAndRateLimit() {
 
 async function main() {
   try {
+    await require('./update-smoke-test')();
     testDashboardUpdates();
+    testMobileOnboarding();
+    await testLoginInteraction();
     await testLocalPinManagement();
     await testNativeDesktopSecurity();
     pin = String(crypto.randomInt(100000000000, 999999999999));
@@ -484,6 +506,98 @@ async function main() {
       await new Promise(resolve => serverProcess.once('exit', resolve));
     }
   }
+}
+
+async function testLoginInteraction() {
+  const elements = Object.fromEntries(['pinInput','unlockBtn','errMsg'].map(id => [id,{value:'',textContent:'',disabled:false,events:{},addEventListener(name,fn){this.events[name]=fn;},focus(){}}]));
+  const requests=[]; let respond; let navigations=0;
+  const context=vm.createContext({document:{getElementById:id=>elements[id],querySelector:()=>({content:'6'})},localStorage:{removeItem(){}},window:{location:{replace(){navigations++;}}},fetch:(_url,options)=>{requests.push(JSON.parse(options.body));return new Promise(resolve=>{respond=resolve;});}});
+  vm.runInContext(fs.readFileSync(path.join(root,'public/login.js'),'utf8'),context);
+  // Real typing fires keydown then input; pasting fires a single input event.
+  const flush=()=>new Promise(resolve=>setImmediate(resolve));
+  const fail=async()=>{respond({ok:false,status:401,headers:{get(){return null;}},json:async()=>({success:false})});await flush();};
+  const type=digits=>{for(const digit of digits){elements.pinInput.value+=digit;elements.pinInput.events.keydown({key:digit});elements.pinInput.events.input({});}};
+  elements.pinInput.value='111111';elements.pinInput.events.input({});
+  assert.strictEqual(requests.length,1,'pasting six digits must auto-submit exactly once');
+  assert.strictEqual(requests[0].pin,'111111');
+  elements.unlockBtn.events.click();
+  await elements.pinInput.events.keydown({key:'Enter'});
+  await elements.unlockBtn.events.click();
+  elements.pinInput.events.input({});
+  assert.strictEqual(requests.length,1,'one pending request even with rapid input, Enter/taps');
+  await fail();
+  assert.strictEqual(elements.pinInput.value,'','a failed PIN is cleared for a fresh attempt');
+  assert.strictEqual(elements.unlockBtn.disabled,false);
+  assert.strictEqual(elements.errMsg.textContent,'Incorrect PIN. Please try again.');
+  type('12345');
+  assert.strictEqual(requests.length,1,'digits one through five must not submit');
+  elements.pinInput.value='12ab56';elements.pinInput.events.input({});
+  assert.strictEqual(requests.length,1,'invalid input must not submit');
+  elements.pinInput.value='1234567';elements.pinInput.events.input({});
+  assert.strictEqual(requests.length,1,'more than six digits must not auto-submit');
+  elements.pinInput.value='';
+  type('123456');
+  assert.strictEqual(requests.length,2,'six typed digits must auto-submit exactly once');
+  assert.strictEqual(requests[1].pin,'123456');
+  await fail();
+  assert.strictEqual(elements.unlockBtn.disabled,false);
+  elements.pinInput.value='654321';elements.pinInput.events.input({});
+  assert.strictEqual(requests.length,3,'a new six-digit value auto-submits after a failed login');
+  elements.pinInput.value='999999';elements.pinInput.events.input({});
+  assert.strictEqual(requests.length,3,'typing while a request is pending must not stack requests');
+  await fail();
+  assert.strictEqual(elements.pinInput.value,'999999','a stale response must not erase newly typed digits');
+  assert.strictEqual(elements.unlockBtn.disabled,false);
+  elements.pinInput.events.input({});
+  assert.strictEqual(requests.length,4,'the preserved six-digit value retries automatically');
+  await fail();
+  assert.strictEqual(elements.pinInput.value,'','the retried PIN is cleared after another failure');
+  type('999999');
+  assert.strictEqual(requests.length,4,'the same six-digit value must not auto-submit twice');
+  elements.unlockBtn.events.click();
+  assert.strictEqual(requests.length,5,'Enter/button still submits a repeated value manually');
+  await fail();
+  type('123456');
+  assert.strictEqual(requests.length,6,'a new current six-digit PIN auto-submits once');
+  respond({ok:true,status:200,json:async()=>({success:true})});await flush();
+  assert.strictEqual(navigations,1);
+  for(const mode of ['12','manual','invalid']) {
+    const legacyElements=Object.fromEntries(['pinInput','unlockBtn','errMsg'].map(id=>[id,{value:'',textContent:'',disabled:false,events:{},addEventListener(name,fn){this.events[name]=fn;},focus(){}}]));
+    const legacyRequests=[];let legacyRespond,legacyNavigations=0;
+    const legacyContext=vm.createContext({document:{getElementById:id=>legacyElements[id],querySelector:()=>({content:mode})},localStorage:{removeItem(){}},window:{location:{replace(){legacyNavigations++;}}},fetch:(_url,options)=>{legacyRequests.push(JSON.parse(options.body));return new Promise(resolve=>legacyRespond=resolve);}});
+    vm.runInContext(fs.readFileSync(path.join(root,'public/login.js'),'utf8'),legacyContext);
+    for(const digit of '123456789012') {
+      legacyElements.pinInput.value+=digit;legacyElements.pinInput.events.input({});
+      assert.strictEqual(legacyRequests.length,0,'legacy/unknown entry never consumes a failed attempt, including at digit six');
+    }
+    assert.strictEqual(legacyElements.pinInput.value,'123456789012');
+    legacyElements.pinInput.events.keydown({key:'Enter'});assert.strictEqual(legacyRequests.length,1);
+    assert.strictEqual(legacyRequests[0].pin,'123456789012');
+    legacyRespond({ok:true,status:200,json:async()=>({success:true})});await flush();assert.strictEqual(legacyNavigations,1);
+    legacyElements.pinInput.value='123456789012';legacyElements.pinInput.events.input({});assert.strictEqual(legacyRequests.length,1);
+    legacyElements.unlockBtn.events.click();assert.strictEqual(legacyRequests.length,2);
+    legacyRespond({ok:true,status:200,json:async()=>({success:true})});await flush();
+  }
+  console.log('PASS six-digit typing/paste auto-submit, guarded retries; legacy/unknown modes consume zero attempts while typing and support Enter/button');
+  // Presentation-only visual viewport lifecycle. No auth mocks are relaxed.
+  const events = () => ({ listeners: new Map(), addEventListener(type, fn) { if (!this.listeners.has(type)) this.listeners.set(type,new Set()); this.listeners.get(type).add(fn); }, removeEventListener(type,fn) { this.listeners.get(type)?.delete(fn); }, dispatch(type) { for(const fn of this.listeners.get(type)||[]) fn(); } });
+  const styles=new Map(),classes=new Set(['login-page']);
+  const rootElement={style:{setProperty:(key,value)=>styles.set(key,value),removeProperty:key=>styles.delete(key)},classList:{contains:key=>classes.has(key),remove:key=>classes.delete(key),toggle(key,on){if(on)classes.add(key);else classes.delete(key);}}};
+  const viewport=Object.assign(events(),{height:844,offsetTop:0});
+  const phoneWindow=Object.assign(events(),{visualViewport:viewport,innerWidth:390,innerHeight:844,location:{replace(){}}});
+  const phoneContext=vm.createContext({document:{documentElement:rootElement,getElementById:id=>elements[id]},localStorage:{removeItem(){}},window:phoneWindow,fetch(){throw Error('Viewport must not make requests');}});
+  vm.runInContext(fs.readFileSync(path.join(root,'public/login.js'),'utf8'),phoneContext);
+  assert.strictEqual(styles.get('--login-viewport-height'),'844px');
+  viewport.height=320;viewport.offsetTop=47;viewport.dispatch('resize');viewport.dispatch('scroll');
+  assert.strictEqual(styles.get('--login-viewport-height'),'320px');assert.strictEqual(styles.get('--login-viewport-top'),'47px');assert(classes.has('login-keyboard'));
+  for(let i=0;i<4;i++) {
+    phoneWindow.dispatch('pagehide');assert.strictEqual(viewport.listeners.get('resize').size,0);assert.strictEqual(viewport.listeners.get('scroll').size,0);assert.strictEqual(phoneWindow.listeners.get('resize').size,0);
+    phoneWindow.dispatch('pageshow');phoneWindow.dispatch('pageshow');assert.strictEqual(viewport.listeners.get('resize').size,1);assert.strictEqual(viewport.listeners.get('scroll').size,1);assert.strictEqual(phoneWindow.listeners.get('resize').size,1);
+  }
+  viewport.height=844;viewport.offsetTop=0;viewport.dispatch('resize');assert(!classes.has('login-keyboard'));
+  classes.add('native-shell');phoneWindow.dispatch('resize');assert.strictEqual(styles.size,0,'Native window must not inherit mobile visual viewport overrides');
+  phoneWindow.dispatch('pagehide');
+  console.log('PASS keyboard visual viewport/offset, restoration, bfcache reattach without duplicate listeners and native presentation isolation');
 }
 
 function testDashboardUpdates() {
@@ -527,6 +641,134 @@ function testDashboardUpdates() {
   assert.strictEqual(releases, 1, 'update reload releases the previous monitoring lease');
   assert.strictEqual(vm.runInContext('reloadForDashboardUpdate(response)', clientContext), false, 'one change causes only one reload');
   console.log('PASS automatic asset revision, update reload, auth/uninstall guards and lease release');
+}
+
+function testMobileOnboarding() {
+  const appSource = fs.readFileSync(path.join(root, 'public', 'app.js'), 'utf8');
+  const begin = appSource.indexOf('// MOBILE-ONBOARDING:BEGIN');
+  const end = appSource.indexOf('// MOBILE-ONBOARDING:END');
+  assert(begin !== -1 && end > begin, 'phone onboarding block is present');
+  const block = appSource.slice(begin, end);
+  assert(!block.includes('fetch(') && !block.includes('document.cookie'), 'onboarding makes no requests and never touches cookies');
+  const sessionCode = appSource.slice(appSource.indexOf('async function startDashboardSession'), appSource.indexOf('async function fetchInitialMetrics'));
+  assert(sessionCode.includes('maybeShowMobileOnboarding();'), 'the sheet is presented from the authenticated dashboard entry only');
+
+  const IOS_SAFARI = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1';
+  const IOS_CHROME = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/120.0 Mobile/15E148 Safari/604.1';
+  const IPAD_SAFARI = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15';
+  const ANDROID_CHROME = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+  const ANDROID_FIREFOX = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Firefox/121.0 Mobile Safari/537.36';
+  const DESKTOP_CHROME = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  const onboardingEnv = (options = {}) => {
+    const settings = { userAgent: IOS_SAFARI, platform: 'iPhone', touchPoints: 5, phone: true, width: 390, height: 844, displayMode: 'browser', iosStandalone: false, native: false, nativeClass: false, store: {}, ...options };
+    const listeners = {};
+    const dialog = {
+      open: false,
+      showModal() { if (this.open) throw new Error('already open'); this.open = true; },
+      close() { this.open = false; (listeners.close || []).slice().forEach(fn => fn()); },
+      addEventListener(name, fn) { (listeners[name] = listeners[name] || []).push(fn); }
+    };
+    const steps = { items: [], replaceChildren(...nodes) { this.items = nodes; } };
+    const install = { hidden: false };
+    const dismiss = { clickHandler: null, addEventListener(name, fn) { if (name === 'click') this.clickHandler = fn; }, click() { if (this.clickHandler) this.clickHandler(); } };
+    const elements = { mobileOnboardingDialog: dialog, mobileOnboardingSteps: steps, mobileOnboardingInstall: install, mobileOnboardingDismiss: dismiss };
+    const context = vm.createContext({
+      window: { innerWidth: settings.width, innerHeight: settings.height, ...(settings.native ? { chrome: { webview: {} } } : {}) },
+      navigator: { userAgent: settings.userAgent, platform: settings.platform, maxTouchPoints: settings.touchPoints, standalone: settings.iosStandalone },
+      matchMedia: query => ({ matches: query === '(max-width: 699px)' ? settings.phone && settings.width <= 699 : query === '(display-mode: standalone)' ? settings.displayMode === 'standalone' : false }),
+      localStorage: { getItem: key => (key in settings.store ? settings.store[key] : null), setItem: (key, value) => { settings.store[key] = String(value); } },
+      document: {
+        documentElement: { classList: { contains: name => name === 'native-shell' && settings.nativeClass } },
+        getElementById: id => elements[id] || null,
+        createElement: () => ({ textContent: '' })
+      }
+    });
+    vm.runInContext(`${block}\nglobalThis.__onboarding = { maybeShowMobileOnboarding, mobileOnboardingVariant };`, context);
+    return { api: context.__onboarding, dialog, steps, install, dismiss, store: settings.store };
+  };
+  const stepText = env => env.steps.items.map(item => item.textContent);
+
+  // Platform instructions follow reliable capability detection only.
+  const variants = onboardingEnv();
+  assert.strictEqual(variants.api.mobileOnboardingVariant(IOS_SAFARI, 'iPhone', 5), 'ios');
+  assert.strictEqual(variants.api.mobileOnboardingVariant(IPAD_SAFARI, 'MacIntel', 5), 'ios');
+  assert.strictEqual(variants.api.mobileOnboardingVariant(IOS_CHROME, 'iPhone', 5), 'generic');
+  assert.strictEqual(variants.api.mobileOnboardingVariant(ANDROID_CHROME, 'Linux armv8l', 4), 'android');
+  assert.strictEqual(variants.api.mobileOnboardingVariant(ANDROID_FIREFOX, 'Linux armv8l', 4), 'generic');
+  assert.strictEqual(variants.api.mobileOnboardingVariant(DESKTOP_CHROME, 'Win32', 0), 'generic');
+
+  // First phone visit presents the sheet once; dismissal marks this device seen.
+  const first = onboardingEnv();
+  assert.strictEqual(first.api.maybeShowMobileOnboarding(), true, 'first phone visit presents onboarding once');
+  assert.strictEqual(first.dialog.open, true);
+  assert.deepStrictEqual(stepText(first), ['Tap the Share button', 'Tap "Add to Home Screen"', 'Tap Add']);
+  assert.strictEqual(first.install.hidden, false, 'Home Screen steps are offered before installing');
+  assert.strictEqual(first.api.maybeShowMobileOnboarding(), false, 'an open sheet is never presented twice');
+  first.dismiss.click();
+  assert.strictEqual(first.dialog.open, false, 'the Got it button closes the sheet');
+  assert.deepStrictEqual(first.store, { 'rovarin.mobileOnboardingSeen': 'true' }, 'dismissing with Got it marks the device seen with no PIN, token or session data');
+  assert(!/(pin|token|session|secret|cookie|auth)/i.test(JSON.stringify(first.store)), 'onboarding storage never holds credentials');
+  const second = onboardingEnv({ store: first.store });
+  assert.strictEqual(second.api.maybeShowMobileOnboarding(), false, 'reloads on a dismissed device never show it again');
+  assert.strictEqual(second.dialog.open, false);
+  const clean = onboardingEnv();
+  assert.strictEqual(clean.api.maybeShowMobileOnboarding(), true, 'a clean browser storage context still sees onboarding');
+  const escapeEnv = onboardingEnv();
+  assert.strictEqual(escapeEnv.api.maybeShowMobileOnboarding(), true, 'the sheet can be presented again on a fresh device');
+  escapeEnv.dialog.close();
+  assert.strictEqual(escapeEnv.dialog.open, false, 'Escape dismisses the sheet');
+  assert.deepStrictEqual(escapeEnv.store, { 'rovarin.mobileOnboardingSeen': 'true' }, 'dismissal by any means marks the device seen');
+
+  // Never in the native desktop app, even at phone-sized windows.
+  for (const settings of [{ native: true }, { nativeClass: true }]) {
+    const nativeEnv = onboardingEnv(settings);
+    assert.strictEqual(nativeEnv.api.maybeShowMobileOnboarding(), false, 'native desktop never shows mobile onboarding');
+    assert.strictEqual(nativeEnv.dialog.open, false);
+  }
+  const desktopEnv = onboardingEnv({ userAgent: DESKTOP_CHROME, platform: 'Win32', touchPoints: 0, phone: false });
+  assert.strictEqual(desktopEnv.api.maybeShowMobileOnboarding(), false, 'desktop browsers never show mobile onboarding');
+  for(const touchPoints of [0,5]) {
+    const narrowDesktop=onboardingEnv({userAgent:DESKTOP_CHROME,platform:'Win32',touchPoints,phone:true,width:390,height:844});
+    assert.strictEqual(narrowDesktop.api.maybeShowMobileOnboarding(),false,'normal desktop browser at 390x844 never shows onboarding, including touch-capable PCs');
+    assert.strictEqual(narrowDesktop.dialog.open,false);
+  }
+  for(const mobile of [{userAgent:IOS_SAFARI,platform:'iPhone'},{userAgent:ANDROID_CHROME,platform:'Linux armv8l'}]) {
+    const narrowMobile=onboardingEnv({...mobile,width:390,height:844});
+    assert.strictEqual(narrowMobile.api.maybeShowMobileOnboarding(),true,'unseen iOS/Android client at 390x844 shows onboarding');
+  }
+
+
+  // Standalone/Home Screen launches skip only the install instructions.
+  for (const settings of [{ displayMode: 'standalone' }, { iosStandalone: true }]) {
+    const homeEnv = onboardingEnv(settings);
+    assert.strictEqual(homeEnv.api.maybeShowMobileOnboarding(), true, 'standalone launches still explain away-from-home use');
+    assert.strictEqual(homeEnv.install.hidden, true, 'standalone launches never repeat install instructions');
+  }
+
+  // Android wording never leaks to iPhone users, generic wording to either platform.
+  const androidEnv = onboardingEnv({ userAgent: ANDROID_CHROME, platform: 'Linux armv8l', touchPoints: 4 });
+  androidEnv.api.maybeShowMobileOnboarding();
+  assert.deepStrictEqual(stepText(androidEnv), ['Open the browser menu', 'Choose "Add to Home screen" or "Install app"', 'Confirm']);
+  const unknownEnv = onboardingEnv({ userAgent: ANDROID_FIREFOX, platform: 'Linux armv8l', touchPoints: 4 });
+  unknownEnv.api.maybeShowMobileOnboarding();
+  assert.deepStrictEqual(stepText(unknownEnv), ['Open your browser menu', 'Choose "Add to Home screen" (or "Install app")', 'Confirm']);
+  assert(!stepText(androidEnv).join(' ').includes('Share'), 'Android users never receive iPhone steps');
+  assert(!stepText(first).join(' ').includes('browser menu'), 'iPhone users never receive browser-menu steps');
+
+  // The lock screen never loads the sheet, and Tailscale copy requires Connected away from home.
+  const loginHtml = fs.readFileSync(path.join(root, 'public', 'login.html'), 'utf8');
+  assert(!loginHtml.includes('app.js') && !loginHtml.includes('mobileOnboarding'), 'onboarding never appears in front of PIN authentication');
+  const dashboardHtml = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf8');
+  const sheetHtml = dashboardHtml.slice(dashboardHtml.indexOf('mobileOnboardingDialog'), dashboardHtml.indexOf('</dialog>', dashboardHtml.indexOf('mobileOnboardingDialog')));
+  assert(sheetHtml.includes('Finish setting up Rovarin') && /away from home/i.test(sheetHtml) &&
+    sheetHtml.includes('Tailscale') && sheetHtml.includes('Connected'), 'onboarding explains Tailscale must show Connected away from home');
+  const setupSource = fs.readFileSync(path.join(root, 'scripts', 'setup.ps1'), 'utf8');
+  assert(setupSource.includes('Away from home? Open Tailscale on that device and make sure it shows Connected before opening Rovarin'), 'setup QR instructions require Tailscale Connected away from home');
+  assert(setupSource.includes('This PC must also stay online and connected to Tailscale'), 'setup QR instructions keep this PC connected');
+  assert(setupSource.includes('Away from home? Your phone also needs Tailscale open and Connected before opening Rovarin.'), 'setup explains the phone must be connected before Rovarin opens');
+  const diagnosticsSource = fs.readFileSync(path.join(root, 'public', 'diagnostics.js'), 'utf8');
+  assert(diagnosticsSource.includes('your phone needs Tailscale Connected too'), 'diagnostics explains the phone must be connected');
+  console.log('PASS one-time phone onboarding, platform steps, native/desktop suppression, standalone detection and Tailscale copy');
 }
 
 (process.argv[2] === '--native-desktop-only' ? testNativeDesktopSecurity() : main()).catch(err => { console.error(err.stack || err.message); console.error(output.slice(-1600)); process.exitCode = 1; });

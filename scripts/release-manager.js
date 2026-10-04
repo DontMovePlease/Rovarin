@@ -95,10 +95,17 @@ class Manager {
   secrets() {
     const values = [];
     // These values remain memory-only and are never returned or logged.
-    if (fs.existsSync(path.join(this.root,'config.json'))) {
-      let config; try { config = JSON.parse(fs.readFileSync(plain(this.root,'config.json'),'utf8')); } catch { throw new Error('Cannot safely inspect local configuration for the privacy preflight.'); }
-      if (typeof config.pin === 'string' && /^\d{6,12}$/.test(config.pin)) values.push(config.pin);
-    }
+    try {
+      const pins = require('../pin-manager');
+      const file = pins.configurationFile(this.root);
+      const expected = fs.existsSync(path.join(this.root,'installation.json')) || fs.existsSync(path.join(this.root,'.rovarin-development-state.json'));
+      // A fresh source checkout has no secret yet. Migrated/installed state must
+      // pass the same nonredirecting, single-link validator as runtime.
+      if (expected || fs.existsSync(file)) {
+        plain(path.dirname(file),path.basename(file));
+        values.push(pins.readConfig(file).pin);
+      }
+    } catch { throw new Error('Cannot safely inspect canonical configuration for the privacy preflight.'); }
     for (const entries of Object.values(os.networkInterfaces())) for (const nic of entries || []) {
       const parts = nic.address.split('.').map(Number);
       if (parts.length === 4 && parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) values.push(nic.address);
@@ -275,7 +282,7 @@ class Manager {
     const changed=[];
     for(const file of new Set([...oldFiles,...source.contents.keys()])){
       if(ignore(file) || !source.files.includes(file))continue;
-      if(!['package.json','packaging/Rovarin.iss','README.md'].includes(file)){
+      if(!['package.json','packaging/Rovarin.iss','packaging/RovarinLauncher.cs','packaging/desktop.manifest','README.md'].includes(file)){
         const bytes=source.contents.get(file);
         const oid=bytes?crypto.createHash(format).update('blob '+bytes.length+'\0').update(bytes).digest('hex'):null;
         if(oid!==(oldBlobs.get(file)||null))changed.push(file);

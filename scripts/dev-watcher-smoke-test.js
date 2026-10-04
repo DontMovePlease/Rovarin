@@ -118,7 +118,7 @@ async function testBinding() {
     });
   }
   try {
-    for (const name of ['server.js', 'server-lifecycle.js', 'pin-manager.js', 'process-termination.js', 'enhanced-support.js', 'uninstall-manager.js', 'maintenance.js', 'temperature-manager.js', 'cpu-temperature-provider.js', 'process-stats.js', 'package.json']) fs.copyFileSync(path.join(__dirname, '..', name), path.join(directory, name));
+    for (const name of ['server.js', 'server-lifecycle.js', 'pin-manager.js', 'process-termination.js', 'enhanced-support.js', 'uninstall-manager.js', 'update-manager.js', 'maintenance.js', 'temperature-manager.js', 'cpu-temperature-provider.js', 'process-stats.js', 'package.json']) fs.copyFileSync(path.join(__dirname, '..', name), path.join(directory, name));
     await new Promise(resolve => blocker.listen(0, '0.0.0.0', resolve));
     const preferred = blocker.address().port;
     active = await launch(preferred);
@@ -208,7 +208,7 @@ function spawnServer(scriptPath, cwd) {
 }
 
 async function main() {
-  assert.deepStrictEqual(Array.from(WATCHED_SERVER_FILES).sort(), ['maintenance.js', 'scripts/empty-recycle-bin.ps1', 'process-stats.js', 'server.js', 'server-lifecycle.js', 'pin-manager.js', 'process-termination.js', 'scripts/terminate-process.ps1', 'enhanced-support.js', 'uninstall-manager.js', 'temperature-manager.js', 'cpu-temperature-provider.js', 'scripts/cpu-temperature-provider.ps1'].sort());
+  assert.deepStrictEqual(Array.from(WATCHED_SERVER_FILES).sort(), ['maintenance.js', 'scripts/empty-recycle-bin.ps1', 'process-stats.js', 'server.js', 'server-lifecycle.js', 'pin-manager.js', 'process-termination.js', 'scripts/terminate-process.ps1', 'scripts/installed-update.ps1', 'enhanced-support.js', 'uninstall-manager.js', 'update-manager.js', 'temperature-manager.js', 'cpu-temperature-provider.js', 'scripts/cpu-temperature-provider.ps1'].sort());
 
   let currentServer = { state: 'owned', pid: 7331 };
   let terminatedPid = null;

@@ -280,7 +280,7 @@ function executeEmptyRecycleBin(task, finish) {
         'verification-unavailable':'Recycle Bin clear command completed, but verification is unavailable. Check the Windows Recycle Bin.',
         'items-remain':'Recycle Bin was not confirmed empty: items still remain after bounded verification.',
         'permission-denied':'Permission denied while clearing the current user Recycle Bin.',
-        'tool-unavailable':'Windows Clear-RecycleBin is unavailable.',
+        'tool-unavailable':'Windows Recycle Bin mechanism is unavailable.',
         'clear-failed':'Windows could not clear the Recycle Bin.'
       };
       if (!result || typeof result.success !== 'boolean' || !Object.hasOwn(summaries,result.code)) {

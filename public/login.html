@@ -1,12 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="login-page">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#090d16">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="theme-color" content="#0c1420">
   <title>Unlock Rovarin</title>
+  <meta name="rovarin-pin-mode" content="manual">
   <meta name="application-name" content="Rovarin">
   <meta name="apple-mobile-web-app-title" content="Rovarin">
   <link rel="stylesheet" href="/app.css">
@@ -24,62 +25,63 @@
     .login-card {
       width: 100%;
       max-width: 360px;
-      background: rgba(18, 24, 38, 0.85);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: var(--surface-glass-strong);
+      border: 1px solid var(--glass-border);
       border-radius: 24px;
       padding: 32px 24px;
       box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
-      backdrop-filter: blur(20px);
+      backdrop-filter: none;
       text-align: center;
     }
+
     .login-icon {
       width: 64px;
       height: 64px;
       border-radius: 18px;
-      background: linear-gradient(135deg, #3b82f6, #6366f1);
+      background: var(--tint-primary); border: 1px solid var(--glass-border);
       display: inline-flex;
       align-items: center;
       justify-content: center;
       margin-bottom: 20px;
-      box-shadow: 0 10px 20px rgba(99, 102, 241, 0.3);
+      box-shadow: 0 10px 20px rgba(102, 199, 255, 0.08);
     }
     .login-icon svg {
       width: 32px;
       height: 32px;
       fill: none;
-      stroke: white;
+      stroke: var(--accent-primary);
       stroke-width: 2;
     }
     .pin-input {
       width: 100%;
       font-size: 28px;
-      letter-spacing: 12px;
+      letter-spacing: 0.2em;
       text-align: center;
       padding: 14px 16px;
       background: rgba(10, 14, 23, 0.8);
       border: 1.5px solid rgba(255, 255, 255, 0.12);
       border-radius: 16px;
-      color: #fff;
+      color: var(--text-primary);
       margin: 20px 0;
       outline: none;
       font-family: inherit;
-      transition: all 0.2s ease;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
     }
     .pin-input:focus {
-      border-color: #6366f1;
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+      border-color: var(--accent-primary);
+      box-shadow: 0 0 0 3px rgba(102, 199, 255, 0.15);
     }
     .login-btn {
       width: 100%;
       padding: 16px;
       font-size: 16px;
       font-weight: 600;
-      background: linear-gradient(135deg, #3b82f6, #6366f1);
+      background: var(--tint-primary); border: 1px solid var(--glass-border);
       color: white;
       border: none;
       border-radius: 16px;
       cursor: pointer;
-      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+      box-shadow: var(--shadow-control);
       transition: transform 0.1s, opacity 0.2s;
     }
     .login-btn:active {
@@ -87,15 +89,77 @@
       opacity: 0.9;
     }
     .error-msg {
-      color: #f43f5e;
+      color: var(--state-danger);
       font-size: 14px;
       margin-top: 12px;
       min-height: 20px;
     }
+    /* Scoped to this login document; navigation restores the normal app layout. */
+    html.login-page, .login-page body {
+      height: 100%; min-height: 0; overflow: hidden; overscroll-behavior: none;
+    }
+    .login-page body { position: fixed; inset: 0; padding: 0; }
+    .login-page .login-container {
+      position: fixed; top: var(--login-viewport-top, 0px); left: 0; width: 100%;
+      height: var(--login-viewport-height, 100vh); min-height: 0;
+      padding: max(16px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+        max(16px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+      overflow: hidden; overscroll-behavior: none; touch-action: none;
+      justify-content: center; container-type: size;
+    }
+    @supports (height: 100dvh) {
+      .login-page .login-container { height: var(--login-viewport-height, 100dvh); }
+    }
+    .login-page .pin-input, .login-page .login-btn { touch-action: manipulation; }
+    .native-shell.login-page body { background: #101b29; }
+    .native-shell.login-page .login-container { padding: 0; }
+    .native-shell.login-page .login-card { max-width: none; flex-shrink: 0; box-shadow: none; }
+    .native-shell.login-page .error-msg { min-height: 41px; }
+    /* Only the native host creates these controls. Mobile layout is unchanged. */
+    .lock-window-drag, .lock-window-controls { display: none; }
+    .native-shell.login-page .login-card { position: relative; }
+    .native-shell.native-lock-dwm.login-page .login-card { border-radius: 8px; }
+    .native-shell.login-page .lock-window-drag {
+      display: block; position: absolute; inset: 0 0 auto; height: 112px;
+      app-region: drag; -webkit-app-region: drag; user-select: none;
+    }
+    .native-shell.login-page .lock-window-controls {
+      display: flex; position: absolute; top: 12px; right: 12px; gap: 4px;
+      app-region: no-drag; -webkit-app-region: no-drag;
+    }
+    .native-shell.login-page .lock-window-controls button {
+      width: 32px; height: 32px; display: grid; place-items: center;
+      border: 1px solid transparent; border-radius: 10px; background: transparent;
+      color: var(--text-secondary); font: 22px/1 var(--font-system); cursor: pointer;
+      app-region: no-drag; -webkit-app-region: no-drag;
+      transition: background .15s ease, color .15s ease;
+    }
+    .native-shell.login-page .lock-window-controls button:hover {
+      color: var(--text-primary); background: var(--bg-subtle); border-color: var(--glass-border);
+    }
+    .native-shell.login-page #lock-window-exit:hover { background: var(--tint-danger); color: var(--state-danger); }
+    .native-shell.login-page .lock-window-controls button:active { background: var(--tint-primary); }
+    .native-shell.login-page .lock-window-controls button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+    .native-shell.login-page .pin-input, .native-shell.login-page .login-btn,
+    .native-shell.login-page .error-msg { app-region: no-drag; -webkit-app-region: no-drag; }
+    /* Compact only the decorative spacing when the keyboard reduces usable height. */
+    .login-page.login-keyboard .login-container { padding-bottom: 12px; }
+    @container (max-height: 480px) {
+      .login-page:not(.native-shell) .login-card { padding: 18px 20px; }
+      .login-page:not(.native-shell) .login-icon { width: 44px; height: 44px; margin-bottom: 10px; }
+      .login-page:not(.native-shell) .pin-input { margin: 12px 0; }
+    }
+    @container (max-height: 350px) {
+      .login-page:not(.native-shell) .login-card { padding: 12px 18px; }
+      .login-page:not(.native-shell) .login-icon,
+      .login-page:not(.native-shell) .login-card > p { display: none; }
+      .login-page:not(.native-shell) .pin-input { padding: 10px 14px; margin: 8px 0; font-size: 24px; }
+      .login-page:not(.native-shell) .login-btn { padding: 12px; min-height: 44px; }
+      .login-page:not(.native-shell) .error-msg { margin-top: 8px; }
+    }
   </style>
 </head>
 <body class="dark-theme">
-  <div class="native-app-bar" aria-label="Rovarin application"><div class="native-app-identity"><span>Rovarin</span></div></div>
   <div class="login-container">
     <div class="login-card">
       <div class="login-icon">
@@ -103,9 +167,9 @@
       </div>
       <h2 style="font-size: 22px; font-weight: 700; margin-bottom: 6px;">Rovarin</h2>
       <p style="color: #94a3b8; font-size: 14px; margin-bottom: 8px;">Your PC in your pocket.</p>
-      <input type="password" id="pinInput" class="pin-input" pattern="[0-9]{6}|[0-9]{12}" inputmode="numeric" placeholder="••••••" maxlength="12" autofocus aria-label="Rovarin PIN (6 digits, or legacy 12 digits)">
+      <input type="password" id="pinInput" class="pin-input" pattern="[0-9]{6}|[0-9]{12}" inputmode="numeric" placeholder="••••••" maxlength="12" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="go" aria-label="Rovarin PIN (6 digits, or legacy 12 digits)">
       <button id="unlockBtn" class="login-btn">Unlock Dashboard</button>
-      <div id="errMsg" class="error-msg"></div>
+      <div id="errMsg" class="error-msg" role="status" aria-live="polite"></div>
     </div>
   </div>
   <script src="/login.js" defer></script>

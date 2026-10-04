@@ -582,3 +582,51 @@
   background: linear-gradient(135deg, #f43f5e, #e11d48);
   box-shadow: 0 4px 14px rgba(244, 63, 94, 0.35);
 }
+
+@media (max-width: 699px) {
+  .maint-section, .maint-action-card {
+    background: linear-gradient(145deg, rgba(27, 40, 58, .94), rgba(12, 20, 32, .97));
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .maint-section-title { flex-wrap: wrap; gap: 8px; font-size: 17px; }
+  .maint-heading-text { flex: 1 1 180px; min-width: 0; }
+  .maint-admin-badge { flex-shrink: 0; white-space: nowrap; }
+  .maint-section, .maint-action-card { min-width: 0; }
+}
+
+/* Use the shared glass material without cartoon lifts or sweeping highlights. */
+.maint-section, .maint-action-card { background: var(--glass-surface); border-color: var(--glass-rim); box-shadow: var(--glass-shadow); }
+.maint-action-card::after { display: none; }
+.maint-action-card:hover:not(:disabled) { transform: none; background: var(--glass-surface); border-color: var(--glass-rim); box-shadow: var(--glass-shadow); }
+.maint-action-card:hover:not(:disabled) .maint-card-emoji { transform: none; }
+.maint-btn:hover:not(:disabled) { transform: none; filter: none; }
+@media (hover: hover) and (pointer: fine) {
+  .maint-action-card:hover:not(:disabled) { background: var(--bg-card-hover); border-color: rgba(216, 233, 249, .24); }
+}
+.maint-action-card:active:not(:disabled) { transform: translateY(1px); border-color: rgba(216, 233, 249, .24); box-shadow: inset 0 1px 0 rgba(236, 247, 255, .08), 0 3px 12px #0003; }
+.maint-btn:active:not(:disabled) { transform: translateY(1px) scale(.99); filter: none; }
+.maint-toast-close:active { transform: scale(.985); }
+@media (prefers-reduced-motion: reduce) {
+  .maint-action-card:active:not(:disabled), .maint-btn:active:not(:disabled), .maint-toast-close:active { transform: none; }
+}
+/* Midnight Glass: maintenance remains legible and semantically serious. */
+.maint-section, .maint-action-card, .maint-progress-panel, .maint-log-panel, .maint-history-item {
+  background: var(--surface-content); border-color: var(--border-card); box-shadow: var(--shadow-card);
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+.maint-action-card:hover:not(:disabled) { background: var(--surface-content); border-color: var(--glass-border); box-shadow: var(--shadow-card); }
+.maint-action-card:active:not(:disabled) { transform: translateY(1px); }
+.maint-modal, .maint-toast { background: var(--surface-glass-strong); border-color: var(--glass-border); box-shadow: var(--glass-shadow); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.maint-modal-overlay { backdrop-filter: none; -webkit-backdrop-filter: none; }
+.maint-btn { background: var(--surface-glass-strong); border: 1px solid var(--glass-border); color: var(--text-primary); box-shadow: var(--shadow-control); }
+.maint-btn-confirm { background: var(--tint-primary); border-color: rgba(102,199,255,.4); color: var(--accent-primary); }
+.maint-btn-confirm.danger { background: var(--tint-danger); border-color: rgba(240,135,155,.4); color: #ffb0bf; box-shadow: inset 0 1px 0 rgba(240,135,155,.1); }
+.maint-requires-admin, .maint-admin-badge.not-admin { color: var(--state-warning); background: var(--tint-warning); border-color: rgba(232,190,112,.25); }
+.maint-admin-badge.is-admin { color: var(--state-success); background: var(--tint-success); border-color: rgba(96,214,171,.25); }
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .maint-modal, .maint-toast { background: var(--surface-glass); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+}
+@media (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
+  .maint-modal, .maint-toast { backdrop-filter: none; -webkit-backdrop-filter: none; }
+}

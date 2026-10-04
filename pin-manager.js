@@ -7,6 +7,28 @@ const validPin = value => typeof value === 'string' && (value.length === 6 || va
 function dataDirectory(root = __dirname) {
   return fs.existsSync(path.join(root, 'installation.json')) ? path.join(root, '..', 'data') : root;
 }
+// Opt-in developer storage keeps sync staging away from the real credential.
+// The marker contains no path or secret; installed-mode storage is unchanged.
+function developmentConfigFile(root = __dirname) {
+  if (!process.env.LOCALAPPDATA) throw new Error('Local development storage unavailable.');
+  const identity = crypto.createHash('sha256').update(path.resolve(root).toLowerCase()).digest('hex');
+  return path.join(process.env.LOCALAPPDATA, 'RovarinDevelopment', identity, 'config.json');
+}
+function configurationFile(root = __dirname) {
+  if (fs.existsSync(path.join(root, 'installation.json'))) return path.join(dataDirectory(root), 'config.json');
+  const marker = path.join(root, '.rovarin-development-state.json');
+  if (!fs.existsSync(marker)) return path.join(root, 'config.json');
+  const stat = fs.lstatSync(marker);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 128) throw new Error('Invalid development storage marker.');
+  const policy = JSON.parse(fs.readFileSync(marker, 'utf8'));
+  if (!policy || policy.schema !== 1 || Object.keys(policy).length !== 1) throw new Error('Invalid development storage marker.');
+  const file = developmentConfigFile(root);
+  const directory = fs.lstatSync(path.dirname(file));
+  if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error('Unsafe data directory.');
+  // A missing migrated config must never silently generate a replacement PIN.
+  if (!fs.existsSync(file)) throw new Error('Migrated development configuration missing.');
+  return file;
+}
 function readConfig(file) {
   const stat = fs.lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('Unsafe configuration file.');
@@ -44,7 +66,7 @@ function loadConfig(file) {
 function regeneratePin(root = __dirname) {
   const directory = dataDirectory(root);
   if (fs.lstatSync(directory).isSymbolicLink()) throw new Error('Unsafe data directory.');
-  const file = path.join(directory, 'config.json');
+  const file = configurationFile(root);
   const value = readConfig(file);
   const pin = generatePin(value.pin);
   writeConfig(file, { ...value, pin });
@@ -54,17 +76,23 @@ if (require.main === module) {
   // Fixed native-local command. No PIN, path, or configuration fields accepted.
   try {
     if (process.argv.length !== 3) throw new Error('Invalid invocation.');
-    if (process.argv[2] === '--regenerate') {
+    if (process.argv[2] === '--config-path') {
+      const file = configurationFile(); readConfig(file);
+      process.stdout.write(file + '\n');
+    } else if (process.argv[2] === '--regenerate') {
       regeneratePin();
       process.stdout.write('PIN updated. Open the local Setup window to view it.\n');
     } else if (['--desktop-pin-on', '--desktop-pin-off'].includes(process.argv[2])) {
       // Fixed installer-only preference, one canonical config/PIN. No PIN arguments.
-      const file = path.join(dataDirectory(), 'config.json');
+      const file = configurationFile();
       const saved = loadConfig(file);
       writeConfig(file, { ...saved, requireDesktopPin: process.argv[2] === '--desktop-pin-on', desktopLocked: false });
       process.stdout.write('Desktop PIN preference saved.\n');
     } else throw new Error('Invalid invocation.');
-  } catch (_) { process.stderr.write('PIN update failed; check the saved configuration locally.\n'); process.exitCode = 1; }
+  } catch (error) {
+    const reason = error.message === 'Unsafe configuration file.' ? 'UNSAFE_CONFIG_FILE' : ['EACCES','EPERM','ENOENT'].includes(error.code) ? error.code : 'CONFIG_UNAVAILABLE';
+    process.stderr.write('PIN update failed [' + reason + ']; check the saved configuration locally.\n'); process.exitCode = 1;
+  }
 }
 // Only the fixed Windows helper can unwrap the current Windows user's DPAPI
 // credential. It is never sent to the canonical frontend or placed in a URL.
@@ -81,4 +109,4 @@ function desktopTrust() {
   });
   return desktopTrustPromise;
 }
-module.exports = { validPin, generatePin, readConfig, writeConfig, loadConfig, dataDirectory, regeneratePin, desktopTrust };
+module.exports = { configurationFile, developmentConfigFile, validPin, generatePin, readConfig, writeConfig, loadConfig, dataDirectory, regeneratePin, desktopTrust };

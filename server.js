@@ -9,19 +9,24 @@ const { TemperatureManager } = require('./temperature-manager');
 const { CpuTemperatureProvider } = require('./cpu-temperature-provider');
 const { normalizeProcessRecords, isProcessSnapshotStale } = require('./process-stats');
 const { terminateProcess } = require('./process-termination');
-const { loadConfig, readConfig, validPin, writeConfig, generatePin, desktopTrust } = require('./pin-manager');
+const { loadConfig, readConfig, validPin, writeConfig, generatePin, desktopTrust, configurationFile } = require('./pin-manager');
 const { bindServer, claimInstance, portCandidates } = require('./server-lifecycle');
 const { EnhancedSupport, isLocalDesktopRequest } = require('./enhanced-support');
 const { UninstallManager } = require('./uninstall-manager');
+const { UpdateManager } = require('./update-manager');
 
 // Configuration
 const PORT = process.env.PORT || 7331;
 // Installed payload is immutable across runs; user state survives app upgrades.
 const DATA_DIR = fs.existsSync(path.join(__dirname, 'installation.json')) ? path.join(__dirname, '..', 'data') : __dirname;
 fs.mkdirSync(DATA_DIR, { recursive: true });
-const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+const CONFIG_FILE = (() => {
+  try { return configurationFile(); }
+  catch (_) { console.error('Saved access configuration is invalid or inaccessible; server will not start.'); process.exit(1); }
+})();
 const enhancedSupport = new EnhancedSupport({ stateDirectory: DATA_DIR });
 const uninstallManager = new UninstallManager();
+const updateManager = new UpdateManager({ configFile: CONFIG_FILE });
 // Opaque compatibility identifiers retain existing clients and desktop trust.
 const AUTH_COOKIE = 'pc_monitor_session';
 const SESSION_TTL_MS = readBoundedDuration(process.env.PC_MONITOR_SESSION_TTL_MS, 90 * 24 * 60 * 60 * 1000, 1000, 90 * 24 * 60 * 60 * 1000);
@@ -1368,7 +1373,7 @@ const server = http.createServer((req, res) => {
   const pathname = parsedUrl.pathname;
 
   const isLoginPost = req.method === 'POST' && pathname === '/api/login';
-  const isDesktopPost = req.method === 'POST' && ['/api/desktop/auth', '/api/desktop/security'].includes(pathname);
+  const isDesktopPost = req.method === 'POST' && ['/api/desktop/auth', '/api/desktop/security', '/api/desktop/updates'].includes(pathname);
   const isLogoutPost = req.method === 'POST' && pathname === '/api/logout';
   const isMaintenancePost = req.method === 'POST' && pathname === '/api/maintenance/run';
   const isMonitoringLeasePost = req.method === 'POST' && pathname === '/api/monitoring/lease';
@@ -1408,6 +1413,34 @@ const server = http.createServer((req, res) => {
         }
         const session = getAuthenticatedSession(req);
         if (!session) { reply(401, { success: false, error: 'Authentication required.' }); return; }
+        if (pathname === '/api/desktop/updates') {
+          if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '') || parsedUrl.search || Object.keys(data).length !== 1 || !['status','check','automatic','preference','download','prepare','cancel'].includes(data.action)) { reply(400, { success: false, code: 'invalid-request', error: 'Fixed update action required.' }); return; }
+          if (data.action === 'status') { try { reply(200, { success: true, ...updateManager.status() }); } catch (_) { reply(503, { success: false, error: 'Update settings unavailable.' }); } return; }
+          if (uninstallManager.busy || enhancedSupport.status().installing) { reply(409, { success: false, code: 'operation-running', error: 'Wait for the current operation to finish.' }); return; }
+          if (data.action === 'prepare') {
+            maintenance.getStatus(status => {
+              if (!getAuthenticatedSession(req)) { reply(401, { success: false, error: 'Authentication required.' }); return; }
+              try {
+                if (status.isRunning || uninstallManager.busy || enhancedSupport.status().installing) throw new Error('operation-running');
+                reply(200, { success: true, ...updateManager.reserve() });
+              } catch (_) { reply(409, { success: false, error: 'Verified update handoff unavailable. Finish other operations first.' }); }
+            }); return;
+          }
+          if (data.action === 'cancel') { try { reply(200, { success: true, ...updateManager.cancel() }); } catch (_) { reply(503, { success: false, error: 'Update settings unavailable.' }); } return; }
+          if (data.action === 'preference') {
+            if (updateManager.busy) { reply(409, { success: false, code: 'update-busy', error: 'An update operation is running.' }); return; }
+            try { reply(200, { success: true, ...updateManager.preference() }); } catch (_) { reply(503, { success: false, error: 'Update preference could not be saved.' }); } return;
+          }
+          if (data.action === 'download') {
+            if (!updateManager.installed() || updateManager.busy) { reply(409, { success: false, code: 'update-unavailable', error: 'Update installation requires an idle installed native copy.' }); return; }
+            maintenance.getStatus(status => {
+              if (!getAuthenticatedSession(req)) { reply(401, { success: false, error: 'Authentication required.' }); return; }
+              if (status.isRunning || uninstallManager.busy || enhancedSupport.status().installing || updateManager.busy) { reply(409, { success: false, error: 'Wait for the current operation to finish.' }); return; }
+              updateManager.download().catch(() => {}); reply(202, { success: true });
+            }); return;
+          }
+          updateManager.check(data.action === 'automatic').then(status => reply(200, { success: true, ...status })).catch(() => reply(503, { success: false, error: 'Update check unavailable.' })); return;
+        }
         const fields = Object.keys(data);
         if (data.action === 'status' && fields.length === 1) { reply(200, { success: true, requireDesktopPin: config.requireDesktopPin !== false }); return; }
         try {
@@ -1519,23 +1552,37 @@ const server = http.createServer((req, res) => {
     // Serve login page
     const loginHtmlPath = path.join(__dirname, 'public', 'login.html');
     if (fs.existsSync(loginHtmlPath)) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=UTF-8' });
-      fs.createReadStream(loginHtmlPath).pipe(res);
+      res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+      // Non-secret input mode prevents a legacy PIN prefix becoming an auth attempt.
+      // No value/hash is rendered; unhealthy configuration leaves manual entry.
+      const pinMode = refreshAccessPin() ? String(config.pin.length) : 'manual';
+      res.setHeader('Cache-Control', 'no-store');
+      res.end(fs.readFileSync(loginHtmlPath, 'utf8').replace(
+        '<meta name="rovarin-pin-mode" content="manual">',
+        '<meta name="rovarin-pin-mode" content="' + pinMode + '">'));
       return;
     }
   }
 
+  if (pathname === '/api/updates') {
+    if (parsedUrl.search) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Unexpected parameters.' })); return; }
+    try {
+      const status = updateManager.status();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ currentVersion: status.currentVersion, latestVersion: status.latestVersion, state: status.state, message: status.message }));
+    } catch (_) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Update settings unavailable.' })); } return;
+  }
   // ── Maintenance API Endpoints ──────────────────────────────────────────────
 
-  if (uninstallManager.busy && req.method === 'POST' && !isUninstallPost) {
+  if ((uninstallManager.busy || (updateManager.busy && ['downloading','verifying','handoff'].includes(updateManager.state) && (isMaintenancePost || isEnhancedInstallPost || isProcessKillPost || isTemperatureSettingsPost))) && req.method === 'POST' && !isUninstallPost) {
     res.writeHead(409, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ success: false, code: 'uninstall-in-progress', error: 'Uninstall is being prepared. Other changes are temporarily blocked.' })); return;
+    res.end(JSON.stringify({ success: false, code: updateManager.busy ? 'update-in-progress' : 'uninstall-in-progress', error: 'An installation operation is being prepared. Other system actions are temporarily blocked.' })); return;
   }
   if (pathname === '/api/system/uninstall') {
     const reply = (status, data) => { if (!res.destroyed && !res.writableEnded) { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)); } };
     if (parsedUrl.search) { reply(400, { success: false, code: 'invalid-request', error: 'Unexpected parameters.' }); return; }
     if (!isUninstallPost) { reply(200, uninstallManager.status()); return; }
-    if (uninstallManager.busy) { reply(409, { success: false, code: 'uninstall-in-progress', error: 'Uninstall is already being prepared.' }); return; }
+    if (uninstallManager.busy || updateManager.busy) { reply(409, { success: false, code: 'uninstall-in-progress', error: 'Uninstall is already being prepared.' }); return; }
     if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) { reply(415, { success: false, code: 'invalid-content-type', error: 'JSON required.' }); return; }
     readRequestBody(req, 512, (error, body) => {
       let data; try { data = JSON.parse(body); } catch (_) {}
@@ -2071,7 +2118,7 @@ const server = http.createServer((req, res) => {
 
 // Event-driven local credential change notification, not a polling loop.
 // Request/broadcast checks also enforce revocation if a filesystem event is lost.
-const pinWatcher = fs.watch(DATA_DIR, (event, filename) => {
+const pinWatcher = fs.watch(path.dirname(CONFIG_FILE), (event, filename) => {
   if (!filename || String(filename) === 'config.json') refreshAccessPin();
 });
 pinWatcher.on('error', () => { pinConfigHealthy = false; for (const session of Array.from(sessions.values())) revokeSession(session); });

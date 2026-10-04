@@ -312,8 +312,8 @@ async function test(root = path.resolve(__dirname,'..')) {
     fs.appendFileSync(path.join(f.dir,'scripts/release-manager-help.json'),'\n');
     const bookkeepingReadme=fs.readFileSync(path.join(f.dir,'README.md'),'utf8').replace(/https:\/\/github\.com\/DontMovePlease\/Rovarin\/releases(?=\))/g,'https://github.com/DontMovePlease/Rovarin/releases/download/v0.1.1/RovarinSetup.exe');
     fs.writeFileSync(path.join(f.dir,'README.md'),bookkeepingReadme);
-    for(const file of ['package.json','packaging/Rovarin.iss','README.md'])fs.copyFileSync(path.join(f.dir,file),path.join(f.pub,file));
-    git(f.pub,['add','package.json','packaging/Rovarin.iss','README.md']);git(f.pub,['commit','-m','Fixture version bookkeeping only']);
+    for(const file of ['package.json','packaging/Rovarin.iss','packaging/RovarinLauncher.cs','packaging/desktop.manifest','README.md'])fs.copyFileSync(path.join(f.dir,file),path.join(f.pub,file));
+    git(f.pub,['add','package.json','packaging/Rovarin.iss','packaging/RovarinLauncher.cs','packaging/desktop.manifest','README.md']);git(f.pub,['commit','-m','Fixture version bookkeeping only']);
     await assert.rejects(f.manager.plan('Publish',{version:'0.1.2'},true),/Nothing new to publish/);
     console.log('PASS version-only, download-link-only and tooling-only changes do not permit an empty release even with saved changes after the prior version');
     f.manager.synchronize('0.1.0');
@@ -323,6 +323,41 @@ async function test(root = path.resolve(__dirname,'..')) {
     fs.appendFileSync(path.join(f.dir,'server.js'),'\n// '+pin+'\n'); await assert.rejects(f.manager.source(),/Possible local credential/); fs.copyFileSync(path.join(root,'server.js'),path.join(f.dir,'server.js'));
     fs.appendFileSync(path.join(f.dir,'server.js'),'\n// '+['C:','Users','FixturePerson','private'].join('\\')+'\n'); await assert.rejects(f.manager.source(),/personal path/); fs.copyFileSync(path.join(root,'server.js'),path.join(f.dir,'server.js'));
     fs.appendFileSync(path.join(f.dir,'server.js'),'\n// ghp_'+'A'.repeat(30)+'\n'); await assert.rejects(f.manager.source(),/Possible local/); fs.copyFileSync(path.join(root,'server.js'),path.join(f.dir,'server.js'));
+    // Secret values stay in disposable unsynced storage and never reach output.
+    const pins=require('../pin-manager'),previousLocal=process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA=path.join(temp,'private-local');
+    try {
+      const canonical=pins.developmentConfigFile(f.dir);
+      fs.mkdirSync(path.dirname(canonical),{recursive:true});
+      pins.writeConfig(canonical,{pin,requireDesktopPin:true});
+      fs.unlinkSync(path.join(f.dir,'config.json'));
+      fs.writeFileSync(path.join(f.dir,'.rovarin-development-state.json'),'{"schema":1}');
+      assert(!fs.existsSync(path.join(f.dir,'config.json')),'checkout config remains absent');
+      assert(f.manager.secrets().includes(pin),'privacy preflight reads canonical unsynced config');
+      await f.manager.source();
+      fs.appendFileSync(path.join(f.dir,'server.js'),'\n// '+pin+'\n');
+      await assert.rejects(f.manager.source(),error=>/Possible local credential/.test(error.message)&&!error.message.includes(pin));
+      fs.copyFileSync(path.join(root,'server.js'),path.join(f.dir,'server.js'));
+      const policyFile=path.join(f.dir,'scripts/release-public-files.json'),originalPolicy=fs.readFileSync(policyFile);
+      fs.writeFileSync(policyFile,JSON.stringify([...JSON.parse(originalPolicy),'config.json']));
+      assert.throws(()=>f.manager.policy(),/forbidden/);fs.writeFileSync(policyFile,originalPolicy);
+      const alias=path.join(temp,'private-alias');fs.linkSync(canonical,alias);
+      assert.throws(()=>f.manager.secrets(),/Cannot safely inspect canonical configuration/);fs.unlinkSync(alias);
+      const saved=fs.readFileSync(canonical);fs.unlinkSync(canonical);
+      assert.throws(()=>f.manager.secrets(),/Cannot safely inspect canonical configuration/);
+      fs.writeFileSync(canonical,saved);
+      fs.unlinkSync(path.join(f.dir,'.rovarin-development-state.json'));
+      assert(!f.manager.secrets().includes(pin),'fresh checkout without config is valid');
+      const app=path.join(temp,'installed-privacy','app'),data=path.join(temp,'installed-privacy','data');
+      fs.mkdirSync(app,{recursive:true});fs.mkdirSync(data);
+      fs.writeFileSync(path.join(app,'installation.json'),'{}');
+      const installed=new Manager(app);
+      assert.throws(()=>installed.secrets(),/Cannot safely inspect canonical configuration/);
+      pins.writeConfig(path.join(data,'config.json'),{pin});
+      assert(installed.secrets().includes(pin),'installed sibling config is checked');
+      assert(!fs.existsSync(path.join(app,'config.json')),'installed app has no config copy');
+    } finally { if(previousLocal===undefined)delete process.env.LOCALAPPDATA;else process.env.LOCALAPPDATA=previousLocal; }
+    console.log('PASS canonical unsynced/installed privacy, absent fresh-checkout config, secret/config publication rejection and fail-closed missing/unsafe config (no secrets logged)');
     git(f.pub,['remote','set-url','origin','https://github.com/Elsewhere/Other.git']); await assert.rejects(f.manager.publicPreflight(),/does not match/); git(f.pub,['remote','set-url','origin','https://github.com/DontMovePlease/Rovarin.git']);
     const h=fixture(); fs.writeFileSync(path.join(h.pub,'AGENTS.md'),'private fixture'); git(h.pub,['add','-f','AGENTS.md']);git(h.pub,['commit','-m','Fixture forbidden history']);git(h.pub,['rm','AGENTS.md']);git(h.pub,['commit','-m','Fixture removal']); await assert.rejects(h.manager.publicPreflight(),/Public history includes/);
     console.log('PASS tracked-private audit, local secret/path scanning, wrong-remote rejection and forbidden historical files');

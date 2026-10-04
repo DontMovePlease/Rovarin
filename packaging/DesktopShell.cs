@@ -121,8 +121,8 @@ internal sealed class DesktopWindow : Form
     private readonly FlowLayoutPanel actions = new FlowLayoutPanel { AutoSize = false, FlowDirection = FlowDirection.LeftToRight };
     private readonly Button retry = new Button { Text = "Try again", Width = 130, Height = 42 };
     private readonly Button runtimeLink = new Button { Text = "Install WebView2", Width = 155, Height = 42 };
-    private readonly Button desktopExit = new Button { Text = "×", FlatStyle = FlatStyle.Flat, ForeColor = Color.FromArgb(148,163,184), BackColor = Color.FromArgb(10,16,27), Font = new Font("Segoe UI",16), TabStop = true, AccessibleName = "Exit desktop app" };
-    private readonly Button desktopMinimize = new Button { Text = "−", FlatStyle = FlatStyle.Flat, ForeColor = Color.FromArgb(148,163,184), BackColor = Color.FromArgb(10,16,27), Font = new Font("Segoe UI",16), TabStop = true, AccessibleName = "Minimize Rovarin" };
+    private readonly Button desktopExit = new Button { Text = "×", FlatStyle = FlatStyle.Flat, ForeColor = Color.FromArgb(148,163,184), BackColor = Color.FromArgb(12,20,32), Font = new Font("Segoe UI",16), TabStop = true, AccessibleName = "Exit desktop app" };
+    private readonly Button desktopMinimize = new Button { Text = "−", FlatStyle = FlatStyle.Flat, ForeColor = Color.FromArgb(148,163,184), BackColor = Color.FromArgb(12,20,32), Font = new Font("Segoe UI",16), TabStop = true, AccessibleName = "Minimize Rovarin" };
     private readonly NotifyIcon tray;
     private WebView2 view;
     private string origin;
@@ -130,10 +130,12 @@ internal sealed class DesktopWindow : Form
     private Process preparation;
     private Rectangle normalBounds;
     private bool wasMaximized;
-    private bool loginPresentation, changingBounds;
+    private bool loginPresentation, changingBounds, lockUsesDwmCorners;
     private TaskCompletionSource<string> addressRequest;
     private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 8192, RecursionLimit = 8 };
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+    [StructLayout(LayoutKind.Sequential)] private struct FrameMargins { public int Left, Right, Top, Bottom; }
+    [DllImport("dwmapi.dll")] private static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref FrameMargins margins);
     [DllImport("user32.dll")] private static extern bool ReleaseCapture();
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wparam, IntPtr lparam);
 
@@ -185,7 +187,7 @@ internal sealed class DesktopWindow : Form
             SaveBounds();
             if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); QueueVisibility(); }
         };
-        FormClosed += delegate { tray.Visible = false; tray.Dispose(); if (view != null) view.Dispose(); StopPreparation(); };
+        FormClosed += delegate { if (updateTimer != null) updateTimer.Dispose(); tray.Visible = false; tray.Dispose(); if (view != null) view.Dispose(); StopPreparation(); };
         ApplyLoginPresentation(true);
         State("Opening Rovarin", "Starting or reusing your local server…", false, false);
     }
@@ -193,19 +195,60 @@ internal sealed class DesktopWindow : Form
     {
         base.OnHandleCreated(e);
         // DWM styling without a visible Windows caption or permanent controls.
-        try { int dark = 1, rounded = 2; DwmSetWindowAttribute(Handle, 20, ref dark, 4); DwmSetWindowAttribute(Handle, 33, ref rounded, 4); } catch { }
+        ApplyWindowChrome();
+    }
+    private void ApplyWindowChrome() {
+        // Own the frame as well as its paint messages. DWM can otherwise draw
+        // a second light caption-button strip over the custom client controls.
+        try {
+            int disabled = 1, dark = 1, rounded = 2;
+            int background = ColorTranslator.ToWin32(Color.FromArgb(12,20,32));
+            int foreground = ColorTranslator.ToWin32(Color.FromArgb(148,163,184));
+            // Windows 11's compositor supplies antialiased corners/shadow. A
+            // custom pixel region disables those effects; use it only as fallback.
+            lockUsesDwmCorners = loginPresentation && Environment.OSVersion.Version.Build >= 22000 &&
+                DwmSetWindowAttribute(Handle, 33, ref rounded, 4) == 0;
+            int policy = lockUsesDwmCorners ? 2 : disabled;
+            int border = lockUsesDwmCorners ? unchecked((int)0xFFFFFFFE) : background;
+            var margins = new FrameMargins { Left = lockUsesDwmCorners ? 1 : 0, Right = lockUsesDwmCorners ? 1 : 0, Top = lockUsesDwmCorners ? 1 : 0, Bottom = lockUsesDwmCorners ? 1 : 0 };
+            DwmSetWindowAttribute(Handle, 2, ref policy, 4);
+            DwmExtendFrameIntoClientArea(Handle, ref margins);
+            DwmSetWindowAttribute(Handle, 34, ref border, 4); // suppress the system border in lock mode
+            DwmSetWindowAttribute(Handle, 20, ref dark, 4);
+            DwmSetWindowAttribute(Handle, 33, ref rounded, 4);
+            DwmSetWindowAttribute(Handle, 35, ref background, 4);
+            DwmSetWindowAttribute(Handle, 36, ref foreground, 4);
+        } catch { }
     }
     protected override CreateParams CreateParams {
         get {
             var value = base.CreateParams;
             // Retain system/taskbar keyboard actions and resize/snap semantics.
-            value.Style |= 0x80000 | 0x20000 | 0x10000 | 0x40000;
+            value.Style |= 0x80000 | 0x20000; // system menu / minimize
+            if (loginPresentation) value.Style &= ~(0x10000 | 0x40000); // no maximize / resize frame
+            else value.Style |= 0x10000 | 0x40000;
             return value;
         }
     }
     protected override void WndProc(ref Message message) {
+        // Draggable WebView regions retain native move semantics, but lock mode
+        // never maximizes/resizes on double-click or through the system menu.
+        if (loginPresentation && (message.Msg == 0xA3 || (message.Msg == 0x112 &&
+            ((message.WParam.ToInt64() & 0xFFF0) == 0xF030 || (message.WParam.ToInt64() & 0xFFF0) == 0xF000)))) {
+            message.Result = IntPtr.Zero; return;
+        }
+        // The entire frame is client-owned. Default nonclient painting can draw
+        // legacy caption buttons over our dark controls after activation/resize.
+        if (WindowState != FormWindowState.Minimized) {
+            if (message.Msg == 0x85) { message.Result = IntPtr.Zero; return; } // WM_NCPAINT
+            if (message.Msg == 0x86) { // WM_NCACTIVATE: preserve activation without repainting.
+                message.LParam = new IntPtr(-1);
+                DefWndProc(ref message);
+                return;
+            }
+        }
         if (message.Msg == 0x83 && message.WParam != IntPtr.Zero) { message.Result = IntPtr.Zero; return; }
-        if (message.Msg == 0x84 && WindowState == FormWindowState.Normal) {
+        if (message.Msg == 0x84 && !loginPresentation && WindowState == FormWindowState.Normal) {
             long coordinates = message.LParam.ToInt64();
             Point point = PointToClient(new Point((short)(coordinates & 0xffff), (short)((coordinates >> 16) & 0xffff)));
             int edge = Math.Max(5, (int)(6 * DeviceDpi / 96.0));
@@ -215,6 +258,7 @@ internal sealed class DesktopWindow : Form
             if (hit != 0) { message.Result = new IntPtr(hit); return; }
         }
         base.WndProc(ref message);
+        if (message.Msg == 0x31A || message.Msg == 0x31E) ApplyWindowChrome(); // theme/composition changed
     }
     internal void PostOpen() { try { if (IsHandleCreated && !IsDisposed) BeginInvoke((Action)OpenWindow); } catch (InvalidOperationException) { } }
     internal void PostExit() { try { if (IsHandleCreated && !IsDisposed) BeginInvoke((Action)ExitShell); } catch (InvalidOperationException) { } }
@@ -239,23 +283,57 @@ internal sealed class DesktopWindow : Form
                 wasMaximized = WindowState == FormWindowState.Maximized;
             }
             loginPresentation = login;
+            UpdateStyles(); // apply the mode before Windows computes restore/client bounds
             WindowState = FormWindowState.Normal;
-            MinimumSize = login ? new Size(440, 520) : new Size(760, 560);
+            MinimumSize = login ? new Size(320, 320) : new Size(760, 560);
             if (login) {
                 var area = Screen.FromControl(this).WorkingArea;
-                int width = Math.Min(480, area.Width), height = Math.Min(600, area.Height);
+                int width = Math.Min((int)(360 * DeviceDpi / 96.0), area.Width), height = Math.Min((int)(440 * DeviceDpi / 96.0), area.Height);
                 Bounds = new Rectangle(area.Left + (area.Width - width) / 2, area.Top + (area.Height - height) / 2, width, height);
             } else {
                 Bounds = normalBounds;
                 if (wasMaximized) WindowState = FormWindowState.Maximized;
             }
-        } finally { changingBounds = false; LayoutRecovery(); }
+        } finally { changingBounds = false; ApplyWindowChrome(); LayoutRecovery(); }
+    }
+    private void ApplyLockOutline() {
+        // A shaped, fully hit-testable native window, not transparent padding.
+        // Restore the normal window region when the shared document unlocks.
+        Region previous = Region;
+        if (!loginPresentation || lockUsesDwmCorners) Region = null;
+        else {
+            int diameter = Math.Min((int)(48 * DeviceDpi / 96.0), Math.Min(ClientSize.Width, ClientSize.Height));
+            if (diameter <= 0) return;
+            using (var outline = new System.Drawing.Drawing2D.GraphicsPath()) {
+                outline.AddArc(0, 0, diameter, diameter, 180, 90);
+                outline.AddArc(ClientSize.Width - diameter, 0, diameter, diameter, 270, 90);
+                outline.AddArc(ClientSize.Width - diameter, ClientSize.Height - diameter, diameter, diameter, 0, 90);
+                outline.AddArc(0, ClientSize.Height - diameter, diameter, diameter, 90, 90);
+                outline.CloseFigure();
+                Region = new Region(outline);
+            }
+        }
+        if (previous != null) previous.Dispose();
+    }
+    private async Task FitLoginCardAsync(CoreWebView2 core) {
+        // Measure the canonical card at the current DPI; no second login UI.
+        await core.ExecuteScriptAsync("document.documentElement.classList.toggle('native-lock-dwm'," + (lockUsesDwmCorners ? "true" : "false") + ")");
+        string measured = await core.ExecuteScriptAsync("Math.ceil(document.querySelector('.login-card').getBoundingClientRect().height * devicePixelRatio)");
+        int height;
+        if (!loginPresentation || exiting || IsDisposed || !Int32.TryParse(measured, out height)) return;
+        var area = Screen.FromControl(this).WorkingArea;
+        height = Math.Min(area.Height, Math.Max(MinimumSize.Height, Math.Min(640 * DeviceDpi / 96, height)));
+        changingBounds = true;
+        try { Size = new Size(Width, height); }
+        finally { changingBounds = false; LayoutRecovery(); }
     }
     private void StopPreparation() {
         // This is ONLY the helper we spawned/hold. Never kills a Node/backend.
         try { if (preparation != null && !preparation.HasExited) preparation.Kill(); } catch { }
     }
     private void LayoutRecovery() {
+        desktopExit.Visible = !loginPresentation; desktopMinimize.Visible = !loginPresentation;
+        ApplyLockOutline();
         int scaleHeight = (int)(36 * DeviceDpi / 96.0), scaleWidth = (int)(40 * DeviceDpi / 96.0);
         desktopExit.SetBounds(ClientSize.Width - scaleWidth, 0, scaleWidth, scaleHeight);
         desktopMinimize.SetBounds(ClientSize.Width - scaleWidth * 2, 0, scaleWidth, scaleHeight);
@@ -293,7 +371,7 @@ internal sealed class DesktopWindow : Form
         if (String.IsNullOrEmpty(desktopCredential)) desktopCredential = (await RunHelperAsync("native-trust.ps1", 15000)).Trim();
         if (desktopCredential.Length != 44) throw new IOException("Desktop trust unavailable.");
         var request = (HttpWebRequest)WebRequest.Create(origin + route);
-        request.Method = "POST"; request.ContentType = "application/json"; request.Timeout = 20000; request.ReadWriteTimeout = 20000;
+        request.Method = "POST"; request.ContentType = "application/json"; request.Timeout = 30000; request.ReadWriteTimeout = 30000;
         request.AllowAutoRedirect = false; request.Proxy = null;
         request.Headers["Origin"] = origin;
         request.Headers["X-PC-Monitor-Desktop"] = desktopCredential;
@@ -315,6 +393,59 @@ internal sealed class DesktopWindow : Form
                 }
                 return result;
             }
+        }
+    }
+    private bool updateBusy;
+    private string pendingUpdateAction;
+    private System.Windows.Forms.Timer updateTimer;
+    private void PostUpdate(Dictionary<string, object> status) {
+        if (!exiting && view != null && !view.IsDisposed) view.CoreWebView2.PostWebMessageAsJson(json.Serialize(new { kind = "updates-state", status = status }));
+    }
+    private async void UpdateActionAsync(string message) {
+        if (busy || exiting || view == null) return;
+        if (updateBusy) { if (message != "updates-automatic") pendingUpdateAction = message; return; }
+        updateBusy = true;
+        try {
+            if (message == "updates-notes") {
+                var notes = await NativeRequestAsync("/api/desktop/updates", new { action = "status" });
+                string url = Convert.ToString(notes["releaseUrl"]);
+                Uri parsed;
+                if (Uri.TryCreate(url, UriKind.Absolute, out parsed) && parsed.Scheme == "https" && parsed.Host == "github.com" && parsed.AbsolutePath.StartsWith("/DontMovePlease/Rovarin/releases/tag/v", StringComparison.Ordinal) && String.IsNullOrEmpty(parsed.UserInfo) && parsed.IsDefaultPort) External(url);
+                PostUpdate(notes); return;
+            }
+            string action = message == "updates-check" ? "check" : message == "updates-automatic" ? "automatic" : message == "updates-preference" ? "preference" : "status";
+            if (message != "updates-install") { PostUpdate(await NativeRequestAsync("/api/desktop/updates", new { action = action })); return; }
+            var before = await NativeRequestAsync("/api/desktop/updates", new { action = "status" });
+            if (Convert.ToBoolean(before["busy"]) || !Convert.ToBoolean(before["installed"]) || !Convert.ToBoolean(before["available"])) throw new IOException("Update unavailable.");
+            if (MessageBox.Show(this, "Download and verify the official Rovarin update, then open the Windows installer? Your PIN and settings will be preserved. Installation begins only when you continue in the installer.", "Update Rovarin", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes) { PostUpdate(before); return; }
+            await NativeRequestAsync("/api/desktop/updates", new { action = "download" });
+            var deadline = DateTime.UtcNow.AddSeconds(205);
+            while (!exiting && !IsDisposed) {
+                var status = await NativeRequestAsync("/api/desktop/updates", new { action = "status" });
+                PostUpdate(status);
+                string state = Convert.ToString(status["state"]);
+                if (state == "ready") break;
+                if (state == "failed" || (!Convert.ToBoolean(status["busy"]) && state != "ready") || DateTime.UtcNow >= deadline) throw new IOException("Download unconfirmed.");
+                // Bounded update-operation feedback only; no telemetry or idle poller.
+                await Task.Delay(1000);
+            }
+            if (exiting || IsDisposed) return;
+            await NativeRequestAsync("/api/desktop/updates", new { action = "prepare" });
+            Dictionary<string, object> handoff = null;
+            try { handoff = json.Deserialize<Dictionary<string, object>>(await RunHelperAsync("installed-update.ps1", 20000)); }
+            catch { }
+            if (handoff == null || !Convert.ToBoolean(handoff["launched"])) {
+                try { await NativeRequestAsync("/api/desktop/updates", new { action = "cancel" }); } catch { }
+                throw new IOException("Installer launch unconfirmed.");
+            }
+            // Inno closes this shell via existing IPC when upgrade actually begins.
+            view.CoreWebView2.PostWebMessageAsJson(json.Serialize(new { kind = "updates-error", message = "The verified Windows installer is open. Continue there to upgrade; cancelling leaves Rovarin unchanged." }));
+        } catch {
+            if (message != "updates-automatic" && !exiting && view != null && !view.IsDisposed) view.CoreWebView2.PostWebMessageAsJson(json.Serialize(new { kind = "updates-error", message = "Update could not be completed. No unverified installer was launched. Sign in and try again later." }));
+        } finally {
+            updateBusy = false;
+            string pending = pendingUpdateAction; pendingUpdateAction = null;
+            if (pending != null && !exiting && !IsDisposed) BeginInvoke((Action)(() => UpdateActionAsync(pending)));
         }
     }
     private async void SecurityActionAsync(string action) {
@@ -389,11 +520,14 @@ internal sealed class DesktopWindow : Form
             core.Settings.AreHostObjectsAllowed = false;
             core.Settings.IsNonClientRegionSupportEnabled = true;
             // Presentation only; no auth/command bridge and no duplicate UI.
-            await core.AddScriptToExecuteOnDocumentCreatedAsync("document.addEventListener('DOMContentLoaded',()=>{document.documentElement.classList.add('native-shell');document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('drop',e=>e.preventDefault())},{once:true})");
+            await core.AddScriptToExecuteOnDocumentCreatedAsync("document.addEventListener('DOMContentLoaded',()=>{document.documentElement.classList.add('native-shell');const card=document.querySelector('.login-card');if(card){const drag=document.createElement('div');drag.className='lock-window-drag';drag.setAttribute('aria-hidden','true');const controls=document.createElement('div');controls.className='lock-window-controls';[['lock-window-minimize','−','Minimize Rovarin'],['lock-window-exit','×','Exit desktop app']].forEach(([action,glyph,label])=>{const button=document.createElement('button');button.type='button';button.id=action;button.textContent=glyph;button.title=label;button.setAttribute('aria-label',label);button.addEventListener('click',()=>chrome.webview.postMessage(action));controls.append(button)});card.prepend(drag,controls)}document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('drop',e=>e.preventDefault())},{once:true})");
             core.WebMessageReceived += delegate(object sender, CoreWebView2WebMessageReceivedEventArgs e) {
                 if (!IsDashboardUri(e.Source, origin)) return;
                 try {
                     string message = e.TryGetWebMessageAsString();
+                    if (loginPresentation && message == "lock-window-minimize") { WindowState = FormWindowState.Minimized; return; }
+                    if (loginPresentation && message == "lock-window-exit") { ExitShell(); return; }
+                    if (message == "updates-status" || message == "updates-check" || message == "updates-automatic" || message == "updates-preference" || message == "updates-install" || message == "updates-notes") { UpdateActionAsync(message); return; }
                     if (message == "security-preference" || message == "security-rotate" || message == "security-status" || message == "security-lock") { SecurityActionAsync(message); return; }
                     if (addressRequest != null) addressRequest.TrySetResult(message);
                 } catch { }
@@ -415,7 +549,16 @@ internal sealed class DesktopWindow : Form
                         string login = await core.ExecuteScriptAsync("!!document.getElementById('pinInput')");
                         if (exiting || IsDisposed) return;
                         ApplyLoginPresentation(login == "true");
+                        if (login == "true") await FitLoginCardAsync(core);
                         recovery.Visible = false; LayoutRecovery(); QueueVisibility();
+                        if (login != "true") {
+                            UpdateActionAsync("updates-automatic");
+                            if (updateTimer == null) {
+                                updateTimer = new System.Windows.Forms.Timer { Interval = 86400000 };
+                                updateTimer.Tick += delegate { UpdateActionAsync("updates-automatic"); };
+                                updateTimer.Start();
+                            }
+                        }
                     } catch { if (!exiting && !IsDisposed) State("Dashboard unavailable", "Try again to reopen Rovarin.", true, false); }
                 }
                 else State("Dashboard unavailable", "The backend may have restarted. Try again to reopen Rovarin.", true, false);

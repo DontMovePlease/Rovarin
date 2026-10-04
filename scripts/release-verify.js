@@ -20,8 +20,13 @@ function assertPlain(directory) {
     cursor = path.dirname(cursor);
   }
 }
-async function verifyAndPublish(repo, runner = run) {
+async function verifyAndPublish(repo, runner = run, outputRepo = repo) {
   repo = path.resolve(repo);
+  // Developer-only RC staging may differ; source verification still uses repo.
+  // The user-facing outputs always live in the explicitly selected project.
+  outputRepo = path.resolve(outputRepo);
+  assertPlain(outputRepo);
+  if (!fs.statSync(outputRepo).isDirectory()) throw new Error("Release output project is not a directory.");
   const exe = path.join(repo, 'dist/RovarinSetup.exe');
   assertPlain(exe);
   const hash = digest(exe);
@@ -48,15 +53,15 @@ async function verifyAndPublish(repo, runner = run) {
   for (const file of TEST_FILES) await runner(process.execPath, [path.join(repo, 'scripts', file)], repo);
   await runner(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(repo,'scripts/installer-integration-test.ps1')], repo);
   checkSource();
-  const publish = path.join(repo, 'publish');
+  const publish = path.join(outputRepo, 'publish');
   assertPlain(publish);
   const allowed = ['RovarinSetup.exe','RovarinSetup.sha256','release.json'];
   // Previous verified product bytes are retired only AFTER the new gate passes.
   const previousAllowed = [...allowed, 'PCMonitorSetup.exe', 'PCMonitorSetup.sha256'];
   if (fs.existsSync(publish) && fs.readdirSync(publish).some(name => !previousAllowed.includes(name) || !fs.lstatSync(path.join(publish,name)).isFile() || fs.lstatSync(path.join(publish,name)).isSymbolicLink())) throw new Error('Publish contains unrelated files; refusing replacement.');
   const suffix = crypto.randomBytes(8).toString('hex');
-  const staging = path.join(repo, 'publish-staging-' + suffix);
-  const previous = path.join(repo, 'publish-previous-' + suffix);
+  const staging = path.join(outputRepo, 'publish-staging-' + suffix);
+  const previous = path.join(outputRepo, 'publish-previous-' + suffix);
   fs.mkdirSync(staging);
   const cleanup = directory => {
     assertPlain(directory);
@@ -83,5 +88,10 @@ async function verifyAndPublish(repo, runner = run) {
     return hash;
   } finally { cleanup(staging); }
 }
-if (require.main === module) verifyAndPublish(path.resolve(__dirname, '..')).catch(error => { console.error(error.message); process.exitCode = 1; });
+if (require.main === module) {
+  const args = process.argv.slice(2);
+  if (args.length && (args.length !== 2 || args[0] !== '--publish-root' || !args[1])) {
+    console.error('Usage: release-verify.js [--publish-root <project directory>]'); process.exitCode = 1;
+  } else verifyAndPublish(path.resolve(__dirname, '..'), run, args[1]).catch(error => { console.error(error.message); process.exitCode = 1; });
+}
 module.exports = { verifyAndPublish, digest, SUITES };

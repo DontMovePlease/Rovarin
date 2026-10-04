@@ -46,3 +46,18 @@
 .uninstall-form input[type="password"] { width: 100%; min-height: 44px; border: 1px solid var(--glass-rim); border-radius: var(--radius-md); background: var(--bg-subtle); color: var(--text-primary); padding: 10px; font: inherit; }
 .uninstall-form input[type="checkbox"] { margin-right: 6px; }
 #uninstallSubmit { background: rgba(239, 68, 68, .15); border-color: rgba(239, 68, 68, .4); }
+
+/* Compatibility results stay solid; actions share the control layer. */
+.diagnostics-page { background: var(--surface-content); border-color: var(--border-card); box-shadow: var(--shadow-card); }
+.diagnostics-toolbar button, .diagnostics-actions button, .diagnostics-actions a, .temperature-settings button, .temperature-settings select {
+  background: var(--surface-glass-strong); border-color: var(--glass-border); box-shadow: var(--shadow-control); color: var(--text-primary);
+}
+.diagnostics-status.supported { color: var(--state-success); background: var(--tint-success); }
+.diagnostics-status.failed { color: var(--state-warning); background: var(--tint-warning); }
+.diagnostics-status.unavailable { color: var(--text-secondary); background: rgba(164,180,198,.09); }
+#uninstallSubmit { color: #ffb0bf; background: var(--tint-danger); border-color: rgba(240,135,155,.4); }
+.temperature-settings option { background: #172232; color: var(--text-primary); }
+
+#updatesSettingsPanel { width:100%; }
+#updatesSettingsPanel label { display:flex; align-items:center; gap:10px; min-height:44px; }
+#updateReleaseSummary { white-space:pre-wrap; overflow-wrap:anywhere; max-height:160px; overflow:auto; }

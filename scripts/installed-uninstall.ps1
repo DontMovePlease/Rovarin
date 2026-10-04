@@ -163,6 +163,16 @@ try {
         . (Join-Path $PSScriptRoot 'dashboard-runtime.ps1')
         $runtime = Get-DashboardRuntime $app
         if ($runtime.state -ne 'none') { throw 'server-still-running' }
+        $updates = Join-Path $installRoot 'updates'
+        Assert-PlainPath $updates
+        if (Test-Path -LiteralPath $updates) {
+            $files = @(Get-ChildItem -LiteralPath $updates -Force)
+            foreach ($file in $files) {
+                if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $file.Name -notin @('RovarinSetup.exe','RovarinSetup.partial','verified.json','handoff.json')) { throw 'unsafe-update-cache' }
+            }
+            foreach ($file in $files) { Remove-Item -LiteralPath $file.FullName -Force }
+            Remove-Item -LiteralPath $updates
+        }
         Assert-DesktopProfile
         $profile = Join-Path $installRoot 'desktop-profile'
         if (Test-Path -LiteralPath $profile) { Remove-Item -LiteralPath $profile -Recurse -Force }
@@ -172,7 +182,7 @@ try {
             $ownedFile = $item.Name -in $operational -or $item.Name -match '^server-start\.[a-f0-9]{32,64}\.(tmp|lock)$' -or $item.Name -match '^config\.json\.[a-f0-9]{24}\.tmp$' -or $item.Name -match '^temperature-settings\.json\.[0-9]+\.tmp$' -or $item.Name -match '^uninstall-handoff\.json\.[a-f0-9]{64}\.tmp$' -or $item.Name -match '^desktop-window\.json\.[a-f0-9]{32}\.tmp$'
             if ($ownedFile -or ($FullRemoval -and $item.Name -in $settings)) { Remove-Item -LiteralPath $item.FullName -Force }
         }
-        if ((Test-Path -LiteralPath $data) -and @(Get-ChildItem -LiteralPath $data -Force).Count -eq 0) { Remove-Item -LiteralPath $data }
+        if ((Test-Path -LiteralPath $data) -and @(Get-ChildItem -LiteralPath $data -Force).Count -eq 0) { Remove-Item -LiteralPath $data -Force }
         exit 0
     }
     # Capture the exact living process before acknowledging readiness. Holding its
