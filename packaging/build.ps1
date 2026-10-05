@@ -29,9 +29,9 @@ if (Test-Path -LiteralPath $payload) { Remove-Item -LiteralPath $payload -Recurs
 $app = Join-Path $payload 'app'
 $runtime = Join-Path $payload 'runtime'
 New-Item -ItemType Directory -Force -Path $app,$runtime,(Join-Path $app 'scripts'),(Join-Path $app 'public'),(Join-Path $app 'vendor\PawnIO\2.2.0') | Out-Null
-$rootFiles = @('server.js','server-lifecycle.js','pin-manager.js','process-termination.js','enhanced-support.js','uninstall-manager.js','update-manager.js','process-stats.js','maintenance.js','temperature-manager.js','cpu-temperature-provider.js','package.json','run_hidden.vbs','LICENSE')
+$rootFiles = @('server.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','enhanced-support.js','uninstall-manager.js','update-manager.js','process-stats.js','maintenance.js','temperature-manager.js','cpu-temperature-provider.js','package.json','run_hidden.vbs','LICENSE')
 foreach ($name in $rootFiles) { Copy-Item -LiteralPath (Join-Path $repo $name) -Destination $app }
-$scripts = @('start.ps1','stop.ps1','desktop.ps1','desktop-host.ps1','native-trust.ps1','dashboard-runtime.ps1','installed-start.ps1','installed-desktop.ps1','setup.ps1','phone-qr.js','empty-recycle-bin.ps1','install-enhanced.ps1','installed-uninstall.ps1','installed-update.ps1','rebrand-migration.ps1','cpu-temperature-provider.ps1','terminate-process.ps1')
+$scripts = @('start.ps1','stop.ps1','desktop.ps1','desktop-host.ps1','native-trust.ps1','dashboard-runtime.ps1','installed-start.ps1','installed-desktop.ps1','setup.ps1','phone-qr.js','empty-recycle-bin.ps1','install-enhanced.ps1','installed-uninstall.ps1','installed-update.ps1','rebrand-migration.ps1','cpu-temperature-provider.ps1','terminate-process.ps1','process-tree.ps1','process-tree.cs','app-manager.ps1','app-uninstall.cs','process-display.ps1','application-display.ps1')
 foreach ($name in $scripts) { Copy-Item -LiteralPath (Join-Path $repo "scripts\$name") -Destination (Join-Path $app 'scripts') }
 Copy-Item -LiteralPath (Join-Path $repo 'public') -Destination $app -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $repo 'vendor\LibreHardwareMonitor') -Destination (Join-Path $app 'vendor') -Recurse -Force

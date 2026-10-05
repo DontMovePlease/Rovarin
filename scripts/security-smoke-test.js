@@ -14,7 +14,7 @@ async function testNativeDesktopSecurity() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rovarin-native-security-'));
   let child, url, captured = '';
   try {
-    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(directory,name));
+    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(directory,name));
     fs.mkdirSync(path.join(directory,'scripts'));
     fs.copyFileSync(path.join(root,'scripts/native-trust.ps1'),path.join(directory,'scripts/native-trust.ps1'));
     const configFile = path.join(directory,'config.json');
@@ -114,7 +114,7 @@ async function testLocalPinManagement() {
     fs.writeFileSync(file, '{broken');
     assert.throws(() => pins.loadConfig(file)); assert.strictEqual(fs.readFileSync(file, 'utf8'), '{broken');
     pins.writeConfig(file, legacy);
-    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root, name), path.join(directory, name));
+    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root, name), path.join(directory, name));
     fs.mkdirSync(path.join(directory,'public'));
     fs.copyFileSync(path.join(root,'public/login.html'),path.join(directory,'public/login.html'));
     let output = '', url;
@@ -295,7 +295,9 @@ async function testSessionsLeasesAndSse() {
   assert.match(dashboardHtml, /data-page="processesPage"/, 'the authenticated dashboard should expose the Processes view');
   assert.match(dashboardHtml, /id="processesPage"[^>]*data-profile="processes"/, 'the Processes page should request its focused monitoring profile');
   assert.match(dashboardHtml, /id="logoutButton"/, 'the dashboard should retain its Lock button');
-  assert.match(dashboardHtml, /data-page="diagnosticsPage"/);
+  assert.doesNotMatch(dashboardHtml, /data-page="diagnosticsPage"/);
+  assert.match(dashboardHtml, /id="diagnosticsPage"/);
+  assert.match(dashboardHtml, /id="nativeSettingsButton"/);
   assert.match(dashboardHtml, /id="copyDiagnostics"/);
   for (const asset of ['/diagnostics.js', '/diagnostics.css']) {
     const authenticated = await request(asset, { cookie: firstCookie });

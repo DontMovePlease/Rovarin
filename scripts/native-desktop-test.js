@@ -19,7 +19,8 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     if(options.currentSource){
       // Local shell QA without rebuilding or touching the installer payload.
       fs.cpSync(path.join(root,'public'),path.join(app,'public'),{recursive:true});
-      for (const name of ['server.js','pin-manager.js','update-manager.js']) fs.copyFileSync(path.join(root,name),path.join(app,name));
+      for (const name of ['server.js','pin-manager.js','update-manager.js','app-manager.js','process-termination.js','process-stats.js']) fs.copyFileSync(path.join(root,name),path.join(app,name));
+      for(const name of ['terminate-process.ps1','app-manager.ps1','app-uninstall.cs','process-tree.ps1','process-tree.cs','process-display.ps1','application-display.ps1'])fs.copyFileSync(path.join(root,'scripts',name),path.join(app,'scripts',name));
       fs.copyFileSync(path.join(root,'scripts/native-trust.ps1'),path.join(app,'scripts/native-trust.ps1'));
       execFileSync(compiler,['/nologo','/target:winexe','/platform:x64','/optimize+','/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll',`/r:${path.join(app,'Microsoft.Web.WebView2.Core.dll')}`,`/r:${path.join(app,'Microsoft.Web.WebView2.WinForms.dll')}`,`/win32manifest:${path.join(root,'packaging/desktop.manifest')}`,`/win32icon:${path.join(app,'Rovarin.ico')}`,`/out:${path.join(app,'Rovarin.exe')}`,path.join(root,'packaging/RovarinLauncher.cs'),path.join(root,'packaging/DesktopShell.cs')],{windowsHide:true,timeout:15000});
     }
@@ -36,7 +37,7 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     execFileSync(compiler,['/nologo','/target:exe','/platform:x64',`/win32manifest:${path.join(root,'packaging/desktop.manifest')}`,'/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll',`/r:${path.join(app,'Microsoft.Web.WebView2.Core.dll')}`,`/r:${path.join(app,'Microsoft.Web.WebView2.WinForms.dll')}`,`/out:${path.join(app,'NativeDesktopTest.exe')}`,path.join(root,'scripts/native-desktop-test.cs')],{windowsHide:true,timeout:15000});
     fs.copyFileSync(path.join(app,'Rovarin.exe.config'),path.join(app,'NativeDesktopTest.exe.config'));
     console.log(await wait(launch(path.join(app,'NativeDesktopTest.exe'),[],{cwd:app})));
-    for(const file of ['native-lock.png','login-mobile.png','login-keyboard.png']) fs.copyFileSync(path.join(app,file),path.join(root,'packaging/cache',file));
+    for(const file of ['native-lock.png','login-mobile.png','login-keyboard.png','processes-polish.png']) fs.copyFileSync(path.join(app,file),path.join(root,'packaging/cache',file));
     fs.copyFileSync(path.join(app,'native-dashboard.png'),path.join(root,'packaging/cache/native-dashboard.png'));
     fs.copyFileSync(path.join(app,'native-mobile.png'),path.join(root,'packaging/cache/native-mobile.png'));
     fs.copyFileSync(path.join(app,'native-mobile-drawer.png'),path.join(root,'packaging/cache/native-mobile-drawer.png'));

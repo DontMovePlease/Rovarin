@@ -2,7 +2,7 @@
 const { execFile } = require('child_process');
 const path = require('path');
 
-function terminateProcess(identity, execute = execFile) {
+function terminateProcess(identity, execute = execFile, protectedPids = []) {
   return new Promise(resolve => {
     if (process.platform !== 'win32') return resolve({ success: false, code: 'unavailable' });
     try {
@@ -17,8 +17,18 @@ function terminateProcess(identity, execute = execFile) {
           } catch (_) { resolve({ success: false, code: 'termination-unconfirmed' }); }
         });
       child.stdin.on('error', () => {});
-      child.stdin.end(JSON.stringify(identity));
+      child.stdin.end(JSON.stringify({ ...identity, protectedPids }));
     } catch (_) { resolve({ success: false, code: 'server-error' }); }
   });
 }
-module.exports = { terminateProcess };
+function processTree(identity,mode,protectedPids,execute=execFile) {
+  return new Promise(resolve=>{
+    if(process.platform!=='win32')return resolve({success:false,code:'unavailable',results:[],remaining:[]});
+    try {
+      const child=execute(path.join(process.env.SystemRoot||'C:\\Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(__dirname,'scripts/process-tree.ps1')],{windowsHide:true,timeout:20000,maxBuffer:131072},(error,stdout)=>{
+        try{const result=JSON.parse(String(stdout).trim());if(error||!['tree-preview','tree-terminated','tree-partial','tree-unavailable','protected-process','stale-process','access-denied','already-exited'].includes(result.code)||!Array.isArray(result.results)||result.results.length>2048||!Array.isArray(result.remaining)||result.remaining.length>2048|| (result.code==='tree-terminated'&&(!result.success||!result.verified||result.remaining.length)))throw Error();resolve(result);}catch(_){resolve({success:false,code:'tree-unavailable',results:[],remaining:[],error:'The process tree could not be verified.'});}
+      });child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({identity,mode,protectedPids}));
+    }catch(_){resolve({success:false,code:'tree-unavailable',results:[],remaining:[]});}
+  });
+}
+module.exports = { terminateProcess, processTree };

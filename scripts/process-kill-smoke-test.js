@@ -44,6 +44,7 @@ async function testHandleRaceFixture() {
     static IntPtr OpenProcess(uint a,bool i,int p) { return new IntPtr(Current); }
     static bool GetProcessTimes(IntPtr h,out long c,out long e,out long k,out long u) { c=h.ToInt32()==1?100:200; e=k=u=0; return true; }
     static bool QueryFullProcessImageName(IntPtr h,uint f,StringBuilder n,ref uint s) { n.Append("node.exe"); Current=2; return true; }
+    static bool IsProcessCritical(IntPtr h,out bool critical) { critical=false;return true; }
     static bool TerminateProcess(IntPtr h,uint c) { Killed=h.ToInt32(); return true; }
     static uint WaitForSingleObject(IntPtr h,uint m) { return Killed==h.ToInt32()?0u:258u; }
     static bool CloseHandle(IntPtr h) { Closed++; return true; }
@@ -67,74 +68,27 @@ async function testExitVerification() {
   console.log('PASS bounded exit verification: exited, delayed exit, still-running, and permission-denied outcomes');
 }
 
-async function testProcessesUI() {
-  const elements = new Map(), windowEvents = new Map(), documentEvents = new Map();
-  function element() {
-    const classes = new Set();
-    return { children: [], events: new Map(), attrs: {}, dataset: {}, textContent: '', hidden: false,
-      classList: { add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name), toggle(name, enabled) { enabled ? classes.add(name) : classes.delete(name); } },
-      setAttribute(name, value) { this.attrs[name] = value; },
-      addEventListener(name, callback) { this.events.set(name, callback); },
-      replaceChildren() { this.children = []; },
-      insertRow() { const row = element(); this.children.push(row); return row; },
-      insertCell() { const cell = element(); this.children.push(cell); return cell; }
-    };
-  }
-  const get = id => { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); };
-  const sortButtons = [element(), element()]; sortButtons[0].dataset.sort = 'cpu'; sortButtons[1].dataset.sort = 'memory';
-  const a = { pid: 100, name: 'A', startedAt: '2020-01-01T00:00:00Z', cpuPercent: 90, ramMB: 30 };
-  const b = { pid: 200, name: 'B', startedAt: '2020-01-02T00:00:00Z', cpuPercent: 20, ramMB: 50 };
-  let current = { processes: [a, b], sampledAt: Date.now(), stale: false }, killResult = { success: true, verified: true }, sentIdentity;
-  const context = { document: { visibilityState: 'visible', getElementById: get, querySelectorAll: () => sortButtons, addEventListener: (name, callback) => documentEvents.set(name, callback) },
-    window: { monitoringLeaseId: 'lease', confirm: () => true, location: { replace() {} }, addEventListener: (name, callback) => windowEvents.set(name, callback) },
-    setTimeout, clearTimeout, setInterval, clearInterval,
-    fetch: async (route, options) => {
-      if (route.endsWith('/kill')) { sentIdentity = JSON.parse(options.body); return { ok: killResult.success, status: killResult.success ? 200 : 409, json: async () => killResult }; }
-      return { ok: true, status: 200, json: async () => current };
-    }
-  };
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'public', 'processes.js'), 'utf8'), context);
-  const send = data => { current = data; windowEvents.get('pc-monitor-processes')({ detail: data }); };
-  const rows = get('processesRows');
-  send(current);
-  assert.strictEqual(rows.children[0].children[0].textContent, 'A');
-  const touched = rows.children[0];
-  rows.events.get('pointerdown')({ pointerId: 1 });
-  send({ processes: [{ ...a, cpuPercent: 1 }, { ...b, cpuPercent: 95 }], sampledAt: Date.now() + 1, stale: false });
-  assert.strictEqual(rows.children[0], touched, 'SSE cannot replace the DOM under a finger');
-  touched.events.get('click')();
-  assert(touched.classList.contains('is-selected'));
-  assert.match(get('processesSelection').textContent, /A \(PID 100\)/);
-  documentEvents.get('pointerup')({ pointerId: 1 });
-  await new Promise(resolve => setTimeout(resolve, 210));
-  assert.strictEqual(rows.children[0].children[0].textContent, 'A', 'selection keeps presentation order stable despite CPU resort');
-  get('processesFreezeButton').events.get('click')();
-  const frozenRow = rows.children[0];
-  send({ processes: [{ ...a, cpuPercent: 70 }, b], sampledAt: Date.now() + 2, stale: false });
-  assert.strictEqual(rows.children[0], frozenRow, 'freeze retains presentation and values');
-  assert.match(get('processesLiveText').textContent, /Frozen/);
-  get('processesFreezeButton').events.get('click')();
-  assert.strictEqual(rows.children[0].children[2].textContent, '70.0%', 'resume applies the latest snapshot');
-  await get('processesKillButton').events.get('click')();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepStrictEqual(sentIdentity, { pid: a.pid, name: a.name, startedAt: a.startedAt }, 'End Task targets the selected identity, never row position');
-  assert(!rows.children.some(row => row.children[0].textContent === 'A'), 'successful kill immediately removes the old identity even if cached GET is late');
-  assert.match(get('processesKillStatus').textContent, /exit confirmed/);
-  const restarted = { ...a, startedAt: '2020-01-03T00:00:00Z' };
-  send({ processes: [restarted, b], sampledAt: Date.now() + 10, stale: false });
-  assert(rows.children.some(row => row.children[0].textContent === 'A'), 'respawned identity is treated as new');
-  rows.children.find(row => row.children[0].textContent === 'A').events.get('click')();
-  killResult = { success: false, code: 'termination-unconfirmed', error: 'PID is still present.' };
-  await get('processesKillButton').events.get('click')();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.match(get('processesKillStatus').textContent, /still present/);
-  assert(rows.children.some(row => row.children[0].textContent === 'A'), 'failed/unconfirmed kill does not hide a live row');
-  sortButtons[1].events.get('click')();
-  assert.strictEqual(rows.children[0].children[0].textContent, 'B', 'explicit memory sort works while selection identity remains A');
-  assert.match(get('processesSelection').textContent, /A \(PID 100\)/);
-  windowEvents.get('pc-monitor-pagechange')({ detail: { page: 'dashboardPage' } });
-  context.document.visibilityState = 'hidden'; documentEvents.get('visibilitychange')();
-  console.log('PASS process UI touch hold, identity selection, order lock, freeze/resume, sorting, immediate kill feedback, late cache, respawn, and failed-kill reconciliation');
+async function testProcessesUI(){
+ const elements=new Map(),events=new Map();
+ function element(){const e={children:[],events:new Map(),attrs:{},dataset:{},value:'',hidden:false,_text:'',parentElement:null,className:'',classList:{values:new Set(),add(x){this.values.add(x)},remove(x){this.values.delete(x)},toggle(x,on){on?this.values.add(x):this.values.delete(x)},contains(x){return this.values.has(x)}},setAttribute(k,v){this.attrs[k]=v},removeAttribute(k){delete this.attrs[k]},addEventListener(k,v){this.events.set(k,v)},appendChild(x){x.remove();x.parentElement=this;this.children.push(x)},insertBefore(x,b){x.remove();x.parentElement=this;const i=b?this.children.indexOf(b):-1;i<0?this.children.push(x):this.children.splice(i,0,x)},replaceChildren(){for(const c of this.children)c.parentElement=null;this.children=[];this._text=''},remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(x=>x!==this);this.parentElement=null},insertRow(){const n=element();this.appendChild(n);return n},insertCell(){return this.insertRow()}};Object.defineProperty(e,'cells',{get(){return this.children}});Object.defineProperty(e,'textContent',{get(){return this._text+this.children.map(c=>c.textContent).join('')},set(v){this.replaceChildren();this._text=String(v)}});return e;}
+ const get=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id)};
+ const buttons=['name','pid','cpu','memory'].map(sort=>{const n=element();n.dataset.sort=sort;n.parentElement=element();return n});let latest,sent,route;
+ const ctx={document:{visibilityState:'visible',getElementById:get,createElement:element,querySelectorAll:()=>buttons,addEventListener(){}},window:{monitoringLeaseId:'lease',confirm:()=>true,location:{replace(){}},addEventListener:(k,f)=>events.set(k,f)},setTimeout,clearTimeout,setInterval,clearInterval,Intl,fetch:async(url,options)=>{if(url.endsWith('/kill')||url.endsWith('/kill-tree')){sent=JSON.parse(options.body);route=url;return {ok:true,status:200,json:async()=>({success:true,verified:true,results:[{code:'terminated'}]})}}if(url.endsWith('/tree'))return {ok:true,json:async()=>({success:true,descendantCount:2})};return {ok:true,json:async()=>latest}}};
+ vm.runInNewContext(fs.readFileSync(path.join(root,'public/processes.js'),'utf8'),ctx);
+ let tick=0;const send=processes=>{latest={processes,sampledAt:Date.now()+tick++,stale:false};events.get('pc-monitor-processes')({detail:latest})};const rows=get('processesRows'),a={pid:100,name:'chat',displayName:'ChatGPT',hasFriendlyName:true,displayGroup:'a'.repeat(64),startedAt:'2026-01-01',cpuPercent:1,ramMB:20},b={...a,pid:200,cpuPercent:2,ramMB:30};
+ send([a,b]);assert.equal(rows.children.length,1);assert.equal(rows.children[0].cells[2].textContent,'3.0%');assert.equal(rows.children[0].cells[3].textContent,'50 MB');assert(get('processesKillButton').disabled,'group is not a termination identity');
+ rows.children[0].events.get('click')();assert.equal(rows.children.length,3);const child=rows.children.find(x=>x.__process?.pid===100);child.events.get('pointerdown')();child.events.get('click')();
+ send([{...a,cpuPercent:90,ramMB:50},b]);assert.equal(rows.children[0].cells[2].textContent,'92.0%','group CPU live');assert.equal(rows.children[0].cells[3].textContent,'80 MB','group RAM live');assert.equal(rows.children[1].__process.pid,100,'CPU order recalculates despite selection/lost release');assert(rows.children[1].classList.contains('is-selected'));assert.equal(rows.children[1].cells[2].textContent,'90.0%');
+ const c={...a,pid:300,cpuPercent:3};send([a,b,c]);assert.equal(rows.children.length,4,'expanded group persists');assert.match(rows.children[0].cells[0].textContent,/\(3\)/);send([a,b]);assert.equal(rows.children.length,3,'exit changes count');
+ const d={...a,pid:400,displayGroup:null};send([a,b,d]);assert.equal(rows.children.length,4,'same friendly name without app evidence stays separate');
+ get('processesFreezeButton').events.get('click')();const before=rows.children.find(x=>x.__group).cells[2].textContent;send([{...a,cpuPercent:99},b,d]);assert.equal(rows.children.find(x=>x.__group).cells[2].textContent,before,'Pause freezes presentation');assert.equal(get('processesLiveText').textContent,'Paused');get('processesFreezeButton').events.get('click')();assert.equal(rows.children.find(x=>x.__group).cells[2].textContent,'101.0%','Resume newest immediately');
+ get('processesSearch').value='200';get('processesSearch').events.get('input')();assert.equal(rows.children.length,2,'PID search exposes matching child with group context');get('processesSearch').value='missing';get('processesSearch').events.get('input')();assert.match(rows.children[0].cells[0].textContent,/No processes match/);get('processesSearch').value='';get('processesSearch').events.get('input')();
+ send([{...a,startedAt:'2026-01-02'},b]);assert(get('processesKillButton').disabled,'PID reuse cannot inherit selection');assert.match(get('processesKillStatus').textContent,/Process ended/);
+ rows.children.find(x=>x.__process?.pid===200).events.get('click')();get('processesKillButton').events.get('click')();await new Promise(r=>setImmediate(r));assert.deepStrictEqual(sent,{pid:b.pid,name:b.name,startedAt:b.startedAt});assert.equal(route,'/api/processes/kill');assert(!rows.children.some(x=>x.__process?.pid===200),'ended exact child removed even with late cache');
+ events.get('pc-monitor-pagechange')({detail:{page:'dashboardPage'}});send([{...a,displayGroup:null}]);rows.children[0].events.get('click')();get('processesTreeButton').events.get('click')();await new Promise(r=>setImmediate(r));assert.deepStrictEqual(sent,{pid:a.pid,name:a.name,startedAt:a.startedAt,confirmed:true});assert.equal(route,'/api/processes/kill-tree');
+ events.get('pc-monitor-pagechange')({detail:{page:'dashboardPage'}});send([{...a,startedAt:'2026-01-03',displayGroup:null,displayName:'Zebra 10'}, {...b,startedAt:'2026-01-03',displayGroup:null,displayName:'adobe'}]);buttons[0].events.get('click')();assert.match(rows.children[0].cells[0].textContent,/adobe/);buttons[0].events.get('click')();assert.match(rows.children[0].cells[0].textContent,/Zebra/);buttons[1].events.get('click')();assert.equal(rows.children[0].__process.pid,100);buttons[3].events.get('click')();assert.equal(rows.children[0].__process.pid,200);send([{...a,startedAt:'2026-01-03',displayGroup:null,ramMB:100},{...b,startedAt:'2026-01-03',displayGroup:null}]);assert.equal(rows.children[0].__process.pid,100,'memory live sort');
+ ctx.document.visibilityState='hidden';events.get('pc-monitor-pagechange')({detail:{page:'dashboardPage'}});
+ console.log('PASS grouped live CPU/RAM/counts/add/remove, selection without implicit freeze, expansion/search, explicit Pause/Resume, sorting, PID reuse and exact single/tree action identities');
 }
 
 const root = path.resolve(__dirname, '..');
@@ -423,6 +377,23 @@ const parent = spawn(process.execPath, ['-e', 'const {spawn}=require("child_proc
       assert(probeAlive(descendantPid), 'single-identity End Task intentionally leaves child processes alive');
       console.log('PASS reproduced surviving child after verified parent termination; no unsafe process-tree expansion');
     } finally { if (descendantPid) { try { process.kill(descendantPid); } catch (_) {} } }
+
+    // Actual API tree preview/confirmation/termination, using only owned fixtures.
+    const treeParent = spawn(process.execPath, ['-e', 'const {spawn}=require("child_process");const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore",windowsHide:true,detached:true});child.unref();console.log(child.pid);global.keep=Buffer.alloc(64*1024*1024);setInterval(()=>{const end=Date.now()+40;while(Date.now()<end){}},200);'], {windowsHide:true,stdio:['ignore','pipe','ignore']});
+    disposableChildren.add(treeParent);treeParent.once('exit',()=>disposableChildren.delete(treeParent));
+    let treeChild;
+    try {
+      treeChild=await new Promise((resolve,reject)=>{const t=setTimeout(()=>reject(Error('Owned tree fixture timeout')),5000);treeParent.stdout.once('data',c=>{clearTimeout(t);resolve(Number(String(c).trim()))});});
+      const {observed}=await waitForObservedProcess(cookie,leaseId,treeParent.pid);
+      const identity={pid:observed.pid,name:observed.name,startedAt:observed.startedAt};
+      const treeRequest=(route,body)=>request(route,{method:'POST',cookie,leaseId,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const preview=await treeRequest('/api/processes/tree',identity);assert.equal(preview.status,200);assert((await preview.json()).descendantCount>=1);
+      assert.equal((await treeRequest('/api/processes/kill-tree',identity)).status,400,'tree execution requires explicit confirmation');
+      assert.equal((await treeRequest('/api/processes/kill-tree',{...identity,confirmed:true,command:'anything'})).status,400,'arbitrary input refused');
+      const result=await treeRequest('/api/processes/kill-tree',{...identity,confirmed:true});assert.equal(result.status,200);assert((await result.json()).verified);
+      await waitForExit(treeParent);assert(!probeAlive(treeChild));
+      console.log('PASS actual authenticated process-tree API preview, explicit confirmation, fixed-input enforcement and verified descendant termination');
+    } finally {if(treeChild){try{process.kill(treeChild)}catch(_){}}}
 
     // ── Adaptive monitoring and existing APIs unchanged ───────────────────────
     const status = await getStatus(cookie);

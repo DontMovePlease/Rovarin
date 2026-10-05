@@ -1,4 +1,4 @@
-#define AppVersion "0.2.0"
+#define AppVersion "0.2.2"
 [Setup]
 AppId={{C51A4180-26D2-4F48-93BD-B40B182B78DA}
 AppName=Rovarin

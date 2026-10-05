@@ -7,8 +7,9 @@ const crypto = require('crypto');
 const maintenance = require('./maintenance');
 const { TemperatureManager } = require('./temperature-manager');
 const { CpuTemperatureProvider } = require('./cpu-temperature-provider');
-const { normalizeProcessRecords, isProcessSnapshotStale } = require('./process-stats');
-const { terminateProcess } = require('./process-termination');
+const { normalizeProcessRecords, isProcessSnapshotStale, ProcessDisplayCache } = require('./process-stats');
+const { terminateProcess, processTree } = require('./process-termination');
+const { AppManager } = require('./app-manager');
 const { loadConfig, readConfig, validPin, writeConfig, generatePin, desktopTrust, configurationFile } = require('./pin-manager');
 const { bindServer, claimInstance, portCandidates } = require('./server-lifecycle');
 const { EnhancedSupport, isLocalDesktopRequest } = require('./enhanced-support');
@@ -27,6 +28,8 @@ const CONFIG_FILE = (() => {
 const enhancedSupport = new EnhancedSupport({ stateDirectory: DATA_DIR });
 const uninstallManager = new UninstallManager();
 const updateManager = new UpdateManager({ configFile: CONFIG_FILE });
+const appManager = new AppManager({ onChange: broadcastAppsStatus });
+let treeInFlight = false;
 // Opaque compatibility identifiers retain existing clients and desktop trust.
 const AUTH_COOKIE = 'pc_monitor_session';
 const SESSION_TTL_MS = readBoundedDuration(process.env.PC_MONITOR_SESSION_TTL_MS, 90 * 24 * 60 * 60 * 1000, 1000, 90 * 24 * 60 * 60 * 1000);
@@ -251,7 +254,7 @@ const PROCESS_IDENTITY_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,
 // The active server, its parent (dev watcher / launcher), and Windows system PIDs.
 const PROTECTED_PROCESS_PIDS = new Set([process.pid, process.ppid].filter(pid => Number.isSafeInteger(pid) && pid > 0));
 // Obvious Windows system-critical processes; Windows also denies these itself.
-const CRITICAL_PROCESS_NAMES = new Set(['idle', 'system', 'smss', 'csrss', 'wininit', 'winlogon', 'lsass', 'services']);
+const CRITICAL_PROCESS_NAMES = new Set(['idle', 'system', 'smss', 'csrss', 'wininit', 'winlogon', 'lsass', 'services', 'rovarin', 'pcmonitor']);
 let killInFlight = new Set();
 const pendingTerminations = new Map();
 const recentKills = new Map();
@@ -259,11 +262,12 @@ const MAX_RECENT_KILLS = 32;
 const MAX_CONCURRENT_KILLS = 2;
 const RECENT_KILL_TTL_MS = 60000;
 
+const processDisplayCache = new ProcessDisplayCache();
 function sampleProcesses() {
   if (!monitoringActive || !hasActiveMonitoringLease() || !effectiveSamplingInterval('processesMs')) return;
   runTelemetryCommand('processes', 'powershell.exe', [
     '-NoProfile', '-NonInteractive', '-Command',
-    "$ErrorActionPreference='Stop'; $items=@(foreach($p in Get-Process){try{$id=$p.Id;$name=$p.ProcessName;$cpu=$null;$ram=$null;$startedAt=$null;try{$cpu=$p.CPU}catch{};try{$ram=$p.WorkingSet64}catch{};try{$startedAt=$p.StartTime.ToUniversalTime().ToString('o')}catch{};if($null -ne $ram){[pscustomobject]@{Id=$id;ProcessName=$name;CPU=$cpu;WorkingSet64=$ram;StartedAt=$startedAt}}}catch{}}); ConvertTo-Json -InputObject $items -Compress"
+    "$ErrorActionPreference='Stop'; $items=@(foreach($p in Get-Process){try{$id=$p.Id;$name=$p.ProcessName;$cpu=$null;$ram=$null;$startedAt=$null;$exePath=$null;try{$exePath=$p.Path}catch{};try{$cpu=$p.CPU}catch{};try{$ram=$p.WorkingSet64}catch{};try{$startedAt=$p.StartTime.ToUniversalTime().ToString('o')}catch{};if($null -ne $ram){[pscustomobject]@{Id=$id;ProcessName=$name;CPU=$cpu;WorkingSet64=$ram;StartedAt=$startedAt;ExecutablePath=$exePath}}}catch{}}); ConvertTo-Json -InputObject $items -Compress"
   ], { windowsHide: true, timeout: PROCESS_COMMAND_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
     if (!effectiveSamplingInterval('processesMs')) return;
     const sampledAt = Date.now();
@@ -285,8 +289,16 @@ function sampleProcesses() {
     const logicalProcessors = Math.max(1, os.cpus().length);
     const normalized = normalizeProcessRecords(records, previousProcessCpuTimes, sampledAt, logicalProcessors);
     previousProcessCpuTimes = normalized.nextCpuTimes;
+    const cachedLabels=processDisplayCache.cached(records);
+    for(const item of normalized.processes){const key=item.pid+'|'+item.name+'|'+item.startedAt;item.displayName=cachedLabels.get(key)||item.name;item.hasFriendlyName=cachedLabels.metadataAvailable.has(key);item.displayGroup=cachedLabels.groupKeys.get(key)||null;}
     processSnapshot = { processes: normalized.processes.filter(item => !wasRecentlyKilled(item.pid, item.startedAt, item.name)).slice(0, 50), sampledAt, error: null };
     broadcastProcessSnapshot();
+    const visibleIdentities=new Set(processSnapshot.processes.map(item=>item.pid+'|'+item.name+'|'+item.startedAt));
+    processDisplayCache.enrich(records.filter(row=>visibleIdentities.has(row.Id+'|'+row.ProcessName+'|'+row.StartedAt))).then(labels=>{
+      if(processSnapshot.sampledAt!==sampledAt)return;
+      processSnapshot={...processSnapshot,processes:processSnapshot.processes.map(item=>({...item,displayName:labels.get(item.pid+'|'+item.name+'|'+item.startedAt)||item.name,hasFriendlyName:labels.metadataAvailable.has(item.pid+'|'+item.name+'|'+item.startedAt),displayGroup:labels.groupKeys.get(item.pid+'|'+item.name+'|'+item.startedAt)||null}))};
+      broadcastProcessSnapshot();
+    });
   });
 }
 
@@ -999,6 +1011,10 @@ function sampleHistoryMetrics() {
 
 // SSE connection pool. Values associate a stream with the lease whose expiry
 // should close it, while keeping the existing event payload unchanged.
+function broadcastAppsStatus(status) {
+  if (!refreshAccessPin()) return;
+  for(const [client,leaseId] of sseClients){const lease=monitoringLeases.get(leaseId);if(!lease||lease.expiresAt<=Date.now())continue;try{client.write('event: apps-operation\ndata: '+JSON.stringify(status)+'\n\n');}catch(_){sseClients.delete(client);}}
+}
 function broadcastSSE(data) {
   if (!refreshAccessPin()) return;
   if (sseClients.size === 0) return;
@@ -1326,7 +1342,7 @@ const MIME_TYPES = {
   '.png': 'image/png',
   '.ico': 'image/x-icon'
 };
-const PUBLIC_FILES = new Set(['index.html', 'login.html', 'app.css', 'maintenance.css', 'processes.css', 'desktop.css', 'app.js', 'maintenance.js', 'processes.js', 'login.js', 'diagnostics.js', 'diagnostics.css', 'enhanced-support.js', 'uninstall.js']);
+const PUBLIC_FILES = new Set(['index.html', 'login.html', 'app.css', 'maintenance.css', 'processes.css', 'desktop.css', 'app.js', 'maintenance.js', 'processes.js', 'login.js', 'diagnostics.js', 'diagnostics.css', 'enhanced-support.js', 'uninstall.js', 'apps.js', 'apps.css']);
 
 let dashboardAssetSignature = '';
 let dashboardAssetRevision = '';
@@ -1377,18 +1393,21 @@ const server = http.createServer((req, res) => {
   const isLogoutPost = req.method === 'POST' && pathname === '/api/logout';
   const isMaintenancePost = req.method === 'POST' && pathname === '/api/maintenance/run';
   const isMonitoringLeasePost = req.method === 'POST' && pathname === '/api/monitoring/lease';
-  const isProcessKillPost = req.method === 'POST' && pathname === '/api/processes/kill';
+  const isTreePreviewPost = req.method === 'POST' && pathname === '/api/processes/tree';
+  const isProcessTreePost = req.method === 'POST' && pathname === '/api/processes/kill-tree';
+  const isAppsPost = req.method === 'POST' && pathname === '/api/apps/uninstall';
+  const isProcessKillPost = req.method === 'POST' && ['/api/processes/kill','/api/processes/kill-tree','/api/processes/tree'].includes(pathname);
   const isTemperatureSettingsPost = req.method === 'POST' && pathname === '/api/temperature/settings';
   const isEnhancedInstallPost = req.method === 'POST' && pathname === '/api/temperature/enhanced/install';
   const isUninstallPost = req.method === 'POST' && pathname === '/api/system/uninstall';
 
-  if (req.method !== 'GET' && !isDesktopPost && !isLoginPost && !isLogoutPost && !isMaintenancePost && !isMonitoringLeasePost && !isProcessKillPost && !isTemperatureSettingsPost && !isEnhancedInstallPost && !isUninstallPost) {
+  if (req.method !== 'GET' && !isDesktopPost && !isLoginPost && !isLogoutPost && !isMaintenancePost && !isMonitoringLeasePost && !isProcessKillPost && !isTemperatureSettingsPost && !isEnhancedInstallPost && !isUninstallPost && !isAppsPost) {
     res.writeHead(405, { 'Content-Type': 'text/plain' });
     res.end('Method Not Allowed.');
     return;
   }
 
-  if ((isDesktopPost || isLoginPost || isLogoutPost || isMaintenancePost || isMonitoringLeasePost || isProcessKillPost || isTemperatureSettingsPost || isEnhancedInstallPost || isUninstallPost) && !sameOriginRequest(req)) {
+  if ((isDesktopPost || isLoginPost || isLogoutPost || isMaintenancePost || isMonitoringLeasePost || isProcessKillPost || isTemperatureSettingsPost || isEnhancedInstallPost || isUninstallPost || isAppsPost) && !sameOriginRequest(req)) {
     res.writeHead(403, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ success: false, error: 'Cross-origin request rejected.' }));
     return;
@@ -1416,12 +1435,12 @@ const server = http.createServer((req, res) => {
         if (pathname === '/api/desktop/updates') {
           if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '') || parsedUrl.search || Object.keys(data).length !== 1 || !['status','check','automatic','preference','download','prepare','cancel'].includes(data.action)) { reply(400, { success: false, code: 'invalid-request', error: 'Fixed update action required.' }); return; }
           if (data.action === 'status') { try { reply(200, { success: true, ...updateManager.status() }); } catch (_) { reply(503, { success: false, error: 'Update settings unavailable.' }); } return; }
-          if (uninstallManager.busy || enhancedSupport.status().installing) { reply(409, { success: false, code: 'operation-running', error: 'Wait for the current operation to finish.' }); return; }
+          if (appManager.busy || appManager.blocked || treeInFlight || killInFlight.size || uninstallManager.busy || enhancedSupport.status().installing) { reply(409, { success: false, code: 'operation-running', error: 'Wait for the current operation to finish.' }); return; }
           if (data.action === 'prepare') {
             maintenance.getStatus(status => {
               if (!getAuthenticatedSession(req)) { reply(401, { success: false, error: 'Authentication required.' }); return; }
               try {
-                if (status.isRunning || uninstallManager.busy || enhancedSupport.status().installing) throw new Error('operation-running');
+                if (status.isRunning || appManager.busy || appManager.blocked || treeInFlight || killInFlight.size || uninstallManager.busy || enhancedSupport.status().installing) throw new Error('operation-running');
                 reply(200, { success: true, ...updateManager.reserve() });
               } catch (_) { reply(409, { success: false, error: 'Verified update handoff unavailable. Finish other operations first.' }); }
             }); return;
@@ -1435,7 +1454,7 @@ const server = http.createServer((req, res) => {
             if (!updateManager.installed() || updateManager.busy) { reply(409, { success: false, code: 'update-unavailable', error: 'Update installation requires an idle installed native copy.' }); return; }
             maintenance.getStatus(status => {
               if (!getAuthenticatedSession(req)) { reply(401, { success: false, error: 'Authentication required.' }); return; }
-              if (status.isRunning || uninstallManager.busy || enhancedSupport.status().installing || updateManager.busy) { reply(409, { success: false, error: 'Wait for the current operation to finish.' }); return; }
+              if (status.isRunning || appManager.busy || appManager.blocked || treeInFlight || killInFlight.size || uninstallManager.busy || enhancedSupport.status().installing || updateManager.busy) { reply(409, { success: false, error: 'Wait for the current operation to finish.' }); return; }
               updateManager.download().catch(() => {}); reply(202, { success: true });
             }); return;
           }
@@ -1533,7 +1552,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const isStaticAsset = ['/app.css', '/maintenance.css', '/processes.css', '/app.js', '/maintenance.js', '/processes.js', '/login.js'].includes(pathname);
+  const isStaticAsset = ['/app.css', '/maintenance.css', '/processes.css', '/app.js', '/maintenance.js', '/processes.js', '/apps.js', '/apps.css', '/login.js'].includes(pathname);
 
   // Reuse authenticated lease traffic to detect UI edits without another poller.
   if (session && pathname === '/api/monitoring/lease') {
@@ -1572,6 +1591,27 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ currentVersion: status.currentVersion, latestVersion: status.latestVersion, state: status.state, message: status.message }));
     } catch (_) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Update settings unavailable.' })); } return;
   }
+  if (pathname === '/api/apps' || pathname === '/api/apps/status' || pathname === '/api/apps/uninstall') {
+    const reply=(status,data)=>{if(!res.destroyed&&!res.writableEnded){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(data));}};
+    if(pathname==='/api/apps/status'&&req.method==='GET'&&!parsedUrl.search){reply(200,appManager.status());return;}
+    if(pathname==='/api/apps'&&req.method==='GET'&&(!parsedUrl.search||parsedUrl.search==='?refresh=1')){appManager.inventory(parsedUrl.search==='?refresh=1').then(data=>reply(200,data),()=>reply(503,{success:false,code:'inventory-unavailable',error:'Windows application inventory is unavailable.'}));return;}
+    if(!isAppsPost||parsedUrl.search){reply(400,{success:false,code:'invalid-request',error:'Unexpected operation or parameters.'});return;}
+    if(appManager.busy||appManager.blocked||uninstallManager.busy||updateManager.busy||treeInFlight||killInFlight.size){reply(409,{success:false,code:'operation-running',error:'Wait for the active system operation. If an uninstaller is still running, complete it on the PC before restarting Rovarin.'});return;}
+    if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')){reply(415,{success:false,code:'invalid-content-type',error:'JSON required.'});return;}
+    readRequestBody(req,4096,(error,body)=>{
+      let data;try{data=JSON.parse(body);}catch(_){}
+      if(error||!data||Array.isArray(data)||Object.keys(data).length!==4||!Object.keys(data).every(k=>['ids','batch','pin','confirmation'].includes(k))||!validPin(data.pin)||data.confirmation!=='uninstall-apps'||typeof data.batch!=='boolean'||!Array.isArray(data.ids)||!data.ids.length||data.ids.length>20||new Set(data.ids).size!==data.ids.length||data.ids.some(id=>typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id))||(!data.batch&&data.ids.length!==1)){reply(400,{success:false,code:'invalid-request',error:'A reviewed app selection and current PIN are required.'});return;}
+      if(!getAuthenticatedSession(req)){reply(401,{success:false,code:'authentication-required',error:'Authentication required.'});return;}
+      const rate=loginRateState(req);if(rate.state.lockedUntil>rate.now){reply(429,{success:false,code:'pin-locked',error:'Too many attempts. Try again shortly.'});return;}
+      if(!safeEqualPin(data.pin)){rate.state.failures++;if(rate.state.failures>=LOGIN_FAILURE_LIMIT)rate.state.lockedUntil=Date.now()+LOGIN_LOCK_MS;reply(rate.state.lockedUntil?429:401,{success:false,code:'invalid-pin',error:'PIN not accepted.'});return;}
+      loginAttempts.delete(rate.key);
+      maintenance.getStatus(async status=>{
+        if(status.isRunning||enhancedSupport.status().installing||updateManager.busy||uninstallManager.busy){reply(409,{success:false,code:'operation-running',error:'Wait for the current system operation.'});return;}
+        try{const result=await appManager.start(data.ids,data.batch,()=>Boolean(getAuthenticatedSession(req)));reply(202,result);}catch(e){reply(e.message==='authentication-required'?401:409,{success:false,code:e.message,error:'Uninstall was not accepted. Refresh the list and review the selected apps again.'});}
+      });
+    });return;
+  }
+  if((appManager.busy||appManager.blocked)&&req.method==='POST'&&(isMaintenancePost||isProcessKillPost||isUninstallPost||isEnhancedInstallPost)){res.writeHead(409,{'Content-Type':'application/json'});res.end(JSON.stringify({success:false,code:'operation-running',error:'An application uninstall is active or its completion is unconfirmed.'}));return;}
   // ── Maintenance API Endpoints ──────────────────────────────────────────────
 
   if ((uninstallManager.busy || (updateManager.busy && ['downloading','verifying','handoff'].includes(updateManager.state) && (isMaintenancePost || isEnhancedInstallPost || isProcessKillPost || isTemperatureSettingsPost))) && req.method === 'POST' && !isUninstallPost) {
@@ -1923,7 +1963,9 @@ const server = http.createServer((req, res) => {
       let parsed;
       try { parsed = JSON.parse(body); } catch (_) { parsed = null; }
       const validShape = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-        && Object.keys(parsed).length === 3
+        && Object.keys(parsed).length === (isProcessTreePost ? 4 : 3)
+        && Object.keys(parsed).every(key => ['pid','name','startedAt', ...(isProcessTreePost ? ['confirmed'] : [])].includes(key))
+        && (!isProcessTreePost || parsed.confirmed === true)
         && Number.isSafeInteger(parsed.pid) && parsed.pid >= 1 && parsed.pid <= MAX_PROCESS_PID
         && typeof parsed.name === 'string' && parsed.name.length >= 1 && parsed.name.length <= 128
         && typeof parsed.startedAt === 'string' && PROCESS_IDENTITY_PATTERN.test(parsed.startedAt);
@@ -1940,6 +1982,8 @@ const server = http.createServer((req, res) => {
       if (CRITICAL_PROCESS_NAMES.has(name.toLowerCase())) {
         return failKill(403, 'protected-process', 'This Windows system process is protected.');
       }
+      if (treeInFlight) return failKill(409, 'kill-busy', 'A process-tree operation is active.');
+      if ((isProcessTreePost || isTreePreviewPost) && killInFlight.size) return failKill(409, 'kill-busy', 'Wait for the active termination.');
       if (killInFlight.has(pid)) {
         const pending = pendingTerminations.get(pid);
         if (pending && pending.startedAt === startedAt && pending.name === name) {
@@ -1989,6 +2033,20 @@ const server = http.createServer((req, res) => {
       if (killInFlight.size >= MAX_CONCURRENT_KILLS) return failKill(429, 'kill-busy', 'Two termination requests are already active. Try again shortly.');
       // The fixed native helper verifies creation time and terminates through
       // the SAME held Windows handle. Cached identity alone never authorizes it.
+      if(isTreePreviewPost){
+        treeInFlight=true;
+        processTree({pid,name,startedAt},'preview',Array.from(PROTECTED_PROCESS_PIDS)).then(result=>{treeInFlight=false;if(res.destroyed||res.writableEnded)return;res.writeHead(result.success?200:409,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(result));});return;
+      }
+      if(isProcessTreePost){
+        treeInFlight=true;
+        console.log('[System management] Process-tree termination requested.');
+        processTree({pid,name,startedAt},'terminate',Array.from(PROTECTED_PROCESS_PIDS)).then(result=>{
+          treeInFlight=false;for(const item of result.results||[])if(item.code==='terminated')removeProcessFromSnapshot(item.pid);
+          sampleProcesses();
+          if(res.destroyed||res.writableEnded)return;res.writeHead(result.success?200:409,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify({...result,target:{pid,name,startedAt},error:result.success?undefined:'Some targets could not be safely terminated. Review the detailed results.'}));
+        });return;
+      }
+      console.log('[System management] Single-process termination requested.');
       killInFlight.add(pid);
       let resolvePending;
       const promise = new Promise(resolve => { resolvePending = resolve; });
@@ -2012,7 +2070,7 @@ const server = http.createServer((req, res) => {
         res.writeHead(success ? 200 : outcome.code === 'access-denied' ? 403 : outcome.code === 'already-exited' ? 410 : 409, { 'Content-Type': 'application/json; charset=UTF-8', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify(result));
       };
-      terminateProcess({ pid, name, startedAt }).then(complete);
+      terminateProcess({ pid, name, startedAt }, undefined, Array.from(PROTECTED_PROCESS_PIDS)).then(outcome=>{complete(outcome);sampleProcesses();});
     });
     return;
   }

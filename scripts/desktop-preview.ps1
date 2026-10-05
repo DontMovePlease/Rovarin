@@ -9,8 +9,14 @@ foreach ($file in @('Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.Wi
 New-Item -ItemType Directory -Force -Path $preview,(Join-Path $preview 'data') | Out-Null
 $exe = Join-Path $preview 'Rovarin.exe'
 if (Test-Path -LiteralPath $exe) {
+    # IPC acknowledgement precedes shutdown. Wait on only this preview image.
+    $previewProcesses = @(Get-Process -Name Rovarin -ErrorAction SilentlyContinue | Where-Object { try { $_.MainModule.FileName -eq $exe } catch { $false } })
     $close = Start-Process -FilePath $exe -ArgumentList 'close-desktop' -WorkingDirectory $preview -WindowStyle Hidden -Wait -PassThru
     try { if ($close.ExitCode -ne 0) { throw 'Development desktop did not confirm closure; refusing to replace its files.' } } finally { $close.Dispose() }
+    foreach ($previewProcess in $previewProcesses) {
+        try { if (-not $previewProcess.WaitForExit(10000)) { throw 'Development desktop is still closing; preview was not overwritten.' } }
+        finally { $previewProcess.Dispose() }
+    }
 }
 foreach ($file in @('Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','Rovarin.ico','Rovarin.exe.config')) {
     Copy-Item -LiteralPath (Join-Path $payload $file) -Destination (Join-Path $preview $file) -Force

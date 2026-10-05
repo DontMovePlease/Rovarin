@@ -1,5 +1,13 @@
 param([switch]$CheckOnly, [switch]$RegeneratePin, [switch]$Automatic, [switch]$Hosted)
 $ErrorActionPreference = 'Stop'
+# Hidden shortcuts must fail visibly without displaying paths or saved secrets.
+trap {
+    if (-not $CheckOnly) {
+        Add-Type -AssemblyName System.Windows.Forms
+        [Windows.Forms.MessageBox]::Show('Rovarin could not open local PIN Recovery. Your PIN and settings were not reset. Check that the Rovarin files and local Node runtime are available, then try again.', 'Rovarin PIN Recovery', 'OK', 'Error') | Out-Null
+    }
+    exit 1
+}
 function Get-PhoneSetupState($Report, [int]$Port) {
     $availability = $Report.checks | Where-Object id -eq 'tailscale' | Select-Object -First 1
     $status = $Report.checks | Where-Object id -eq 'tailscale-status' | Select-Object -First 1
@@ -57,7 +65,12 @@ function New-PhoneQrBitmap([string]$Address) {
         return $bitmap
     } catch {return $null} finally {$process.Dispose()}
 }
-$node = if ($installed) { Join-Path (Split-Path -Parent $appDir) 'runtime\node.exe' } else { (Get-Command node.exe -ErrorAction Stop).Source }
+$node = if ($installed) { Join-Path (Split-Path -Parent $appDir) 'runtime\node.exe' } else {
+    $nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
+    if ($nodeCommand) { $nodeCommand.Source }
+    else { Join-Path $env:ProgramFiles 'nodejs\node.exe' }
+}
+if (-not (Test-Path -LiteralPath $node -PathType Leaf)) { throw 'Local Node runtime unavailable.' }
 . (Join-Path $PSScriptRoot 'dashboard-runtime.ps1')
 $runtime = Get-DashboardRuntime $appDir
 if ($runtime.state -eq 'none') {
@@ -253,7 +266,7 @@ $recheck.Add_Click({
 })
 Update-PhoneSetup
 $body.Add_Resize({Update-SetupLayout})
-$form.Add_Shown({Update-SetupLayout})
+$form.Add_Shown({Update-SetupLayout; $form.BringToFront(); $form.Activate()})
 $form.Add_FormClosing({Complete-LocalOnboarding})
 try {$form.ShowDialog() | Out-Null}
 finally {if($qrBox.Image){$qrBox.Image.Dispose()};$form.Dispose();if($onboardingLock){$onboardingLock.Dispose()}}

@@ -1420,3 +1420,18 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   html body *, html body *::before, html body *::after { animation: none !important; transition: none !important; }
   html body button:active, html body .maint-action-card:active, html body .processes-table tr.is-selectable:active .process-name { transform: none !important; }
 }
+
+/* Navigation owns the page title; the drawer owns the product wordmark. */
+.sidebar-phone-brand {display:flex;align-items:center;gap:10px;flex-shrink:0;padding:12px 9px 16px;color:var(--text-primary);font-size:18px;font-weight:650;white-space:nowrap;overflow:hidden}
+.sidebar-phone-brand svg {width:24px;height:24px;flex:0 0 24px;color:var(--accent-primary)}
+.sidebar-phone-brand span {display:none}
+.sidebar-expanded .sidebar-phone-brand span {display:block}
+.native-app-identity {min-width:0}
+#appSectionTitle {overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:699px) {
+ html:not(.native-shell) .phone-page-surface {box-sizing:border-box}
+ html:not(.native-shell) .native-app-bar {position:relative;top:auto;left:auto;right:auto;flex:0 0 60px;width:auto;margin:8px max(12px,env(safe-area-inset-right)) 8px max(12px,env(safe-area-inset-left))}
+ html:not(.native-shell) .dashboard-container {padding-top:0}
+ html:not(.native-shell) .sidebar-phone-brand {display:flex}
+ html:not(.native-shell) .sidebar-phone-brand span {display:block}
+}

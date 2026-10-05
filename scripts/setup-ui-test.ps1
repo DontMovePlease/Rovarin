@@ -24,7 +24,7 @@ function New-Report($kind){
     )}
 }
 $report=New-Report 'connected';$phoneState=Get-PhoneSetupState $report 7332
-$uiStart=$sourceText.IndexOf('Add-Type -AssemblyName System.Windows.Forms')
+$uiStart=$sourceText.IndexOf('Add-Type -AssemblyName System.Windows.Forms', $sourceText.IndexOf('if ($Automatic)'))
 $uiEnd=$sourceText.IndexOf('try {$form.ShowDialog() | Out-Null}')
 if($uiStart -lt 0 -or $uiEnd -le $uiStart){throw 'Setup UI boundaries changed.'}
 Invoke-Expression $sourceText.Substring($uiStart,$uiEnd-$uiStart)

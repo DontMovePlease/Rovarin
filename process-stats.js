@@ -72,3 +72,34 @@ async function verifyProcessExit(pid, { probe = target => process.kill(target, 0
 }
 
 module.exports = { calculateCpuPercent, parseCpuSeconds, isSameProcessInstance, normalizeProcessRecords, isProcessSnapshotStale, verifyProcessExit };
+
+// Display metadata is never a process identity or a termination input.
+function friendlyProcessName(metadata, fallback) {
+  const clean=value=>typeof value==='string'?value.trim().replace(/[\x00-\x1f\x7f]/g,'').slice(0,180):'';
+  const product=clean(metadata?.productName);
+  return clean(metadata?.packageName) || (/^(Microsoft.*Windows.*Operating System|Microsoft.*Windows.*Betriebssystem)$/i.test(product)?'':product) || clean(metadata?.fileDescription) || clean(metadata?.serviceName) || fallback;
+}
+class ProcessDisplayCache {
+  constructor({resolve,stat=require('fs').statSync,now=Date.now}={}){this.entries=new Map();this.resolve=resolve||resolveProcessDisplay;this.stat=stat;this.now=now;this.busy=false;this.groupSecret=require('crypto').randomBytes(32);}
+  cached(records){const output=new Map();output.metadataAvailable=new Set();output.groupKeys=new Map();for(const row of records){const identity=row.Id+'|'+row.ProcessName+'|'+row.StartedAt;const key=row.ExecutablePath?row.ExecutablePath.toLowerCase():identity;const metadata=this.entries.get(key)?.metadata;output.set(identity,friendlyProcessName(metadata,row.ProcessName));if(friendlyProcessName(metadata,'')){output.metadataAvailable.add(identity);if(row.ExecutablePath&&!/^(node|python.*|powershell|pwsh|cmd|svchost|rundll32|dllhost|msedgewebview2|cefsharp.*)$/i.test(row.ProcessName)){const source=metadata?.groupSource||key;output.groupKeys.set(identity,require('crypto').createHmac('sha256',this.groupSecret).update(source).digest('hex'));}}}return output;}
+  async enrich(records){
+    const output=new Map(),misses=[],now=this.now();output.metadataAvailable=new Set();
+    for(const row of records){if(!row.StartedAt)continue;const identity=row.Id+'|'+row.ProcessName+'|'+row.StartedAt;
+      const file=typeof row.ExecutablePath==='string'?row.ExecutablePath:'';const key=file?file.toLowerCase():identity;
+      let entry=this.entries.get(key);
+      if(!entry||now-entry.checkedAt>=60000){let stamp='unavailable';if(file){try{const info=this.stat(file);stamp=info.size+'|'+info.mtimeMs}catch{}}
+        if(!entry||entry.stamp!==stamp||now-entry.resolvedAt>=600000){entry={stamp,checkedAt:now,resolvedAt:0,metadata:null};this.entries.set(key,entry);}else entry.checkedAt=now;
+      }
+      if(entry.metadata===null&&misses.length<50)misses.push({key,path:file,pid:Number(row.Id),name:row.ProcessName,startedAt:row.StartedAt});
+      output.set(identity,friendlyProcessName(entry.metadata,row.ProcessName));if(friendlyProcessName(entry.metadata,''))output.metadataAvailable.add(identity);
+    }
+    if(!this.busy&&misses.length){this.busy=true;try{const distinct=[...new Map(misses.map(x=>[x.key,x])).values()];const answers=await this.resolve(distinct);
+      for(const request of distinct){const entry=this.entries.get(request.key);if(!entry)continue;entry.metadata=answers.find(x=>x.key===request.key)||{};entry.resolvedAt=this.now();}
+      for(const row of records){const identity=row.Id+'|'+row.ProcessName+'|'+row.StartedAt;const key=row.ExecutablePath?row.ExecutablePath.toLowerCase():identity;output.set(identity,friendlyProcessName(this.entries.get(key)?.metadata,row.ProcessName));if(friendlyProcessName(this.entries.get(key)?.metadata,''))output.metadataAvailable.add(identity);}
+    }catch{}finally{this.busy=false;}}
+    while(this.entries.size>1024)this.entries.delete(this.entries.keys().next().value);return this.cached(records);
+  }
+}
+function resolveProcessDisplay(requests){return new Promise(resolve=>{try{const child=require('child_process').execFile(require('path').join(process.env.SystemRoot||'C:\\Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',require('path').join(__dirname,'scripts/process-display.ps1')],{windowsHide:true,timeout:5000,maxBuffer:128*1024},(error,stdout)=>{try{const data=JSON.parse(stdout);resolve(!error&&Array.isArray(data)?data:[])}catch{resolve([])}});child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify(requests));}catch{resolve([])}});}
+module.exports.friendlyProcessName=friendlyProcessName;
+module.exports.ProcessDisplayCache=ProcessDisplayCache;

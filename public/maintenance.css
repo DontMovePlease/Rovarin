@@ -630,3 +630,7 @@
 @media (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
   .maint-modal, .maint-toast { backdrop-filter: none; -webkit-backdrop-filter: none; }
 }
+
+/* The pinned navigation already names this page; retain its permission badge. */
+#maintenancePage .maint-section-title>svg,#maintenancePage .maint-heading-text {display:none}
+#maintenancePage .maint-section-title {margin-bottom:8px;padding-bottom:0;border-bottom:0}

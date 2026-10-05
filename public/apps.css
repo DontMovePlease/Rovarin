@@ -1,0 +1,96 @@
+.apps-toolbar,.apps-batchbar {display:flex;flex-wrap:wrap;align-items:end;gap:12px;margin-block:18px}
+.apps-toolbar label {display:grid;gap:6px;color:var(--text-secondary);font-size:12px;flex:1;min-width:110px}
+.apps-toolbar input,.apps-toolbar select,.apps-confirm input {width:100%;min-height:44px;background:var(--surface-content-raised);color:var(--text-primary);border:1px solid var(--border-card);border-radius:10px;padding:9px;font:inherit}
+.apps-list {display:grid;gap:9px}.apps-row {display:flex;align-items:center;gap:14px;padding:14px;border:1px solid var(--border-card);border-radius:14px;background:var(--surface-content-raised);min-width:0}
+.apps-row>input {width:22px;height:22px;accent-color:var(--accent-primary);flex-shrink:0}.apps-info {flex:1;min-width:0}.apps-info h2 {font-size:15px;margin:0 0 4px;overflow-wrap:anywhere}.apps-info p {font-size:11px;color:var(--text-secondary);margin:3px 0;overflow-wrap:anywhere}
+.apps-row button,.apps-dialog-actions button,.apps-batchbar button {min-height:44px}.apps-confirm {background:var(--surface-content);color:var(--text-primary);border:1px solid var(--border-card);border-radius:24px;max-width:min(520px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto;padding:24px}.apps-confirm::backdrop {background:rgba(3,8,15,.75)}.apps-confirm p,.apps-confirm li {font-size:13px;line-height:1.6;overflow-wrap:anywhere}.apps-confirm h2 {font-size:22px}.apps-dialog-actions {display:flex;justify-content:end;gap:12px;margin-top:18px}#appsProgress {margin-top:22px}#appsProgressRows li {overflow-wrap:anywhere;font-size:13px;padding:6px 0}#appsStatus {font-size:12px;color:var(--text-secondary)}
+.processes-table th button {min-height:44px;padding:4px 0;background:transparent;border:0;color:var(--text-secondary);font:inherit;cursor:pointer}.processes-table th[aria-sort="ascending"] button,.processes-table th[aria-sort="descending"] button {color:var(--accent-primary)}
+@media(max-width:699px){.apps-row {gap:10px;padding:12px;flex-wrap:wrap}.apps-info {flex-basis:calc(100% - 35px)}.apps-row>button {margin-left:32px}.apps-toolbar label:first-child {flex-basis:100%}.apps-confirm {padding:18px}.apps-batchbar {align-items:center}}
+
+.apps-select {display:flex;align-items:center;justify-content:center;width:44px;height:44px;flex:0 0 44px;cursor:pointer}.apps-select input {width:22px;height:22px;accent-color:var(--accent-primary)}
+@media(max-width:699px){.apps-info {flex-basis:calc(100% - 58px)}.apps-row>button {margin-left:54px}}
+
+@media(min-width:700px){.apps-page .apps-list {flex:1;min-height:100px;overflow-y:auto;align-content:start}.apps-page>header,.apps-page>.apps-toolbar,.apps-page>.apps-batchbar,.apps-page>#appsStatus {flex-shrink:0}.apps-page>#appsProgress {flex-shrink:0;max-height:26dvh;overflow-y:auto}}
+/* Applications: one readable list and a reserved, persistent review bar. */
+#appsPage {display:flex;flex-direction:column;height:calc(100dvh - 138px);min-height:0;padding:14px}
+#appsPage .processes-heading h1 {font-size:24px;letter-spacing:-.025em}
+#appsPage .apps-toolbar {margin:12px 0 6px;gap:8px;flex-shrink:0}
+#appsPage .apps-toolbar label {font-size:11px;gap:4px;min-width:95px}
+#appsPage #appsStatus {margin:6px 0 10px;font-size:11px;flex-shrink:0}
+#appsPage .apps-list {display:block;flex:1;min-height:100px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;align-content:start}
+#appsPage .apps-row {display:grid;grid-template-columns:44px minmax(0,1fr) 82px 80px;gap:10px;padding:12px 4px;margin:0;border:0;border-bottom:1px solid var(--border-card);border-radius:0;background:transparent}
+#appsPage .apps-row.is-selected {background:var(--tint-primary)}
+#appsPage .apps-info h2 {font-size:14px;font-weight:600;line-height:1.4;margin:0 0 3px}
+#appsPage .apps-info p {font-size:11px;line-height:1.4;margin:3px 0}
+#appsPage .apps-description {display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#appsPage .apps-size {color:var(--text-primary);font-size:14px;font-weight:600;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.apps-row-action,.apps-review-remove {min-height:44px;padding:0 8px;font:inherit;font-size:12px;color:var(--text-secondary);background:transparent;border:1px solid var(--border-card);border-radius:10px;cursor:pointer}
+.apps-row-action:focus-visible,.apps-review-remove:focus-visible {outline:2px solid var(--accent-primary);outline-offset:2px}
+.apps-row-action:hover,.apps-review-remove:hover {color:var(--text-primary);background:var(--tint-primary)}
+#appsPage .apps-batchbar {margin:8px 0 0;padding:8px;gap:8px;align-items:center;flex-shrink:0;border:1px solid var(--border-card);border-radius:12px;background:var(--surface-content-raised)}
+#appsPage .apps-batchbar[hidden] {display:none}
+#appsPage .apps-batchbar>div {flex:1;min-width:70px;font-size:12px}#appsHiddenSelection {display:block;color:var(--text-secondary);font-size:10px;margin-top:3px}
+#appsPage .apps-batchbar button {font-size:11px;padding-inline:9px;min-height:44px}
+.apps-confirm ul {padding:0;list-style:none}.apps-confirm li {display:flex;align-items:flex-start;gap:8px;padding:12px 0;border-bottom:1px solid var(--border-card)}
+.apps-confirm li>div {flex:1;min-width:0}.apps-confirm li strong,.apps-confirm li small {display:block;line-height:1.5}.apps-confirm li small {font-size:11px;color:var(--text-secondary)}
+.apps-confirm li details {margin-top:6px;font-size:11px;color:var(--text-secondary)}.apps-confirm li summary {cursor:pointer;min-height:28px}
+.apps-confirm .apps-removal-support {margin-top:5px;color:var(--accent-primary)}.apps-confirm #appsReviewLimitations {color:var(--state-warning)}
+.apps-confirm button:disabled {opacity:.45;cursor:not-allowed}.apps-empty {font-size:13px;color:var(--text-secondary);padding:20px 8px}
+@media(max-width:699px){
+ #appsPage {height:calc(100dvh - 148px);padding:12px;border-radius:16px}
+ #appsPage .apps-toolbar label:first-child {flex-basis:100%}
+ #appsPage .apps-row {grid-template-columns:44px minmax(0,1fr) 68px;gap:8px;padding:10px 0}
+ #appsPage .apps-info {grid-column:2;grid-row:1;min-width:0}
+ #appsPage .apps-row .apps-select {grid-column:1;grid-row:1;align-self:start}
+ #appsPage .apps-size {grid-column:3;grid-row:1;align-self:start;padding-top:4px;font-size:13px}
+ #appsPage .apps-row>.apps-row-action {grid-column:2/4;justify-self:start;margin:0;font-size:11px;border:0;min-height:44px;padding:0 4px}
+ #appsPage .apps-batchbar {padding-bottom:max(8px,env(safe-area-inset-bottom))}
+ #appsPage .apps-description {font-size:10px}
+}
+@media(prefers-reduced-motion:reduce){.apps-row,.apps-row-action {transition:none}}
+@media(prefers-contrast:more){.apps-row.is-selected {outline:1px solid var(--accent-primary);outline-offset:-1px}.apps-size {color:var(--text-primary)}}
+/* Keep input text legible and avoid iOS focus zoom in Applications controls. */
+#appsPage .apps-toolbar input,#appsPage .apps-toolbar select {font-size:13px}
+.apps-confirm input {font-size:16px}
+@media(max-width:699px){#appsPage .apps-toolbar input {font-size:16px}}
+/* List and grid reuse the same app records, selection and reviewed actions. */
+.apps-meta {display:flex;align-items:center;gap:10px;margin:4px 0 8px;flex-shrink:0;min-width:0}
+#appsPage .apps-meta #appsStatus {flex:1;margin:0;min-width:0}
+.apps-view-controls {display:flex;flex-shrink:0;border:1px solid var(--border-card);border-radius:10px;padding:2px;gap:2px;background:var(--surface-content-raised)}
+.apps-view-controls button {min-width:44px;min-height:44px;padding:0 8px;border:0;border-radius:7px;font:inherit;font-size:12px;color:var(--text-secondary);background:transparent;cursor:pointer}
+.apps-view-controls button[aria-pressed="true"] {color:var(--accent-primary);background:var(--tint-primary)}
+.apps-view-controls button:focus-visible {outline:2px solid var(--accent-primary);outline-offset:-2px}
+#appsPage #appsList {overflow-y:scroll;scrollbar-width:auto;scrollbar-color:#526b85 #101b28;scrollbar-gutter:stable;padding-right:8px}
+#appsList::-webkit-scrollbar {display:block;width:9px;height:9px}
+#appsList::-webkit-scrollbar-track {background:#101b28;border-radius:8px}
+#appsList::-webkit-scrollbar-thumb {background:#526b85;border:2px solid #101b28;border-radius:8px}
+#appsList::-webkit-scrollbar-thumb:hover {background:#7596b8}
+#appsPage #appsList.is-grid {display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;align-content:start}
+#appsPage .is-grid .apps-row {grid-template-columns:44px minmax(0,1fr);grid-template-rows:auto 1fr auto;gap:8px;padding:12px;border:1px solid var(--border-card);border-radius:14px;background:var(--surface-content-raised);align-items:start}
+#appsPage .is-grid .apps-select {grid-column:1;grid-row:1}
+#appsPage .is-grid .apps-size {grid-column:2;grid-row:1;align-self:center}
+#appsPage .is-grid .apps-info {grid-column:1/-1;grid-row:2}
+#appsPage .is-grid .apps-row-action {grid-column:1/-1;grid-row:3;justify-self:stretch;margin:0;border:1px solid var(--border-card);min-height:44px}
+#appsPage .is-grid .apps-row.is-selected {background:var(--tint-primary);border-color:var(--accent-primary)}
+#appsPage .is-grid .apps-empty {grid-column:1/-1}
+@media(min-width:700px){
+ body:has(#appsPage:not([hidden])) {padding-inline:0}
+ body:has(#appsPage:not([hidden])) .dashboard-container {max-width:none}
+ .native-shell body:has(#appsPage:not([hidden])) .native-app-bar {margin-inline:0}
+ #appsPage {height:calc(100dvh - var(--app-bar-height) - 24px);padding:18px}
+ #appsPage .apps-info h2 {font-size:15px}
+}
+@media(max-width:699px){
+ #appsPage #appsList.is-grid {grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+ #appsPage .is-grid .apps-row {padding:8px;gap:5px}
+ #appsPage .is-grid .apps-info h2 {font-size:13px}
+ #appsPage .is-grid .apps-publisher,#appsPage .is-grid .apps-category {font-size:10px}
+ .apps-view-controls button {padding-inline:5px;font-size:11px}
+}
+@media(prefers-contrast:more){#appsList {scrollbar-color:var(--text-primary) var(--surface-content)}}
+
+@media(max-width:699px){#appsPage #appsList {min-height:72px}}
+
+#appsPage .apps-toolbar {margin-top:0}
+.apps-meta {flex-wrap:wrap}
+@media(max-width:699px){html:not(.native-shell) #appsPage {height:100%}.apps-meta #appsStatus {flex-basis:100%;order:1}}

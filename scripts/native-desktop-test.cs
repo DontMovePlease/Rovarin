@@ -27,6 +27,7 @@ internal static class NativeDesktopTest
     static async Task Wait(string script, string label, int seconds = 12) {
         var limit = DateTime.UtcNow.AddSeconds(seconds);
         while (DateTime.UtcNow < limit) { if (await Condition(script)) return; await Task.Delay(100); }
+        if(label.StartsWith("Native installed-app")) Console.Error.WriteLine(await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({rows:document.querySelectorAll('.apps-row').length,status:document.getElementById('appsStatus')?.textContent,width:document.documentElement.scrollWidth,viewport:innerWidth})"));
         throw new Exception(label + "; pending=" + window.GetField("visibilityPending",flags).GetValue(form) + "; loading=" + window.GetField("loading",flags).GetValue(form) + "; visible=" + form.Visible + "; doc=" + await View.CoreWebView2.ExecuteScriptAsync("document.visibilityState"));
     }
     static async Task<int> Leases() {
@@ -140,6 +141,10 @@ internal static class NativeDesktopTest
                 await Wait("document.readyState==='complete' && !!window.monitoringLeaseId", "Dashboard did not acquire lease",30);
                 await WaitLeases(true);
                 Check(form.Region==null && form.Size==new System.Drawing.Size(900,680),"Unlock did not restore normal window bounds/outline");
+                Check(form.Padding.Left>=5 && View.Left>=form.Padding.Left && View.Right<=form.ClientSize.Width-form.Padding.Right,"WebView covers native resize edges");
+                var resizePoint=form.PointToScreen(new System.Drawing.Point(2,form.ClientSize.Height/2));
+                var resizeHit=SendMessage(form.Handle,0x84,IntPtr.Zero,new IntPtr((resizePoint.Y<<16)|(resizePoint.X&0xffff)));
+                Check(resizeHit.ToInt32()==10,"Authenticated left edge is not a native resize target");
                 await Wait("!document.documentElement.classList.contains('login-page') && !document.documentElement.style.getPropertyValue('--login-viewport-height')", "Login-only scroll styles leaked into dashboard");
                 await Wait("eventSource?.readyState===1", "Native SSE did not connect");
                 Console.WriteLine("PASS native dashboard/authentication ready");
@@ -148,7 +153,7 @@ internal static class NativeDesktopTest
                 Check(form.FormBorderStyle==FormBorderStyle.None && !form.ControlBox,"Windows caption/control box remains");
                 Check((GetWindowLong(form.Handle,-16)&0xC00000)==0,"Windows caption style remains");
                 Check(form.ClientSize==form.Size,"Native UI does not reach window edges");
-                Check(View.Bounds==form.ClientRectangle,"WebView does not fill client area");
+                Check(View.Bounds==new System.Drawing.Rectangle(form.Padding.Left,form.Padding.Top,form.ClientSize.Width-form.Padding.Horizontal,form.ClientSize.Height-form.Padding.Vertical),"WebView does not fill the authenticated area inside native resize edges");
                 Check(View.CoreWebView2.Settings.IsNonClientRegionSupportEnabled && !View.AllowExternalDrop,"Native drag/drop settings incorrect");
                 await Wait("document.documentElement.classList.contains('native-shell') && getComputedStyle(document.querySelector('.native-app-bar')).display==='flex' && document.querySelector('.native-app-bar').getBoundingClientRect().top===0", "Integrated native bar missing");
                 await Wait("getComputedStyle(document.querySelector('.native-app-bar')).getPropertyValue('app-region')==='drag' && getComputedStyle(document.getElementById('nativeSettingsButton')).getPropertyValue('app-region')==='no-drag'", "Native drag region/settings hit target incorrect");
@@ -225,6 +230,17 @@ internal static class NativeDesktopTest
                 await Wait("document.getElementById('nativeForwardButton').disabled", "New navigation did not discard forward history");
                 await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('[data-page=dashboardPage]').click();scrollTo(0,0)");
                 Console.WriteLine("PASS page Back/Forward, branch history and Settings navigation");
+                await View.CoreWebView2.ExecuteScriptAsync("showAppPage('appsPage')");
+                await Wait("!appsPage.hidden && document.querySelectorAll('.apps-row').length>0 && document.documentElement.scrollWidth<=innerWidth", "Native installed-app inventory and page navigation",45);
+                await View.CoreWebView2.ExecuteScriptAsync("window.__qaAppIds=Array.from(document.querySelectorAll('.apps-row')).slice(0,3).map(r=>({id:r.dataset.appId,name:r.querySelector('h2').textContent}));for(const app of __qaAppIds){appsSearch.value=app.name;appsSearch.dispatchEvent(new Event('input'));const row=Array.from(document.querySelectorAll('.apps-row')).find(r=>r.dataset.appId===app.id);const check=row.querySelector('input');check.checked=true;check.dispatchEvent(new Event('change'));}appsSearch.value='qa-no-match';appsSearch.dispatchEvent(new Event('input'));appsBatchUninstall.click()");
+                await Wait("appsConfirmDialog.open && document.querySelectorAll('#appsConfirmList li').length===3 && appsSelectedCount.textContent==='3 selected'", "Real inventory hidden selections must survive searches and reach review");
+                await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('#appsConfirmList button.apps-review-remove').click();appsConfirmCancel.click();appsSearch.value='';appsSearch.dispatchEvent(new Event('input'))");
+                await Wait("appsSelectedCount.textContent==='2 selected' && document.querySelectorAll('.apps-row.is-selected').length===2", "Real review removal/cancel must preserve remaining selections");
+                await View.CoreWebView2.ExecuteScriptAsync("appsClearSelection.click()");
+                await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('.apps-row button:not(:disabled)').click()");
+                await Wait("appsConfirmDialog.open && appsConfirmDialog.getBoundingClientRect().bottom<=innerHeight", "Native reviewed uninstall dialog must fit");
+                await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('appsConfirmCancel').click();showAppPage('dashboardPage')");
+                Console.WriteLine("PASS native App Manager real read-only inventory/categories/sizes, search-select-search hidden review, remove/cancel persistence and dialog fit; no real app removed");
                 // Change only this disposable fixture's canonical frontend. The
                 // running shell must see it through the ordinary backend revision.
                 string assetPath=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"public","app.js");
@@ -252,19 +268,27 @@ internal static class NativeDesktopTest
                 await Task.Delay(500);
                 await View.CoreWebView2.ExecuteScriptAsync("window.__qaProcesses=null;void fetch('/api/processes',{headers:{'X-Monitor-Lease':window.monitoringLeaseId}}).then(r=>window.__qaProcesses=r.status)");
                 await Wait("window.__qaProcesses===200", "Processes API unavailable");
+                await Wait("!!document.querySelector('.process-technical-name')", "Real running-process friendly metadata must appear",45);
+                await Wait("Array.from(document.querySelectorAll('#processesRows .process-name')).filter(x=>x.getAttribute('data-display-name')==='ChatGPT').length<2 || !!Array.from(document.querySelectorAll('.process-group .process-name')).find(x=>x.getAttribute('data-display-name')==='ChatGPT')", "Real ChatGPT instances, when present, should consolidate into a display group",45);
+                await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('#processesPage [data-sort=name]').click()");
+                await Wait("(()=>{const c=new Intl.Collator(undefined,{sensitivity:'base',numeric:true}),n=Array.from(document.querySelectorAll('#processesRows .process-name')).map(x=>x.getAttribute('data-display-name'));return n.length>1&&n.every((x,i)=>!i||c.compare(n[i-1],x)<=0)})()", "Real process display names must sort A-Z");
+                using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"processes-polish.png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('#processesPage [data-sort=name]').click()");
+                await Wait("(()=>{const c=new Intl.Collator(undefined,{sensitivity:'base',numeric:true}),n=Array.from(document.querySelectorAll('#processesRows .process-name')).map(x=>x.getAttribute('data-display-name'));return n.length>1&&n.every((x,i)=>!i||c.compare(n[i-1],x)>=0)})()", "Real process display names must sort Z-A");
+                Console.WriteLine("PASS real process friendly/technical labels and alphabetical ascending/descending; identity unchanged");
                 await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('[data-page=dashboardPage]').click()");
                 await View.CoreWebView2.ExecuteScriptAsync("scrollTo(0,0)");
                 using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-dashboard.png")))
                     await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
                 // Phone-sized presentation of the SAME document; no native bar.
-                var desktopSize=form.Size; var desktopMinimum=form.MinimumSize;
+                var desktopSize=form.Size; var desktopMinimum=form.MinimumSize; var desktopPadding=form.Padding; form.Padding=Padding.Empty;
                 form.MinimumSize=new System.Drawing.Size(320,400); form.Size=new System.Drawing.Size(390,844);
                 await View.CoreWebView2.ExecuteScriptAsync("document.documentElement.classList.remove('native-shell');syncPhoneSurface();document.body.style.setProperty('--app-safe-top','47px');scrollTo(0,0)");
                 await Wait("innerWidth<=430 && document.documentElement.scrollWidth<=innerWidth && !document.body.classList.contains('sidebar-expanded') && getComputedStyle(document.querySelector('.app-sidebar')).visibility==='hidden'", "Shared mobile presentation overflow/closed drawer");
-                await Wait("(()=>{const b=document.getElementById('sidebarToggle'),r=b.getBoundingClientRect();return r.width===48 && r.height===48 && getComputedStyle(b).borderRadius==='50%' && r.left>=18 && r.left<=22 && r.top>=47 && b.contains(document.elementFromPoint(r.left+24,r.top+24)) && getComputedStyle(document.querySelector('.native-app-identity')).display==='flex' && document.querySelector('.native-app-identity').textContent.trim()==='Rovarin' && document.querySelector('.native-app-bar').getBoundingClientRect().height===60 && document.querySelector('.dashboard-container').contains(b)})()", "Phone glass header must retain the circular menu, readable shared brand and safe-area placement");
+                await Wait("(()=>{const b=document.getElementById('sidebarToggle'),r=b.getBoundingClientRect();return r.width===48 && r.height===48 && getComputedStyle(b).borderRadius==='50%' && r.left>=18 && r.left<=22 && r.top>=47 && b.contains(document.elementFromPoint(r.left+24,r.top+24)) && getComputedStyle(document.querySelector('.native-app-identity')).display==='flex' && document.getElementById('appSectionTitle').textContent==='Dashboard' && document.querySelector('.sidebar-phone-brand').textContent.trim()==='Rovarin' && document.querySelector('.native-app-bar').getBoundingClientRect().height===60 && !document.querySelector('.dashboard-container').contains(b)})()", "Pinned phone header must retain circular menu, active section, drawer brand and safe-area placement");
                 await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('sidebarToggle').click()");
                 await Wait("document.body.classList.contains('sidebar-expanded') && !document.getElementById('appSidebar').inert && document.querySelector('.phone-page-surface').getBoundingClientRect().left>=document.getElementById('appSidebar').getBoundingClientRect().width-1 && getComputedStyle(document.getElementById('sidebarBackdrop')).opacity==='1' && document.getElementById('dashboardPage').inert", "Menu must push page aside and expose accessible navigation");
-                await Wait("(()=>{const n=document.getElementById('appSidebar');return n.getBoundingClientRect().top===0 && ['Dashboard','Processes','Maintenance','Diagnostics','Settings'].every(label=>Array.from(n.querySelectorAll('button')).some(b=>b.textContent.trim()===label && b.getBoundingClientRect().height>=44 && b.getBoundingClientRect().bottom<=innerHeight))})()", "Push drawer must expose every existing task and Settings");
+                await Wait("(()=>{const n=document.getElementById('appSidebar');return !n.querySelector('[data-page=diagnosticsPage]') && !!document.getElementById('diagnosticsPage') && n.getBoundingClientRect().top===0 && ['Dashboard','Processes','Apps','Maintenance','Settings'].every(label=>Array.from(n.querySelectorAll('button')).some(b=>b.textContent.trim()===label && b.getBoundingClientRect().height>=44 && b.getBoundingClientRect().bottom<=innerHeight))})()", "Push drawer must expose every existing task and Settings");
                 using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-mobile-drawer.png")))
                     await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
                 await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('sidebarBackdrop').click()");
@@ -284,7 +308,7 @@ internal static class NativeDesktopTest
                     await Wait("(()=>{const b=document.getElementById('nativeSettingsButton'),r=b.getBoundingClientRect();return r.height>=44 && r.bottom<=innerHeight && b.contains(document.elementFromPoint(r.left+22,r.top+22))})()", "Phone Settings must remain reachable at "+width);
                     await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('nativeSettingsButton').click()");
                     await Wait("!document.getElementById('diagnosticsPage').hidden && !document.body.classList.contains('sidebar-expanded') && !document.getElementById('diagnosticsPage').inert", "Phone Settings navigation at "+width);
-                    foreach(var page in new string[]{"dashboardPage","processesPage","diagnosticsPage"}) {
+                    foreach(var page in new string[]{"dashboardPage","processesPage","appsPage","diagnosticsPage"}) {
                         await View.CoreWebView2.ExecuteScriptAsync("showAppPage('"+page+"');document.querySelector('.dashboard-container').scrollTop=0");
                         await Wait("!document.getElementById('"+page+"').hidden && document.documentElement.scrollWidth<=innerWidth && document.querySelector('.native-app-bar').getBoundingClientRect().right<=innerWidth && getComputedStyle(document.querySelector('.metric-card')).backdropFilter==='none'", "Midnight phone page fit "+page+" at "+width+"x"+phoneSize.Height);
                     }
@@ -354,7 +378,7 @@ internal static class NativeDesktopTest
                     }
                 }
                 Console.WriteLine("PASS Midnight desktop 900x680/980x740/1440x900 all pages; reduced-motion/high-contrast no-blur fallback; confirmation cancel only");
-                form.MinimumSize=desktopMinimum; form.Size=desktopSize;
+                form.Padding=desktopPadding; form.MinimumSize=desktopMinimum; form.Size=desktopSize;
                 await View.CoreWebView2.ExecuteScriptAsync("document.body.style.removeProperty('--app-safe-top');document.documentElement.classList.add('native-shell');syncPhoneSurface()");
                 // The same SC_CLOSE path used by Alt+F4 hides to tray, preserving Node.
                 SendMessage(form.Handle,0x112,new IntPtr(0xF060),IntPtr.Zero);

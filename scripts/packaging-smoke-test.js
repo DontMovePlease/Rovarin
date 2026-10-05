@@ -315,16 +315,38 @@ async function main() {
   const files = manifest.files.map(file => file.path);
   // Current product text must be Rovarin. Opaque protocols and the dedicated
   // legacy migration helper are intentional compatibility, not visible branding.
-  for(const file of files.filter(file=>/\.(?:js|ps1|vbs|html|css|json|md|txt)$/.test(file))) {
+  // Reviewed migration-only safety guards: exact complete lines for each
+  // helper/server. Hashes bind the exception to the entire inspected deny-list/owned-
+  // process condition; any changed or additional legacy text still fails.
+  const compatibilityGuardLines = {
+  "app/scripts/terminate-process.ps1": ["4d4d3a970c1804ff016cd339820096110ffd1fa207fa51c18fe970b424a1616b"],
+  "app/server.js": ["a6f79e93bd4b701e8c215ca933b55b1e388595b39d4e6d8525b7fd9ce305bd08"],
+  "app/scripts/app-manager.ps1": [
+    "aa7490602e22db2ad40ffccb54fe7faeafac54539fa981d1ec7531a71ad92b41",
+    "525b01a0c8e0d24b53cecdcf86fdfdefcca8459cc5889a8300b434c0c8141fa3"
+  ],
+  "app/scripts/process-tree.cs": [
+    "d61fa68dedf425782abb352835011869026fd63d8c94fd53bda848c195ca8f47",
+    "87d6583ff11ec396d8b8b69540955c45ee63f3f3fecfb7c73eec28de8e528e02"
+  ]
+};
+  for(const file of files.filter(file=>/\.(?:js|ps1|cs|vbs|html|css|json|md|txt)$/.test(file))) {
     if(file==='app/scripts/rebrand-migration.ps1')continue;
     const text=fs.readFileSync(path.join(payload,file),'utf8').replace(/PC_MONITOR[A-Z_]*|pc_monitor_session|PCMonitor\.NativeDesktop\.v1|x-pc-monitor-(?:desktop|ui-revision)|uninstall-pc-monitor|pc-monitor-(?:ui-revision|sidebar-expanded|stream-state|processes|pagechange|desktop-visibility|uninstalling)|pcMonitorUninstalling/gi,'');
-    assert(!/pc[ _-]?monitor/i.test(text),'Unintended legacy branding in '+file);
+    const reviewed = compatibilityGuardLines[file] || [];
+    const lines = text.split(/\r?\n/);
+    for (const line of lines) {
+      if (!/pc[ _-]?monitor/i.test(line)) continue;
+      const digest = crypto.createHash('sha256').update(line).digest('hex');
+      assert(reviewed.includes(digest),'Unintended legacy branding in '+file);
+    }
+    for (const digest of reviewed) assert(lines.some(line=>crypto.createHash('sha256').update(line).digest('hex')===digest),'Reviewed legacy safety guard changed in '+file);
   }
   for (const file of ['runtime/node.exe', 'runtime/LICENSE', 'app/installation.json', 'app/update-manager.js', 'app/scripts/installed-update.ps1', 'app/scripts/setup.ps1', 'app/scripts/install-enhanced.ps1', 'app/scripts/rebrand-migration.ps1', 'app/desktop.vbs', 'app/startup.vbs', 'app/startup-disable.vbs']) assert(files.includes(file));
   for (const asset of ASSETS) assert(files.includes('app/vendor/LibreHardwareMonitor/0.9.6/' + asset));
   for (const file of ['LICENSE', 'THIRD-PARTY-NOTICES.txt', 'licenses/PawnIO.Modules.txt', 'source/LibreHardwareMonitor.zip']) assert(files.includes('app/vendor/LibreHardwareMonitor/0.9.6/' + file));
   assert(!files.some(file => /(?:config\.json|temperature-settings|server\.pid|server-state|server\.instance|\.log$|node_modules|smoke-test|pet-output|AGENTS\.md|PROJECT_STATUS\.md|THE-PLAN\.md)/.test(file)));
-  for (const file of ['pin-manager.js','process-termination.js','scripts/terminate-process.ps1']) assert(files.includes('app/' + file));
+  for (const file of ['pin-manager.js','process-termination.js', 'app-manager.js','scripts/terminate-process.ps1']) assert(files.includes('app/' + file));
   const developmentPin = fs.existsSync(path.join(root, 'config.json')) ? JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8')).pin : null;
   const privateAddresses = Object.values(os.networkInterfaces()).flat().filter(Boolean).map(info => info.address).filter(address => /^100\./.test(address));
   for (const file of manifest.files) {
@@ -570,7 +592,7 @@ async function main() {
     console.log('PASS payload hashes/licenses/no secrets, signed production package selection, fixed UAC flags, local address enforcement, result mapping and in-flight guard');
     // Isolated installed structure, random port, no startup/driver changes.
     const app = path.join(temp, 'app'); fs.mkdirSync(app);
-    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','cpu-temperature-provider.js','temperature-manager.js','maintenance.js','process-stats.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(app,name));
+    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','cpu-temperature-provider.js','temperature-manager.js','maintenance.js','process-stats.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(app,name));
     fs.writeFileSync(path.join(app,'installation.json'),'{}');
     let output = '', base;
     child = spawn(process.execPath, [path.join(app,'server.js')], {cwd:app, env:{...process.env,PORT:'0',PC_MONITOR_PIN:''},windowsHide:true,stdio:['ignore','pipe','pipe']});

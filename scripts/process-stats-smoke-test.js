@@ -197,8 +197,9 @@ async function testProcessMonitoring() {
       assert(typeof item.ramMB === 'number' && Number.isFinite(item.ramMB) && item.ramMB >= 0);
       assert(item.cpuPercent === null || (Number.isFinite(item.cpuPercent) && item.cpuPercent >= 0 && item.cpuPercent <= 100));
       assert(item.startedAt === null || (typeof item.startedAt === 'string' && item.startedAt.length > 0), 'start-time identity must be a string or null');
-      assert.deepStrictEqual(Object.keys(item).sort(), ['cpuPercent', 'name', 'pid', 'ramMB', 'startedAt'], 'only the minimal process fields should be returned');
+      assert.deepStrictEqual(Object.keys(item).sort(), ['cpuPercent', 'displayGroup', 'displayName', 'hasFriendlyName', 'name', 'pid', 'ramMB', 'startedAt'], 'only technical identity, metrics and safe display metadata should be returned');
     }
+    for(const item of first.processes){assert.equal(typeof item.displayName,'string');assert.equal(typeof item.hasFriendlyName,'boolean');assert(item.displayGroup===null||/^[a-f0-9]{64}$/.test(item.displayGroup),'group metadata must be opaque, never an executable path');}
     for (let index = 1; index < first.processes.length; index++) {
       assert((first.processes[index - 1].cpuPercent ?? -1) >= (first.processes[index].cpuPercent ?? -1), 'default order should be CPU descending');
     }

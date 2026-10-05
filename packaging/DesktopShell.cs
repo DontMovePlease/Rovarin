@@ -283,6 +283,9 @@ internal sealed class DesktopWindow : Form
                 wasMaximized = WindowState == FormWindowState.Maximized;
             }
             loginPresentation = login;
+            // WebView2 is a child HWND: leave the native resize hit-test band
+            // reachable instead of letting its content swallow edge drags.
+            Padding = login ? Padding.Empty : new Padding(Math.Max(5, (int)(6 * DeviceDpi / 96.0)));
             UpdateStyles(); // apply the mode before Windows computes restore/client bounds
             WindowState = FormWindowState.Normal;
             MinimumSize = login ? new Size(320, 320) : new Size(760, 560);

@@ -1,6 +1,6 @@
 {
   "name": "rovarin-dashboard",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "Lightweight personal Rovarining dashboard for Windows accessible via Tailscale",
   "main": "server.js",
   "scripts": {
@@ -14,8 +14,11 @@
     "test:temperature": "node scripts/temperature-manager-smoke-test.js",
     "test:gpu": "node scripts/gpu-degradation-smoke-test.js",
     "test:processes": "node scripts/process-stats-smoke-test.js",
-    "test:kill": "node scripts/process-kill-smoke-test.js",
-    "test:dev-watcher": "node scripts/dev-watcher-smoke-test.js"
+    "test:kill": "node scripts/process-kill-smoke-test.js && node scripts/process-tree-smoke-test.js",
+    "test:dev-watcher": "node scripts/dev-watcher-smoke-test.js",
+    "test:apps": "node scripts/app-manager-smoke-test.js",
+    "test:system-ui": "node scripts/system-management-ui-smoke-test.js",
+    "test:process-labels": "node scripts/process-display-smoke-test.js"
   },
   "keywords": [
     "system-monitor",

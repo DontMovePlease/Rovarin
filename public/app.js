@@ -837,6 +837,7 @@ function connectStream() {
     updateCpuDetailSampleState();
   };
 
+  source.addEventListener('apps-operation', event=>{if(eventSource===source){try{window.dispatchEvent(new CustomEvent('rovarin-apps-operation',{detail:JSON.parse(event.data)}));}catch(_){}}});
   source.addEventListener('processes', event => {
     if (eventSource !== source) return;
     try { window.dispatchEvent(new CustomEvent('pc-monitor-processes', { detail: JSON.parse(event.data) })); } catch (_) {}
@@ -1009,7 +1010,7 @@ function updatePageHistoryControls() {
   if (forward) forward.disabled = appPageHistoryIndex === appPageHistory.length - 1;
 }
 function showAppPage(pageId, recordHistory = true) {
-  const nextPage = ['processesPage', 'maintenancePage', 'diagnosticsPage'].includes(pageId) ? pageId : 'dashboardPage';
+  const nextPage = ['processesPage', 'appsPage', 'maintenancePage', 'diagnosticsPage'].includes(pageId) ? pageId : 'dashboardPage';
   if (recordHistory && appPageHistory[appPageHistoryIndex] !== nextPage) {
     appPageHistory.splice(appPageHistoryIndex + 1);
     appPageHistory.push(nextPage);
@@ -1018,6 +1019,9 @@ function showAppPage(pageId, recordHistory = true) {
   }
   updatePageHistoryControls();
   currentAppPage = nextPage;
+  const sectionTitle = { dashboardPage: 'Dashboard', processesPage: 'Processes', appsPage: 'Applications', maintenancePage: 'Maintenance', diagnosticsPage: 'Settings' }[nextPage];
+  document.getElementById('appSectionTitle').textContent = sectionTitle;
+  document.title = 'Rovarin · ' + sectionTitle;
   // Phone content scrolls below the chrome, not behind the status bar.
   document.querySelector('.dashboard-container')?.scrollTo(0, 0);
   phoneScrollPosition = 0;
@@ -1033,6 +1037,10 @@ function showAppPage(pageId, recordHistory = true) {
     if (active) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   });
+  const settingsButton = document.getElementById('nativeSettingsButton');
+  settingsButton.classList.toggle('is-active', nextPage === 'diagnosticsPage');
+  if (nextPage === 'diagnosticsPage') settingsButton.setAttribute('aria-current', 'page');
+  else settingsButton.removeAttribute('aria-current');
   if (nextPage === 'processesPage' && !monitoringLeaseId) startDashboardSession();
   setMonitoringProfile(nextPage === 'processesPage' ? 'processes' : 'dashboard');
   window.dispatchEvent(new CustomEvent('pc-monitor-pagechange', { detail: { page: nextPage } }));
@@ -1047,8 +1055,8 @@ function isPhoneSurface() {
   return phoneChromeQuery.matches && !document.documentElement.classList.contains('native-shell');
 }
 function syncPhoneSurface() {
-  if (isPhoneSurface()) phoneScrollPane.prepend(phoneMenu);
-  else phonePageSurface.insertBefore(phoneMenu, phoneScrollPane);
+  // Keep navigation outside the scrolling content on every presentation.
+  phonePageSurface.insertBefore(phoneMenu, phoneScrollPane);
 }
 syncPhoneSurface();
 function finishPhoneDrawerDrag() {
