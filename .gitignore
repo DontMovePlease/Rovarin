@@ -3,6 +3,8 @@ config.json
 config.json.*.tmp
 temperature-settings.json
 temperature-settings.json.*.tmp
+quick-launch.json
+quick-launch.json.*.tmp
 onboarding-complete.json
 server.log
 server.pid

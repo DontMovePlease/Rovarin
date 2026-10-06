@@ -77,7 +77,8 @@ module.exports = { calculateCpuPercent, parseCpuSeconds, isSameProcessInstance, 
 function friendlyProcessName(metadata, fallback) {
   const clean=value=>typeof value==='string'?value.trim().replace(/[\x00-\x1f\x7f]/g,'').slice(0,180):'';
   const product=clean(metadata?.productName);
-  return clean(metadata?.packageName) || (/^(Microsoft.*Windows.*Operating System|Microsoft.*Windows.*Betriebssystem)$/i.test(product)?'':product) || clean(metadata?.fileDescription) || clean(metadata?.serviceName) || fallback;
+  const pkg=clean(metadata?.packageName).replace(/\s+version\s+[\d.]+.*$/i,'');
+  return pkg || (/^(Microsoft.*Windows.*Operating System|Microsoft.*Windows.*Betriebssystem)$/i.test(product)?'':product) || clean(metadata?.fileDescription) || clean(metadata?.serviceName) || fallback;
 }
 class ProcessDisplayCache {
   constructor({resolve,stat=require('fs').statSync,now=Date.now}={}){this.entries=new Map();this.resolve=resolve||resolveProcessDisplay;this.stat=stat;this.now=now;this.busy=false;this.groupSecret=require('crypto').randomBytes(32);}

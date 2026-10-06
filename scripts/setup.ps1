@@ -85,7 +85,11 @@ if ($LASTEXITCODE -ne 0 -or -not $configFile) { throw 'Saved configuration is un
 $configFile = [string]$configFile
 # Recovery is a native user-launched window. No PIN HTTP endpoint or bypass.
 if ($RegeneratePin) {
-    & $node (Join-Path $appDir 'pin-manager.js') --regenerate | Out-Null
+    for ($attempt = 0; $attempt -lt 4; $attempt++) {
+        & $node (Join-Path $appDir 'pin-manager.js') --regenerate | Out-Null
+        if ($LASTEXITCODE -eq 0) { break }
+        Start-Sleep -Milliseconds 500
+    }
     if ($LASTEXITCODE -ne 0) { throw 'PIN regeneration failed.' }
 }
 $pin = (Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json).pin

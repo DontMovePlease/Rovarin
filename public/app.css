@@ -1187,19 +1187,42 @@ body.sidebar-expanded { --sidebar-width: 176px; }
    Safari supplies the inset when needed; standalone black status-bar mode
    reserves its own space. The same height positions the drawer and backdrop. */
 @media (max-width: 699px) {
-  html { background-color: #0c1420; height: 100%; overflow: hidden; }
-  body, .native-shell body {
+  html {
+    background-color: var(--chrome-background);
+    min-height: 100%;
+  }
+  @supports (min-height: 100dvh) {
+    html { min-height: 100dvh; }
+  }
+  html:not(.native-shell) body {
+    display: block;
+    min-height: 100%;
+    min-height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 0;
+    background-color: var(--chrome-background);
+    background-image: none;
+    background-attachment: scroll;
+    -webkit-overflow-scrolling: touch;
+  }
+  html:not(.native-shell) body.sidebar-expanded,
+  html:not(.native-shell) body.phone-drawer-dragging {
+    overflow: hidden;
+  }
+  .native-shell body {
     display: flex;
     flex-direction: column;
-    height: 100svh;
-    min-height: 0;
+    height: 100%;
+    min-height: 100%;
+    min-height: 100dvh;
     overflow: hidden;
     padding: 0;
-    background-color: #0c1420;
+    background-color: var(--chrome-background);
     background-image: none;
     background-attachment: scroll;
   }
-  .native-app-bar, .native-shell .native-app-bar {
+  .native-shell .native-app-bar {
     position: relative;
     margin: 0;
     padding-left: max(12px, env(safe-area-inset-left));
@@ -1211,7 +1234,7 @@ body.sidebar-expanded { --sidebar-width: 176px; }
   }
   .native-app-identity { font-size: 14px; }
   .native-app-identity > svg { width: 20px; height: 20px; }
-  .dashboard-container, .native-shell .dashboard-container {
+  .native-shell .dashboard-container {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
@@ -1247,20 +1270,37 @@ body.sidebar-expanded { --sidebar-width: 176px; }
     --phone-drawer-progress: 1;
   }
   html:not(.native-shell) .phone-page-surface {
-    display: flex; flex-direction: column; position: relative; z-index: 45;
-    width: 100%; height: 100%; min-height: 0; flex: 1;
-    padding-top: var(--app-safe-top); background: #0c1420;
+    display: block; position: relative; z-index: 45;
+    width: 100%; min-height: 100%; min-height: 100dvh; height: auto;
+    box-sizing: border-box;
+    padding-top: var(--app-safe-top); background: var(--chrome-background);
     transform: translate3d(var(--phone-drawer-offset), 0, 0);
     transition: transform .34s cubic-bezier(.22,1,.36,1), border-radius .34s ease, box-shadow .34s ease;
   }
+  html:not(.native-shell) body:not(.sidebar-expanded):not(.phone-drawer-dragging) .phone-page-surface { transform: none; }
   html:not(.native-shell) .sidebar-expanded .phone-page-surface { border-radius: 22px 0 0 22px; box-shadow: -12px 0 32px #0005; }
-  html:not(.native-shell) .dashboard-container { position: relative; padding-top: 68px; border-radius: inherit; transition: none; }
-  html:not(.native-shell) .native-app-bar {
-    position: absolute; top: 8px; left: max(12px, env(safe-area-inset-left)); right: auto;
-    z-index: 50; width: 48px; height: 48px; margin: 0; padding: 0;
-    border: 0; background: transparent;
+  html:not(.native-shell) .dashboard-container {
+    height: auto;
+    max-height: none;
+    min-height: 0;
+    overflow-x: visible;
+    overflow-y: visible;
+    position: relative;
+    padding-top: 0;
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+    background: transparent;
+    padding-inline: max(8px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-right));
+    border-radius: inherit;
+    transition: none;
   }
-  html:not(.native-shell) .native-app-identity,
+  html:not(.native-shell) .native-app-bar {
+    position: sticky; top: 8px; left: auto; right: auto;
+    z-index: 50; width: auto; height: 60px;
+    margin: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+    padding: 5px; gap: 14px;
+    background: var(--surface-glass-strong); border: 1px solid var(--glass-border);
+    border-radius: 22px; box-shadow: var(--glass-shadow); backdrop-filter: none; -webkit-backdrop-filter: none;
+  }
   html:not(.native-shell) .native-history { display: none; }
   html:not(.native-shell) .sidebar-toggle {
     width: 48px; height: 48px; border-radius: 50%; background: #172334;
@@ -1368,14 +1408,6 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   }
 }
 @media (max-width: 699px) {
-  html:not(.native-shell) body { background-color: var(--chrome-background); background-attachment: scroll; }
-  html:not(.native-shell) .phone-page-surface { background: var(--chrome-background); }
-  html:not(.native-shell) .dashboard-container { padding-top: 84px; }
-  html:not(.native-shell) .native-app-bar {
-    width: calc(100% - 24px); height: 60px; padding: 5px; gap: 14px;
-    background: var(--surface-glass-strong); border: 1px solid var(--glass-border);
-    border-radius: 22px; box-shadow: var(--glass-shadow); backdrop-filter: none; -webkit-backdrop-filter: none;
-  }
   html:not(.native-shell) .native-app-identity { display: flex; font-size: 20px; font-weight: 650; letter-spacing: -.035em; }
   html:not(.native-shell) .native-app-identity > svg { width: 24px; height: 24px; }
   html:not(.native-shell) .sidebar-toggle {

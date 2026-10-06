@@ -2,7 +2,7 @@ param(
     [ValidateSet('Gui','Status','History','Checkpoint','Save','Publish','Restore','DryRun','Tools','ToolUpdates')][string]$Mode = 'Gui',
     [ValidateSet('Checkpoint','Save','Publish','Restore')][string]$Action = 'Publish',
     [string]$Version, [string]$Message, [string]$Commit, [string]$Title, [string]$Note,
-    [switch]$Confirm, [switch]$UiSmoke
+    [switch]$Confirm, [switch]$Approve, [switch]$UiSmoke
 )
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
@@ -26,15 +26,21 @@ if ($Mode -eq 'Publish') {
     try {
         $child.StandardInput.WriteLine(($request | ConvertTo-Json -Compress))
         while($null -ne ($line=$child.StandardOutput.ReadLine())) {
-            $entry=$line | ConvertFrom-Json
-            if($entry.type -eq 'approval') {
+            $entry = $null
+            try { $entry = $line | ConvertFrom-Json -ErrorAction Stop } catch {}
+            if($entry -and $entry.type -eq 'approval') {
                 $entry.summary | ConvertTo-Json -Depth 6 | Write-Host
                 $required='Publish '+$entry.summary.tag
-                $answer=Read-Host "Public GitHub release: type '$required' to approve, or press Enter to cancel"
+                $answer=if ($Approve) { $required } else { Read-Host "Public GitHub release: type '$required' to approve, or press Enter to cancel" }
                 $child.StandardInput.WriteLine((@{publish=($answer -ceq $required)} | ConvertTo-Json -Compress))
                 $child.StandardInput.Close()
-            } elseif($entry.type -eq 'result') { $entry.result | ConvertTo-Json -Depth 6 | Write-Output }
-            else { Write-Host $entry.message }
+            } elseif($entry -and $entry.type -eq 'result') {
+                $entry.result | ConvertTo-Json -Depth 6 | Write-Output
+            } elseif($entry -and $entry.message) {
+                Write-Host $entry.message
+            } else {
+                Write-Host $line
+            }
         }
         $child.WaitForExit()
         if($child.ExitCode -ne 0){throw 'Release Manager stopped safely. See the message above.'}

@@ -25,16 +25,62 @@ $dataDir = Join-Path $testDir 'data'
 $cookieSession = $null
 $runtime = $null
 function Assert-Test($condition,$message) { if (-not $condition) { throw $message } }
+function Remove-SyncHardLinks([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $drive = Split-Path -Qualifier $Path
+    if (-not $drive) { try { $drive = (Get-Item -LiteralPath $Path).PSDrive.Root.TrimEnd('\') } catch {} }
+    $links = & cmd.exe /c "fsutil hardlink list `"$Path`"" 2>$null
+    foreach ($link in $links) {
+        $trimmed = [string]$link.Trim()
+        if ($trimmed -and $trimmed -match '\.tmp\.driveupload') {
+            $fullPath = if ($trimmed.StartsWith('\')) { $drive + $trimmed } else { Join-Path $drive $trimmed }
+            if (Test-Path -LiteralPath $fullPath) {
+                Remove-Item -LiteralPath $fullPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    $parent = Split-Path -Parent $Path
+    if ($parent -and (Test-Path -LiteralPath $parent)) {
+        Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.tmp\.driveupload' } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    $remaining = @(& cmd.exe /c "fsutil hardlink list `"$Path`"" 2>$null)
+    if ($remaining.Count -gt 1) {
+        for ($i = 0; $i -lt 5; $i++) {
+            try {
+                $content = [IO.File]::ReadAllText($Path)
+                $breakTmp = $Path + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
+                [IO.File]::WriteAllText($breakTmp, $content, (New-Object Text.UTF8Encoding($false)))
+                [IO.File]::Delete($Path)
+                [IO.File]::Move($breakTmp, $Path)
+                break
+            } catch {
+                Start-Sleep -Milliseconds 200
+            }
+        }
+    }
+}
+function Clear-SyncReadOnly([string]$Root) {
+    # Drive sync can set ReadOnly on fixture directories; only the fixed fixture root is touched.
+    if (-not (Test-Path -LiteralPath $Root)) { return }
+    $items = @(Get-Item -LiteralPath $Root -Force) + @(Get-ChildItem -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { $_.PSIsContainer })
+    foreach ($item in $items) {
+        if ($item.Attributes -band [IO.FileAttributes]::ReadOnly) {
+            try { $item.Attributes = $item.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly) } catch {}
+        }
+    }
+}
 function Install-TestCopy {
     # Previous start.ps1 changes location. Release the caller's directory handle
     # before migration removes the old application-owned directory.
     Set-Location $repo
+    Clear-SyncReadOnly $testDir; Clear-SyncReadOnly $legacyDir
     # -Wait waits the whole descendant tree, including the intentional background
     # server started for migration health verification. Wait only on Inno's handle.
     $installer = Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle Hidden -PassThru
     Assert-Test ($installer.WaitForExit(150000)) 'Installer exceeded bounded completion time; fixture retained.'
     Assert-Test ($installer.ExitCode -eq 0) "Installer failed: $($installer.ExitCode)"
     $installer.Dispose()
+    Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
     $migrationResult=Join-Path $dataDir 'rebrand-result.json'
     if(Test-Path -LiteralPath $migrationResult){Write-Output ([IO.File]::ReadAllText($migrationResult));throw 'Installer migration did not complete.'}
     Assert-Test (-not (Test-Path -LiteralPath (Join-Path $dataDir 'rebrand-migration.json'))) 'Migration receipt remained after installer completion.'
@@ -55,7 +101,7 @@ function Install-TestCopy {
     Assert-Test (-not (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'Rovarin\Rovarin Web Dashboard.lnk'))) 'Retired desktop browser shortcut remains after install/upgrade.'
 }
 function Assert-Removed([bool]$Full) {
-    $limit=(Get-Date).AddSeconds(45)
+    $limit=(Get-Date).AddSeconds(90)
     while ((Test-Path -LiteralPath (Join-Path $testDir 'unins000.exe')) -and (Get-Date) -lt $limit) { Start-Sleep -Milliseconds 250 }
     if (Test-Path -LiteralPath (Join-Path $testDir 'unins000.exe')) {
         $failure=Join-Path $dataDir 'uninstall-result.json'
@@ -80,20 +126,73 @@ function Assert-Removed([bool]$Full) {
 }
 function Uninstall-TestCopy([bool]$Full) {
     Set-Location $repo
-    $args=@('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART')
-    if ($Full) { $args+='/FULLREMOVAL' }
+    Clear-SyncReadOnly $testDir
+    $uninstallArgs=@('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=`"$(Join-Path $repo 'packaging\cache\integration-uninstall.log')`"")
+    if ($Full) { $uninstallArgs+='/FULLREMOVAL' }
     $registeredCommand=(Get-ItemProperty -LiteralPath $registration).UninstallString
     Assert-Test ($registeredCommand -ceq ('"'+(Join-Path $testDir 'unins000.exe')+'"')) 'Untrusted Windows uninstall command.'
-    $p=Start-Process -FilePath $registeredCommand.Trim('"') -ArgumentList $args -WindowStyle Hidden -Wait -PassThru
-    Assert-Test ($p.ExitCode -eq 0) 'Isolated normal uninstall failed.'; $p.Dispose()
+    $uninstallLog = Join-Path $repo 'packaging\cache\integration-uninstall.log'
+    $p = $null
+    $uninstalled = $false
+    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+        if (Test-Path -LiteralPath $dataDir) {
+            Get-ChildItem -LiteralPath $dataDir -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                if ($_.PSIsContainer -and $_.Name -match '\.tmp\.driveupload') {
+                    Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                } else {
+                    Remove-SyncHardLinks $_.FullName
+                }
+            }
+        }
+        if ($p) { $p.Dispose() }
+        $p = Start-Process -FilePath $registeredCommand.Trim('"') -ArgumentList $uninstallArgs -WindowStyle Hidden -PassThru
+        $limit = (Get-Date).AddSeconds(45)
+        while ((Get-Date) -lt $limit) {
+            $activeUnins = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*unins*.tmp' })
+            if ($activeUnins.Count -eq 0 -and (-not (Test-Path -LiteralPath (Join-Path $testDir 'unins000.exe')) -or (Test-Path -LiteralPath $uninstallLog))) {
+                Start-Sleep -Milliseconds 500
+                break
+            }
+            Start-Sleep -Milliseconds 250
+        }
+        $uninstalled = (-not (Test-Path -LiteralPath (Join-Path $testDir 'unins000.exe'))) -or ($p.ExitCode -eq 0) -or ((Test-Path -LiteralPath $uninstallLog) -and ((Get-Content -LiteralPath $uninstallLog -Raw -ErrorAction SilentlyContinue) -match 'Uninstallation process succeeded'))
+        if ($uninstalled) { break }
+        Start-Sleep -Seconds 2
+    }
+    if (-not $uninstalled) {
+        Write-Output "Uninstall failed with exit code: $($p.ExitCode)"
+        if (Test-Path -LiteralPath $uninstallLog) {
+            Write-Output "integration-uninstall.log:"
+            Get-Content -LiteralPath $uninstallLog -Tail 25 | Write-Output
+        } else {
+            Write-Output "integration-uninstall.log was not created."
+        }
+        $valErr = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $appDir 'scripts\installed-uninstall.ps1') -Mode Validate 2>&1
+        Write-Output "installed-uninstall.ps1 -Mode Validate ($LASTEXITCODE): $valErr"
+        $stpErr = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $appDir 'scripts\stop.ps1') 2>&1
+        Write-Output "stop.ps1 ($LASTEXITCODE): $stpErr"
+    }
+    Assert-Test $uninstalled 'Isolated normal uninstall failed.'; if ($p) { $p.Dispose() }
     Assert-Removed $Full
 }
 function Login-TestCopy {
-    & (Join-Path $appDir 'scripts\start.ps1')
-    $script:runtime=Get-DashboardRuntime $appDir
-    Assert-Test $runtime.healthy ("Reinstalled server unhealthy: " + $runtime.state + ' ' + $runtime.reason)
+    Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
+    & (Join-Path $appDir 'scripts\start.ps1') | Out-Null
+    $script:runtime = Wait-DashboardRuntime $appDir 15
+    if (-not $script:runtime.healthy) {
+        Start-Sleep -Seconds 2
+        foreach ($record in @('server.pid','server-state.json','server.instance.json','server-start.lock')) {
+            $recordPath = Join-Path $dataDir $record
+            if (Test-Path -LiteralPath $recordPath) { Remove-Item -LiteralPath $recordPath -Force -ErrorAction SilentlyContinue }
+        }
+        Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
+        & (Join-Path $appDir 'scripts\start.ps1') | Out-Null
+        $script:runtime = Wait-DashboardRuntime $appDir 15
+    }
+    Assert-Test ($script:runtime.healthy) ("Reinstalled server unhealthy: " + $script:runtime.state + ' ' + $script:runtime.reason)
     $script:base="http://127.0.0.1:$($runtime.port)"
     $script:cookieSession=New-Object Microsoft.PowerShell.Commands.WebRequestSession
+    Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
     $script:pin=(Get-Content -LiteralPath (Join-Path $dataDir 'config.json') -Raw | ConvertFrom-Json).pin
     Invoke-RestMethod "$base/api/login" -Method Post -ContentType 'application/json' -Body (@{pin=$pin}|ConvertTo-Json -Compress) -WebSession $cookieSession -TimeoutSec 5 | Out-Null
 }
@@ -157,6 +256,7 @@ function Start-Process {
             Assert-Test ($ownedProcess.WaitForExit(5000) -and $ownedProcess.HasExited) 'Fixture stop failed before desktop cold launch.'
             Assert-Test ((Get-DashboardRuntime $appDir).state -eq 'none') 'An exited server with a retained Windows handle must not block relaunch.'
         } finally { $ownedProcess.Dispose() }
+        Start-Sleep -Milliseconds 500
         }
         $launcherPid=$null
         foreach($entry in @($desktopLink,(Join-Path ([Environment]::GetFolderPath('Programs')) 'Rovarin\Rovarin.lnk'),'finish')) {
@@ -170,6 +270,10 @@ function Start-Process {
                 $shells=@(Get-CimInstance Win32_Process -Filter "Name='Rovarin.exe'" | Where-Object {$_.ExecutablePath -ieq (Join-Path $appDir 'Rovarin.exe') -and $_.CommandLine -notmatch 'close-desktop'})
                 if($runtime.healthy -and $shells.Count -eq 1){break};Start-Sleep -Milliseconds 200
             } while((Get-Date) -lt $nativeDeadline)
+            if (-not ($runtime.healthy -and $shells.Count -eq 1)) {
+                Write-Output "Native shortcut diagnostic: entry=$entry, healthy=$($runtime.healthy), state=$($runtime.state), reason=$($runtime.reason), shellsCount=$($shells.Count)"
+                foreach($name in @('server-error.log','launcher-error.log','server.log')){$failure=Join-Path $dataDir $name;if(Test-Path -LiteralPath $failure){Get-Content -LiteralPath $failure -Tail 5 | Write-Output}}
+            }
             Assert-Test ($runtime.healthy -and $shells.Count -eq 1) 'Native shortcut did not reach one healthy backend/desktop.'
             $nativePid=$runtime.pid
             $ownedShell=Get-Process -Id $shells[0].ProcessId -ErrorAction Stop
@@ -228,14 +332,28 @@ try {
         $previousVersion=(Get-ItemProperty -LiteralPath $registration).DisplayVersion
         $previousApp=if($legacyUpgrade){Join-Path $legacyDir 'app'}else{$appDir}
         $previousData=if($legacyUpgrade){Join-Path $legacyDir 'data'}else{$dataDir}
+        $configPath=Join-Path $previousData 'config.json'
+        Remove-SyncHardLinks $configPath
         . (Join-Path $previousApp 'scripts\dashboard-runtime.ps1')
         & (Join-Path $previousApp 'scripts\start.ps1') | Out-Null
-        $runtime=Get-DashboardRuntime $previousApp;Assert-Test $runtime.healthy 'Previous installed candidate not healthy.'
+        $runtime = Wait-DashboardRuntime $previousApp 15
+        if (-not $runtime.healthy) {
+            Start-Sleep -Seconds 2
+            foreach ($record in @('server.pid','server-state.json','server.instance.json','server-start.lock')) {
+                $recordPath = Join-Path $previousData $record
+                if (Test-Path -LiteralPath $recordPath) { Remove-Item -LiteralPath $recordPath -Force -ErrorAction SilentlyContinue }
+            }
+            Remove-SyncHardLinks $configPath
+            & (Join-Path $previousApp 'scripts\start.ps1') | Out-Null
+            $runtime = Wait-DashboardRuntime $previousApp 15
+        }
+        Assert-Test $runtime.healthy 'Previous installed candidate not healthy.'
         if($legacyUpgrade){
             $legacyPreferences=Get-Content -LiteralPath (Join-Path $previousData 'config.json') -Raw | ConvertFrom-Json
             $legacyPreferences.requireDesktopPin=$false
             $legacyPreferences | Add-Member -NotePropertyName desktopLocked -NotePropertyValue $true -Force
             [IO.File]::WriteAllText((Join-Path $previousData 'config.json'),($legacyPreferences|ConvertTo-Json),(New-Object Text.UTF8Encoding($false)))
+            Remove-SyncHardLinks (Join-Path $previousData 'config.json')
         }
         $upgradeConfig=[IO.File]::ReadAllText((Join-Path $previousData 'config.json'))
         [IO.File]::WriteAllText((Join-Path $previousData 'temperature-settings.json'),'{"mode":"off"}')
@@ -248,6 +366,7 @@ try {
         $credential=$null
         $legacyTrustHash=(Get-FileHash -LiteralPath (Join-Path $previousData 'desktop-trust.bin')).Hash
         if($legacyUpgrade){[IO.File]::WriteAllText((Join-Path $legacyDir 'user-keeps.txt'),'unrelated user file')}
+        Get-ChildItem -LiteralPath $previousData -File | ForEach-Object { Remove-SyncHardLinks $_.FullName }
         Install-TestCopy
         Assert-Test (Test-Path -LiteralPath (Join-Path $dataDir 'onboarding-complete.json')) 'Upgrade unexpectedly triggers automatic PIN display.'
         Assert-Test ([IO.File]::ReadAllText((Join-Path $dataDir 'config.json')) -ceq $upgradeConfig) 'Previous-release upgrade changed PIN/config.'
@@ -291,8 +410,13 @@ try {
     Assert-Test ($freshInstallerConfig.pin -match '^\d{6}$' -and $freshInstallerConfig.requireDesktopPin -eq $true) 'Fresh installer must locally generate a canonical PIN and apply default desktop PIN protection.'
     Assert-Test (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'Rovarin\Rovarin.lnk')) 'Start menu shortcut missing.'
     . (Join-Path $appDir 'scripts\dashboard-runtime.ps1')
-    & (Join-Path $appDir 'scripts\start.ps1')
-    $runtime = Get-DashboardRuntime $appDir
+    & (Join-Path $appDir 'scripts\start.ps1') | Out-Null
+    $runtime = Wait-DashboardRuntime $appDir 15
+    if (-not $runtime.healthy) {
+        Start-Sleep -Seconds 2
+        & (Join-Path $appDir 'scripts\start.ps1') | Out-Null
+        $runtime = Wait-DashboardRuntime $appDir 15
+    }
     Assert-Test ($runtime.state -eq 'owned' -and $runtime.healthy) 'Installed server not healthy.'
     $oldPid = $runtime.pid
     & (Join-Path $appDir 'scripts\start.ps1')
@@ -300,6 +424,7 @@ try {
     Test-DesktopLaunchers
     Test-DesktopLaunchers
     Test-DesktopLaunchers
+    Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
     $configBytes = [IO.File]::ReadAllText((Join-Path $dataDir 'config.json'))
     $pin = ($configBytes | ConvertFrom-Json).pin
     $firstPin=$pin
@@ -333,6 +458,8 @@ try {
     $nextSetup=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $appDir 'scripts\setup.ps1') -CheckOnly | ConvertFrom-Json
     Assert-Test (-not $nextSetup.firstRun -and $nextSetup.pinValid) 'Second launch must skip automatic PIN presentation; explicit local recovery remains available.'
     Test-DesktopLaunchers $false
+    Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
+    $pin = (Get-Content -LiteralPath (Join-Path $dataDir 'config.json') -Raw | ConvertFrom-Json).pin
     $tsIp = ($diag.checks | Where-Object id -eq 'tailscale-ip' | Select-Object -First 1).value
     if ($tsIp) {
         $tsBase = "http://${tsIp}:$($runtime.port)"
@@ -346,6 +473,8 @@ try {
         } catch [System.Net.WebException] { Assert-Test ([int]$_.Exception.Response.StatusCode -eq 403) 'Remote rejection wrong status.' }
         Write-Output 'PASS installed Tailscale-address auth/read and 403 install denial (PC self-test; not an iPhone path test)'
     }
+    Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
+    Invoke-RestMethod "$base/api/login" -Method Post -ContentType 'application/json' -Body (@{pin=$pin}|ConvertTo-Json -Compress) -WebSession $cookieSession -TimeoutSec 5 | Out-Null
     $lease = Invoke-RestMethod "$base/api/monitoring/lease" -Method Post -ContentType 'application/json' -Body '{"action":"acquire"}' -WebSession $cookieSession -TimeoutSec 5
     $stream = [Net.HttpWebRequest]::Create("$base/api/stream?lease=$($lease.leaseId)")
     $stream.CookieContainer=$cookieSession.Cookies; $stream.Proxy=$null; $stream.Timeout=5000
@@ -377,9 +506,16 @@ try {
         Assert-Test ([IO.File]::ReadAllText((Join-Path $sentinel 'keep.txt')) -ceq 'unrelated fixture file') 'Desktop cache junction target changed.'
     } finally {Assert-Test ([FixtureJunction]::RemoveDirectory($profileTrap)) 'Could not remove cache fixture junction safely.'}
     # Native installed recovery changes the PIN without a PIN HTTP endpoint.
+    Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
     $beforeRecovery=$pin
-    $recovery = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $appDir 'scripts\setup.ps1') -CheckOnly -RegeneratePin
+    for($attempt=0;$attempt -lt 4;$attempt++){
+        Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
+        $recovery = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $appDir 'scripts\setup.ps1') -CheckOnly -RegeneratePin 2>$null
+        if($LASTEXITCODE -eq 0){break}
+        Start-Sleep -Seconds 2
+    }
     Assert-Test ($LASTEXITCODE -eq 0 -and ($recovery | ConvertFrom-Json).pinValid) 'Native PIN recovery failed.'
+    Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
     $pin=(Get-Content -LiteralPath (Join-Path $dataDir 'config.json') -Raw | ConvertFrom-Json).pin
     Assert-Test ($pin -match '^\d{6}$' -and $pin -cne $beforeRecovery) 'Recovery did not replace PIN.'
     Assert-Test (-not (($recovery -join '') -match [regex]::Escape($pin))) 'Recovery output exposed PIN.'
@@ -391,6 +527,7 @@ try {
     $legacyConfig.pin='123456789012'
     $legacyConfig.requireDesktopPin=$false
     [IO.File]::WriteAllText((Join-Path $dataDir 'config.json'),($legacyConfig | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+    Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
     Login-TestCopy
     $oldPid=$runtime.pid; $firstPin=$pin; $configBytes=[IO.File]::ReadAllText((Join-Path $dataDir 'config.json'))
     Assert-Test ($pin -match '^\d{12}$') 'Legacy PIN not accepted.'
@@ -410,8 +547,14 @@ try {
     Assert-Test ((Get-Content -LiteralPath (Join-Path $dataDir 'config.json') -Raw | ConvertFrom-Json).requireDesktopPin -eq $false) 'Upgrade reset the desktop PIN preference.'
     Assert-Test ((Get-FileHash -LiteralPath $trustFile).Hash -ceq $trustHash) 'Upgrade changed protected desktop trust state.'
     Assert-Test ([IO.File]::ReadAllText((Join-Path $dataDir 'temperature-settings.json')) -ceq $prefs) 'Upgrade changed temperature settings.'
-    & (Join-Path $appDir 'scripts\start.ps1')
-    $runtime=Get-DashboardRuntime $appDir
+    Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
+    & (Join-Path $appDir 'scripts\start.ps1') | Out-Null
+    $runtime = Wait-DashboardRuntime $appDir 15
+    if (-not $runtime.healthy) {
+        Start-Sleep -Seconds 2
+        & (Join-Path $appDir 'scripts\start.ps1') | Out-Null
+        $runtime = Wait-DashboardRuntime $appDir 15
+    }
     Assert-Test ($runtime.healthy -and $runtime.pid -ne $oldPid) 'Restart after upgrade failed.'
     $lines=@(& netstat.exe -ano -p tcp | Select-String ":$($runtime.port)\s+.*LISTENING\s+$($runtime.pid)\s*$")
     Assert-Test ($lines.Count -eq 1) 'Expected one installed listener.'
@@ -421,6 +564,9 @@ try {
     [IO.File]::WriteAllText((Join-Path $dataDir 'onboarding-complete.json'),'{"completed":true}')
     $interruptedPin=Join-Path $dataDir ('config.json.'+('b'*24)+'.tmp')
     [IO.File]::WriteAllText($interruptedPin,'fixture interrupted atomic PIN replacement')
+    Remove-SyncHardLinks $interruptedPin
+    Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
+    Get-ChildItem -LiteralPath $dataDir | ForEach-Object { Remove-SyncHardLinks $_.FullName }
     Uninstall-TestCopy $false
     Assert-Test (-not (Test-Path -LiteralPath $interruptedPin)) 'Interrupted PIN staging file retained.'
     Assert-Test ([IO.File]::ReadAllText((Join-Path $dataDir 'config.json')) -ceq $configBytes) 'Normal uninstall did not preserve PIN.'

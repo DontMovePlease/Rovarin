@@ -232,7 +232,7 @@ async function test(root = path.resolve(__dirname,'..')) {
     const dir = path.join(temp,String(++sequence)); fs.mkdirSync(dir);
     const policy = JSON.parse(fs.readFileSync(path.join(root,'scripts/release-public-files.json'),'utf8'));
     for (const file of policy) if (fs.existsSync(path.join(root,file))) { fs.mkdirSync(path.dirname(path.join(dir,file)),{recursive:true}); fs.copyFileSync(path.join(root,file),path.join(dir,file)); }
-    git(dir,['init','-b','main']); git(dir,['add','--all']); git(dir,['commit','-m','Fixture initial source']);
+    git(dir,['init','-b','main']); git(dir,['config','core.autocrlf','false']); git(dir,['add','--all']); git(dir,['commit','-m','Fixture initial source']);
     const pub = path.join(dir,'packaging/cache/github-publication'); fs.mkdirSync(path.dirname(pub),{recursive:true});
     git(dir,['clone','--no-hardlinks',dir,pub]); git(pub,['remote','set-url','origin','https://github.com/DontMovePlease/Rovarin.git']);
     git(pub,['config','user.name','DontMovePlease']); git(pub,['config','user.email','DontMovePlease@users.noreply.github.com']);

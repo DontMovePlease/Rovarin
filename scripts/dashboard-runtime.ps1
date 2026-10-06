@@ -55,8 +55,12 @@ function Get-DashboardRuntime([string]$ProjectDir) {
         if ($candidate.HasExited) { return @{ state='none' } }
         if ($candidate.ProcessName -ne 'node') { return @{ state='unsafe'; reason='Recorded PID is not Node.' } }
         if (Test-Path -LiteralPath (Join-Path $applicationDir 'installation.json')) {
-            $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$serverPid" -OperationTimeoutSec 2 -ErrorAction Stop
-            if (-not $processInfo -and $candidate.HasExited) { return @{ state='none' } }
+            $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$serverPid" -OperationTimeoutSec 2 -ErrorAction SilentlyContinue
+            if (-not $processInfo) {
+                $candidate.Refresh()
+                if ($candidate.HasExited -or -not (Get-Process -Id $serverPid -ErrorAction SilentlyContinue)) { return @{ state='none' } }
+                return @{ state='unsafe'; reason='Installed server process query failed.' }
+            }
             $expectedNode = Join-Path (Split-Path -Parent $applicationDir) 'runtime\node.exe'
             $expectedServer = Join-Path $applicationDir 'server.js'
             if (-not $processInfo.ExecutablePath -or [IO.Path]::GetFullPath($processInfo.ExecutablePath) -ine [IO.Path]::GetFullPath($expectedNode) -or
@@ -74,7 +78,7 @@ function Wait-DashboardRuntime([string]$ProjectDir, [int]$TimeoutSeconds = 12) {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
         $runtime = Get-DashboardRuntime $ProjectDir
-        if ($runtime.state -eq 'unsafe' -or ($runtime.state -eq 'owned' -and $runtime.healthy)) { return $runtime }
+        if ($runtime.state -eq 'owned' -and $runtime.healthy) { return $runtime }
         if ((Get-Date) -ge $deadline) { return $runtime }
         Start-Sleep -Milliseconds 300
     } while ($true)

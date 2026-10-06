@@ -31,7 +31,7 @@ $runtime = Join-Path $payload 'runtime'
 New-Item -ItemType Directory -Force -Path $app,$runtime,(Join-Path $app 'scripts'),(Join-Path $app 'public'),(Join-Path $app 'vendor\PawnIO\2.2.0') | Out-Null
 $rootFiles = @('server.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','enhanced-support.js','uninstall-manager.js','update-manager.js','process-stats.js','maintenance.js','temperature-manager.js','cpu-temperature-provider.js','package.json','run_hidden.vbs','LICENSE')
 foreach ($name in $rootFiles) { Copy-Item -LiteralPath (Join-Path $repo $name) -Destination $app }
-$scripts = @('start.ps1','stop.ps1','desktop.ps1','desktop-host.ps1','native-trust.ps1','dashboard-runtime.ps1','installed-start.ps1','installed-desktop.ps1','setup.ps1','phone-qr.js','empty-recycle-bin.ps1','install-enhanced.ps1','installed-uninstall.ps1','installed-update.ps1','rebrand-migration.ps1','cpu-temperature-provider.ps1','terminate-process.ps1','process-tree.ps1','process-tree.cs','app-manager.ps1','app-uninstall.cs','process-display.ps1','application-display.ps1')
+$scripts = @('start.ps1','stop.ps1','desktop.ps1','desktop-host.ps1','native-trust.ps1','dashboard-runtime.ps1','installed-start.ps1','installed-desktop.ps1','setup.ps1','phone-qr.js','empty-recycle-bin.ps1','install-enhanced.ps1','installed-uninstall.ps1','installed-update.ps1','rebrand-migration.ps1','cpu-temperature-provider.ps1','terminate-process.ps1','process-tree.ps1','process-tree.cs','app-manager.ps1','app-uninstall.cs','app-metadata.cs','process-display.ps1','application-display.ps1')
 foreach ($name in $scripts) { Copy-Item -LiteralPath (Join-Path $repo "scripts\$name") -Destination (Join-Path $app 'scripts') }
 Copy-Item -LiteralPath (Join-Path $repo 'public') -Destination $app -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $repo 'vendor\LibreHardwareMonitor') -Destination (Join-Path $app 'vendor') -Recurse -Force
@@ -98,9 +98,19 @@ if (-not (Test-Path -LiteralPath $compiler)) {
     if ($process.ExitCode -ne 0) { throw 'Inno Setup installation failed.' }
 }
 if ((Get-AuthenticodeSignature -LiteralPath $compiler).Status -ne 'Valid') { throw 'Compiler signature invalid.' }
-& $compiler (Join-Path $PSScriptRoot 'Rovarin.iss')
-if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
-$exe = Join-Path $repo 'dist\RovarinSetup.exe'
+$tempOut = Join-Path $env:TEMP ('rovarin-build-' + [Guid]::NewGuid().ToString('N'))
+[IO.Directory]::CreateDirectory($tempOut) | Out-Null
+try {
+    & $compiler ("--output-dir=$tempOut") (Join-Path $PSScriptRoot 'Rovarin.iss')
+    if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
+    $dist = Join-Path $repo 'dist'
+    if (-not (Test-Path -LiteralPath $dist)) { [IO.Directory]::CreateDirectory($dist) | Out-Null }
+    $builtExe = Join-Path $tempOut 'RovarinSetup.exe'
+    $exe = Join-Path $dist 'RovarinSetup.exe'
+    Copy-Item -LiteralPath $builtExe -Destination $exe -Force
+} finally {
+    Remove-Item -LiteralPath $tempOut -Recurse -Force -ErrorAction SilentlyContinue
+}
 $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText((Join-Path $repo 'dist\RovarinSetup.sha256'), "$hash  RovarinSetup.exe`r`n")
 $buildInfo = @{version=(Get-Content -LiteralPath (Join-Path $repo 'package.json') -Raw | ConvertFrom-Json).version; builtAt=[DateTime]::UtcNow.ToString('o'); sha256=$hash; payloadManifestSha256=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'payload-manifest.json')).Hash.ToLowerInvariant(); inputs=@()}

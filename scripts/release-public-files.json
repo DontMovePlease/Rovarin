@@ -54,6 +54,7 @@
   "scripts/app-manager-smoke-test.js",
   "scripts/app-manager-test-tools.ps1",
   "scripts/app-manager.ps1",
+  "scripts/app-metadata.cs",
   "scripts/app-uninstall.cs",
   "scripts/application-display.ps1",
   "scripts/config-access-smoke-test.js",

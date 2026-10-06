@@ -1,3 +1,18 @@
+function reportClientLog(event, detail = {}) {
+  try {
+    fetch('/api/debug/client-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event, url: window.location.href, detail })
+    }).catch(() => {});
+  } catch (_) {}
+}
+window.reportClientLog = reportClientLog;
+reportClientLog('APP_PAGE_SCRIPT_EXEC', {
+  hasSessionCookie: String(typeof document !== 'undefined' && document.cookie ? document.cookie : '').includes('pc_monitor_session'),
+  visibility: typeof document !== 'undefined' ? document.visibilityState : 'unknown'
+});
+
 // State and History Buffer
 const MAX_POINTS = 30;
 const loadedDashboardRevision = document.querySelector('meta[name="pc-monitor-ui-revision"]')?.content;
@@ -811,13 +826,16 @@ const supportedMonitoringProfiles = new Set(['dashboard', 'cpu-detail', 'gpu-det
 const reconnectBanner = document.getElementById('reconnectBanner');
 let authRedirecting = false;
 
-function redirectToLogin() {
+function redirectToLogin(reason = 'unspecified') {
+  reportClientLog('REDIRECT_TO_LOGIN', { reason, stack: new Error().stack });
   if (authRedirecting) return;
   authRedirecting = true;
   stopLeaseHeartbeat();
   closeDashboardConnections();
+  if (typeof cleanupLoginViewportState === 'function') cleanupLoginViewportState();
   window.location.replace('/');
 }
+window.redirectToLogin = redirectToLogin;
 
 function connectStream() {
   if (window.pcMonitorUninstalling) return;
@@ -900,7 +918,8 @@ async function acquireMonitoringLease() {
       credentials: 'same-origin',
       body: JSON.stringify({ action: 'acquire' })
     });
-    if (res.status === 401) { redirectToLogin(); return false; }
+    reportClientLog('ACQUIRE_LEASE_RESPONSE', { status: res.status, ok: res.ok });
+    if (res.status === 401) { redirectToLogin('acquire-lease-401'); return false; }
     if (!res.ok) return false;
     const data = await res.json();
     if (window.pcMonitorUninstalling) return false;
@@ -932,7 +951,7 @@ async function heartbeatMonitoringLease() {
       await startDashboardSession();
       return;
     }
-    if (res.status === 401) { redirectToLogin(); return; }
+    if (res.status === 401) { redirectToLogin('heartbeat-lease-401'); return; }
     if (appliedMonitoringProfile !== desiredMonitoringProfile && !profileRequestPending) {
       await setMonitoringProfile(desiredMonitoringProfile);
     }
@@ -978,7 +997,7 @@ function setMonitoringProfile(profile = 'dashboard') {
         window.setTimeout(() => startDashboardSession(), 0);
         return false;
       }
-      if (res.status === 401) { redirectToLogin(); return false; }
+      if (res.status === 401) { redirectToLogin('set-profile-401'); return false; }
       if (!res.ok) return false;
       const result = await res.json();
       if (result.success === true && result.profile === profile) {
@@ -1022,10 +1041,9 @@ function showAppPage(pageId, recordHistory = true) {
   const sectionTitle = { dashboardPage: 'Dashboard', processesPage: 'Processes', appsPage: 'Applications', maintenancePage: 'Maintenance', diagnosticsPage: 'Settings' }[nextPage];
   document.getElementById('appSectionTitle').textContent = sectionTitle;
   document.title = 'Rovarin · ' + sectionTitle;
-  // Phone content scrolls below the chrome, not behind the status bar.
+  // Content scrolls below the chrome; reset container and window scroll positions.
   document.querySelector('.dashboard-container')?.scrollTo(0, 0);
-  phoneScrollPosition = 0;
-  phoneScrollTravel = 0;
+  if (typeof window.scrollTo === 'function') window.scrollTo(0, 0);
   document.querySelectorAll('.app-page').forEach(page => {
     const active = page.id === nextPage;
     page.hidden = !active;
@@ -1054,6 +1072,23 @@ const phoneMenu = document.querySelector('.native-app-bar');
 function isPhoneSurface() {
   return phoneChromeQuery.matches && !document.documentElement.classList.contains('native-shell');
 }
+function cleanupLoginViewportState() {
+  const root = document.documentElement;
+  root.classList.remove('login-page', 'login-keyboard');
+  root.style.removeProperty('--login-viewport-height');
+  root.style.removeProperty('--login-viewport-top');
+  document.body?.classList?.remove('login-page', 'login-keyboard');
+  document.body?.style?.removeProperty('--login-viewport-height');
+  document.body?.style?.removeProperty('--login-viewport-top');
+  if (isPhoneSurface() && (window.scrollY !== 0 || window.scrollX !== 0)) {
+    window.scrollTo(0, 0);
+  }
+}
+cleanupLoginViewportState();
+window.addEventListener('pageshow', () => {
+  cleanupLoginViewportState();
+});
+
 function syncPhoneSurface() {
   // Keep navigation outside the scrolling content on every presentation.
   phonePageSurface.insertBefore(phoneMenu, phoneScrollPane);
@@ -1297,6 +1332,7 @@ async function releaseMonitoringLease() {
 async function startDashboardSession() {
   if (window.pcMonitorUninstalling) return;
   if (dashboardSessionStarting || !dashboardClientVisible()) return;
+  reportClientLog('START_DASHBOARD_SESSION');
   dashboardSessionStarting = true;
   try {
     const acquired = await acquireMonitoringLease();
@@ -1325,8 +1361,9 @@ async function fetchInitialMetrics() {
   try {
     const headers = monitoringLeaseId ? { 'X-Monitor-Lease': monitoringLeaseId } : {};
     const res = await fetch('/api/metrics', { headers, credentials: 'same-origin' });
+    reportClientLog('INITIAL_METRICS_RESPONSE', { status: res.status, ok: res.ok });
     if (res.status === 401) {
-      redirectToLogin();
+      redirectToLogin('initial-metrics-401');
       return;
     }
     if (res.status === 410 && monitoringLeaseId) {
@@ -1360,7 +1397,7 @@ function startPolling() {
     try {
       const headers = monitoringLeaseId ? { 'X-Monitor-Lease': monitoringLeaseId } : {};
       const res = await fetch('/api/metrics', { headers, credentials: 'same-origin', signal: controller.signal });
-      if (res.status === 401) { redirectToLogin(); return; }
+      if (res.status === 401) { redirectToLogin('poll-metrics-401'); return; }
       if (res.ok) {
         reconnectBanner.style.display = 'none';
         const data = await res.json();
@@ -1400,6 +1437,7 @@ document.getElementById('logoutButton')?.addEventListener('click', async () => {
   try {
     const response = await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
     if (!response.ok) { alert('Rovarin could not lock. Please try again.'); return; }
+    if (typeof cleanupLoginViewportState === 'function') cleanupLoginViewportState();
     window.location.replace('/');
   } catch (_) { alert('Rovarin could not lock. Please try again.'); }
 });

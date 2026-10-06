@@ -10,7 +10,7 @@
 ![Experimental alpha](https://img.shields.io/badge/status-experimental_alpha-d99b36)
 ![Source available](https://img.shields.io/badge/license-PolyForm_Noncommercial-617184)
 
-[**Download for Windows**](https://github.com/DontMovePlease/Rovarin/releases/download/v0.2.2/RovarinSetup.exe) · [Release notes](https://github.com/DontMovePlease/Rovarin/releases) · [Report a bug](https://github.com/DontMovePlease/Rovarin/issues/new/choose)
+[**Download for Windows**](https://github.com/DontMovePlease/Rovarin/releases/download/v0.3.0/RovarinSetup.exe) · [Release notes](https://github.com/DontMovePlease/Rovarin/releases) · [Report a bug](https://github.com/DontMovePlease/Rovarin/issues/new/choose)
 
 </div>
 
@@ -30,7 +30,7 @@ Rovarin is a standalone Windows monitoring application with a compact dashboard,
 | GPU | NVIDIA utilization, VRAM and temperature when nvidia-smi is available |
 | Focused views | Larger graphs and faster sampling only for the active view |
 | Processes | Live application groups, search, sorting, Pause/Resume, confirmed End task and separate verified process-tree control |
-| Applications | Installed app search, List/Grid views, readable sizes and PIN-confirmed supported individual/batch uninstall |
+| Applications | Quick Launch with app discovery/pinning, installed app search, List/Grid views, readable sizes and PIN-confirmed uninstallation |
 | Maintenance | Fixed Windows cleanup/repair actions with live logs, results and history |
 | Diagnostics | Optional-tool/hardware availability, temperature status and a copyable compatibility report |
 | Desktop | Native Windows shell, tray integration, saved window bounds and optional startup at sign-in |

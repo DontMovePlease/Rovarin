@@ -597,9 +597,31 @@ async function testLoginInteraction() {
     phoneWindow.dispatch('pageshow');phoneWindow.dispatch('pageshow');assert.strictEqual(viewport.listeners.get('resize').size,1);assert.strictEqual(viewport.listeners.get('scroll').size,1);assert.strictEqual(phoneWindow.listeners.get('resize').size,1);
   }
   viewport.height=844;viewport.offsetTop=0;viewport.dispatch('resize');assert(!classes.has('login-keyboard'));
+  assert.strictEqual(typeof phoneWindow.cleanupLoginViewport,'function','cleanupLoginViewport exposed on window');
+  for(const [width,height] of [[320,568],[375,812],[390,844],[430,932]]) {
+    phoneWindow.innerWidth=width;phoneWindow.innerHeight=height;
+    // Enter keyboard mode
+    viewport.height=Math.max(260,height-280);viewport.offsetTop=47;viewport.dispatch('resize');
+    assert.strictEqual(styles.get('--login-viewport-height'),viewport.height+'px');
+    assert(classes.has('login-keyboard'));
+    // Unlock cleans up viewport state
+    phoneWindow.cleanupLoginViewport();
+    assert.strictEqual(styles.size,0,'cleanupLoginViewport removes all viewport properties at '+width);
+    assert(!classes.has('login-keyboard'),'cleanupLoginViewport removes login-keyboard class at '+width);
+    assert.strictEqual(viewport.listeners.get('resize').size,0);
+    // Relock attaches listeners cleanly
+    phoneWindow.dispatch('pageshow');
+    assert.strictEqual(viewport.listeners.get('resize').size,1);
+  }
+  phoneWindow.cleanupLoginViewport();
   classes.add('native-shell');phoneWindow.dispatch('resize');assert.strictEqual(styles.size,0,'Native window must not inherit mobile visual viewport overrides');
   phoneWindow.dispatch('pagehide');
-  console.log('PASS keyboard visual viewport/offset, restoration, bfcache reattach without duplicate listeners and native presentation isolation');
+  // CSS mobile viewport invariants: 100dvh, no 100svh, no -webkit-fill-available, coherent chrome background
+  const appCss = fs.readFileSync(path.join(root, 'public', 'app.css'), 'utf8');
+  assert(!appCss.includes('100svh'), 'app.css must not use 100svh on mobile');
+  assert(!appCss.includes('-webkit-fill-available'), 'app.css must not use -webkit-fill-available on mobile');
+  assert(appCss.includes('100dvh'), 'app.css must use 100dvh for dynamic mobile viewport');
+  console.log('PASS keyboard visual viewport/offset, restoration, bfcache reattach without duplicate listeners, lock/unlock cleanup at 320/375/390/430 and 100dvh invariants');
 }
 
 function testDashboardUpdates() {

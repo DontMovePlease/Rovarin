@@ -315,11 +315,11 @@ internal static class NativeDesktopTest
                     await View.CoreWebView2.ExecuteScriptAsync("showAppPage('dashboardPage');document.getElementById('openCpuDetailButton').click()");
                     await Wait("cpuDetailDialog.open && (()=>{const r=cpuDetailDialog.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight})()", "Phone detail dialog must fit at "+width);
                     await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('closeCpuDetailButton').click()");
-                    await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('[data-page=dashboardPage]').click();document.querySelector('.dashboard-container').scrollTop=200");
-                    await Wait("document.querySelector('.dashboard-container').scrollTop===200 && document.querySelector('.native-app-bar').getBoundingClientRect().bottom<document.querySelector('.dashboard-container').getBoundingClientRect().top", "In-page menu must scroll away without resizing the viewport at "+width);
+                    await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('[data-page=dashboardPage]').click();scrollTo(0,200)");
+                    await Wait("(window.scrollY===200 || document.documentElement.scrollTop===200) && document.querySelector('.native-app-bar').getBoundingClientRect().bottom<0 && document.documentElement.scrollWidth<=innerWidth", "In-page menu must scroll away without resizing the viewport at "+width);
                     await Task.Delay(350);
-                    await Wait("document.querySelector('.dashboard-container').scrollTop===200 && document.querySelector('.native-app-bar').getBoundingClientRect().bottom<document.querySelector('.dashboard-container').getBoundingClientRect().top && !document.body.classList.contains('phone-header-hidden')", "Stopped scrolling must not restore menu or bounce the page at "+width);
-                    await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('.dashboard-container').scrollTop=0");
+                    await Wait("(window.scrollY===200 || document.documentElement.scrollTop===200) && document.querySelector('.native-app-bar').getBoundingClientRect().bottom<0 && !document.body.classList.contains('sidebar-expanded')", "Stopped scrolling must not restore menu or bounce the page at "+width);
+                    await View.CoreWebView2.ExecuteScriptAsync("scrollTo(0,0)");
                 }
                 await View.CoreWebView2.ExecuteScriptAsync("window.testPhoneSwipe=(target,x1,y1,x2,y2)=>{const fire=(type,x,y)=>{const t=new Touch({identifier:1,target,clientX:x,clientY:y});target.dispatchEvent(new TouchEvent(type,{bubbles:true,cancelable:true,touches:type==='touchend'?[]:[t],changedTouches:[t]}));};fire('touchstart',x1,y1);fire('touchmove',x2,y2);fire('touchend',x2,y2);}");
                 await View.CoreWebView2.ExecuteScriptAsync("testPhoneSwipe(document.querySelector('.dashboard-container'),100,240,108,340)");

@@ -7,6 +7,21 @@ let autoSubmittedPin = null;
 // Length mode only, rendered by the server; absent/unknown metadata fails to manual entry.
 const sixDigitPinMode = document.querySelector?.('meta[name="rovarin-pin-mode"]')?.content === '6';
 
+function reportClientLog(event, detail = {}) {
+  try {
+    if (typeof window === 'undefined' || !window.location || !window.location.origin) return;
+    fetch('/api/debug/client-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event, url: window.location.href, detail })
+    }).catch(() => {});
+  } catch (_) {}
+}
+reportClientLog('LOGIN_PAGE_MOUNT', {
+  hasSessionCookie: String(document.cookie || '').includes('pc_monitor_session'),
+  hasAuthPinCookie: String(document.cookie || '').includes('auth_pin')
+});
+
 async function attemptLogin() {
   const pin = pinInput.value.trim();
   if (!pin || loginPending) return;
@@ -14,6 +29,7 @@ async function attemptLogin() {
   errMsg.textContent = '';
   unlockBtn.disabled = true;
   unlockBtn.textContent = 'Verifying...';
+  reportClientLog('LOGIN_SUBMIT_START', { pinLength: pin.length });
 
   try {
     const response = await fetch('/api/login', {
@@ -23,7 +39,27 @@ async function attemptLogin() {
       body: JSON.stringify({ pin })
     });
     const data = await response.json();
+    reportClientLog('LOGIN_SUBMIT_RESPONSE', {
+      status: response.status,
+      ok: response.ok,
+      success: data && data.success,
+      code: data && data.code,
+      error: data && data.error
+    });
     if (response.ok && data.success) {
+      try { pinInput.blur(); } catch (_) {}
+      if (typeof window.cleanupLoginViewport === 'function') {
+        try { window.cleanupLoginViewport(); } catch (_) {}
+      }
+      try {
+        const root = document.documentElement;
+        root.style.removeProperty('--login-viewport-height');
+        root.style.removeProperty('--login-viewport-top');
+        root.classList.remove('login-keyboard', 'login-page');
+        document.body?.classList?.remove('login-keyboard', 'login-page');
+        window.scrollTo(0, 0);
+      } catch (_) {}
+      reportClientLog('LOGIN_NAVIGATING_TO_ROOT');
       window.location.replace('/');
       return;
     }
@@ -86,4 +122,11 @@ pinInput.addEventListener('input', () => {
   window.addEventListener('pagehide', detach);
   window.addEventListener('pageshow', attach);
   attach();
+  window.cleanupLoginViewport = () => {
+    detach();
+    root.style.removeProperty('--login-viewport-height');
+    root.style.removeProperty('--login-viewport-top');
+    root.classList.remove('login-keyboard');
+    try { document.body?.classList?.remove('login-keyboard'); } catch (_) {}
+  };
 })();

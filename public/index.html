@@ -414,17 +414,135 @@
     </section>
     <section id="appsPage" class="app-page processes-page apps-page" aria-labelledby="appsTitle" hidden>
       <header class="processes-heading sr-only"><h1 id="appsTitle">Applications</h1></header>
-      <div class="apps-toolbar"><label>Search<input id="appsSearch" type="search" maxlength="200" placeholder="Search applications…"></label><label>Type<select id="appsType"><option value="">All apps</option></select></label><label>Sort<select id="appsSort"><option value="name">Name</option><option value="size">Size</option><option value="publisher">Publisher</option></select></label><button id="appsSortDirection" class="processes-freeze" type="button" aria-label="Reverse app sort direction">↑</button></div>
-      <div class="apps-meta"><button id="appsRefresh" class="processes-freeze" type="button">Refresh</button><p id="appsStatus" role="status" aria-live="polite">Open this page to load installed applications.</p><div class="apps-view-controls" role="group" aria-label="Application view"><button id="appsViewList" type="button" aria-pressed="true">List</button><button id="appsViewGrid" type="button" aria-pressed="false">Grid</button></div></div>
-      <div id="appsList" class="apps-list"></div>
-      <div id="appsSelectionBar" class="apps-batchbar" hidden><div><span id="appsSelectedCount" aria-live="polite">0 selected</span><small id="appsHiddenSelection"></small></div><button id="appsClearSelection" class="processes-freeze" type="button">Clear all</button><button id="appsBatchUninstall" class="processes-freeze" type="button" disabled>Review removal</button></div>
-      <section id="appsProgress" hidden aria-labelledby="appsProgressTitle"><h2 id="appsProgressTitle">Uninstall progress</h2><ol id="appsProgressRows"></ol><button id="appsProgressRefresh" class="processes-freeze" type="button">Refresh progress</button></section>
+      <!-- Quick Launch Rail -->
+      <section class="quick-launch-section" aria-labelledby="quickLaunchTitle">
+        <div class="quick-launch-header">
+          <div class="quick-launch-title-wrap">
+            <h2 id="quickLaunchTitle" class="quick-launch-title">Quick Launch</h2>
+            <span id="quickLaunchCount" class="quick-launch-count">0 / 12 pinned</span>
+          </div>
+          <div class="quick-launch-controls">
+            <button id="quickLaunchAddBtn" class="quick-launch-add-btn" type="button">+ Add apps</button>
+            <span id="quickLaunchStatus" class="quick-launch-status" role="status" aria-live="polite"></span>
+          </div>
+        </div>
+        <div id="quickLaunchRail" class="quick-launch-rail" role="region" aria-label="Pinned Quick Launch applications"></div>
+      </section>
 
+      <!-- Apps Subnav Tabs -->
+      <div class="apps-subnav" role="tablist" aria-label="Applications sections">
+        <button id="appsTabInstalled" class="apps-subnav-btn is-active" type="button" role="tab" aria-selected="true" aria-controls="appsInstalledPanel">Installed</button>
+        <button id="appsTabStartup" class="apps-subnav-btn" type="button" role="tab" aria-selected="false" aria-controls="appsStartupPanel">Startup</button>
+      </div>
+
+      <!-- Installed Apps Panel -->
+      <div id="appsInstalledPanel" class="apps-panel" role="tabpanel" aria-labelledby="appsTabInstalled">
+        <div class="apps-toolbar"><label>Search<input id="appsSearch" type="search" maxlength="200" placeholder="Search applications…"></label><label>Type<select id="appsType"><option value="">All apps</option></select></label><label>Sort<select id="appsSort"><option value="name">Name</option><option value="size">Size</option><option value="publisher">Publisher</option></select></label><button id="appsSortDirection" class="processes-freeze" type="button" aria-label="Reverse app sort direction">↑</button><label class="apps-system-toggle"><input id="appsShowSystem" type="checkbox"><span>Show system components</span></label></div>
+        <div class="apps-meta">
+          <button id="appsRefresh" class="processes-freeze" type="button">Refresh</button>
+          <button id="appsSelectModeBtn" class="processes-freeze apps-manage-btn" type="button">Select apps</button>
+          <p id="appsStatus" role="status" aria-live="polite">Open this page to load installed applications.</p>
+          <div class="apps-view-controls" role="group" aria-label="Application view"><button id="appsViewList" type="button" aria-pressed="true">List</button><button id="appsViewGrid" type="button" aria-pressed="false">Grid</button></div>
+        </div>
+        <div id="appsList" class="apps-list"></div>
+        <section id="appsProgress" hidden aria-labelledby="appsProgressTitle"><h2 id="appsProgressTitle">Uninstall progress</h2><ol id="appsProgressRows"></ol><button id="appsProgressRefresh" class="processes-freeze" type="button">Refresh progress</button></section>
+      </div>
+
+      <!-- Startup Apps Panel -->
+      <div id="appsStartupPanel" class="apps-panel" role="tabpanel" aria-labelledby="appsTabStartup" hidden>
+        <div class="apps-toolbar startup-toolbar">
+          <label>Search<input id="startupSearch" type="search" maxlength="200" placeholder="Search startup applications…"></label>
+          <label>Scope<select id="startupScope"><option value="">All scopes</option><option value="user">Current User</option><option value="machine">All Users (System)</option></select></label>
+          <label>Status<select id="startupStatusFilter"><option value="">All status</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label>
+        </div>
+        <div class="apps-meta">
+          <button id="startupRefresh" class="processes-freeze" type="button">Refresh</button>
+          <p id="startupStatus" role="status" aria-live="polite">Loading startup applications…</p>
+        </div>
+        <div id="startupList" class="startup-list"></div>
+      </div>
     </section>
   </div>
   <dialog id="appsConfirmDialog" class="apps-confirm" aria-labelledby="appsConfirmTitle"><form id="appsConfirmForm"><h2 id="appsConfirmTitle">Review uninstall</h2><ul id="appsConfirmList"></ul><p id="appsReviewLimitations" role="status"></p><p>Application data may be removed by each app’s uninstaller. Close those apps first. UAC approval or an interactive uninstaller may need attention on the PC.</p><label for="appsConfirmPin">Current Rovarin PIN</label><input id="appsConfirmPin" type="password" inputmode="numeric" autocomplete="off" maxlength="12" required pattern="(?:[0-9]{6}|[0-9]{12})"><div class="apps-dialog-actions"><button id="appsConfirmCancel" class="processes-freeze" type="button">Cancel</button><button id="appsConfirmSubmit" class="processes-kill" type="submit">Confirm uninstall</button></div><p id="appsConfirmError" role="alert"></p></form></dialog>
+  <dialog id="quickLaunchPickerDialog" class="apps-confirm ql-picker-dialog" aria-labelledby="qlPickerTitle">
+    <div class="ql-picker-container">
+      <div class="ql-picker-header">
+        <div>
+          <h2 id="qlPickerTitle">Add to Quick Launch</h2>
+          <p id="qlPickerSubtitle" class="ql-picker-subtitle">Select applications to pin for fast remote launching (up to 12 total).</p>
+        </div>
+        <button id="qlPickerClose" class="processes-freeze" type="button" aria-label="Close picker">✕</button>
+      </div>
+      <div class="ql-picker-search-wrap">
+        <input id="qlPickerSearch" type="search" placeholder="Search launchable apps…" aria-label="Search launchable apps" maxlength="200">
+      </div>
+      <div id="qlPickerList" class="ql-picker-list" role="region" aria-label="Available applications"></div>
+      <div class="ql-picker-footer">
+        <span id="qlPickerCount" class="ql-picker-count">0 / 12 pinned</span>
+        <button id="qlPickerDone" class="processes-freeze" type="button">Done</button>
+      </div>
+    </div>
+  </dialog>
+  <dialog id="startupConfirmDialog" class="apps-confirm" aria-labelledby="startupConfirmTitle">
+    <form id="startupConfirmForm">
+      <h2 id="startupConfirmTitle">Toggle Startup App</h2>
+      <div id="startupConfirmDetails" class="startup-confirm-details"></div>
+      <p id="startupConfirmNote">This changes whether the application starts automatically when you log into Windows. The app itself is not modified or deleted.</p>
+      <div class="apps-dialog-actions">
+        <button id="startupConfirmCancel" class="processes-freeze" type="button">Cancel</button>
+        <button id="startupConfirmSubmit" class="processes-kill" type="submit">Confirm</button>
+      </div>
+      <p id="startupConfirmError" role="alert"></p>
+    </form>
+  </dialog>
 
 
+  </div>
+
+  <!-- Installed Apps Selection Tray (floating viewport-fixed bar) -->
+  <div id="appsSelectionBar" class="apps-batchbar apps-selection-tray" hidden role="region" aria-label="Selected applications">
+    <div class="apps-tray-collapsed">
+      <button id="appsTraySummaryBtn" class="apps-tray-summary" type="button" aria-expanded="false" aria-controls="appsTrayExpanded" aria-label="Expand selected applications">
+        <div class="apps-tray-summary-main">
+          <div class="apps-tray-count-row">
+            <span id="appsSelectedCount" class="apps-tray-count" aria-live="polite">0 selected</span>
+            <span id="appsSelectedSize" class="apps-tray-size"></span>
+          </div>
+          <div id="appsSelectedPreview" class="apps-tray-preview"></div>
+          <small id="appsHiddenSelection" class="apps-tray-hidden"></small>
+        </div>
+        <span class="apps-tray-expand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg>
+        </span>
+      </button>
+      <div class="apps-tray-actions">
+        <button id="appsClearSelection" class="processes-freeze apps-tray-clear-btn" type="button">Clear all</button>
+        <button id="appsBatchUninstall" class="processes-freeze apps-tray-review-btn" type="button" disabled>Review &amp; uninstall</button>
+        <button id="appsDoneSelection" class="processes-freeze apps-tray-done-btn" type="button">Done</button>
+      </div>
+    </div>
+    <div id="appsTrayExpanded" class="apps-tray-expanded" hidden>
+      <div class="apps-tray-expanded-header">
+        <div class="apps-tray-expanded-title-wrap">
+          <h3 class="apps-tray-expanded-title">Selected apps</h3>
+          <span id="appsTrayExpandedBadge" class="apps-tray-badge">0</span>
+        </div>
+        <button id="appsTrayCollapseBtn" class="apps-tray-collapse-btn" type="button" aria-label="Collapse selected applications">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
+      <div id="appsTraySelectedList" class="apps-tray-selected-list" role="list"></div>
+      <div class="apps-tray-expanded-footer">
+        <div class="apps-tray-expanded-sizes">
+          <span id="appsTrayKnownSize" class="apps-tray-known-size"></span>
+          <span id="appsTrayUnknownSize" class="apps-tray-unknown-size"></span>
+        </div>
+        <div class="apps-tray-expanded-actions">
+          <button id="appsTrayExpandedClear" class="processes-freeze apps-tray-clear-btn" type="button">Clear all</button>
+          <button id="appsTrayExpandedReview" class="processes-freeze apps-tray-review-btn" type="button">Review &amp; uninstall</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <dialog id="cpuDetailDialog" class="cpu-detail-dialog" aria-labelledby="cpuDetailTitle">

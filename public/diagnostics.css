@@ -1,4 +1,4 @@
-.diagnostics-page { padding: clamp(16px, 4vw, 26px); border: 1px solid var(--glass-rim); border-radius: var(--radius-xl); background: var(--bg-card); }
+.diagnostics-page { padding: clamp(16px, 4vw, 26px); border: 1px solid var(--glass-rim); border-radius: var(--radius-xl); background: var(--bg-card); box-sizing: border-box; max-width: 100%; overflow-x: hidden; }
 .diagnostics-page h1 { font-size: 28px; letter-spacing: -.035em; }
 .diagnostics-page header > p:last-child, .diagnostics-summary p { color: var(--text-secondary); font-size: 13px; margin-top: 6px; }
 .diagnostics-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 8px; }
@@ -7,7 +7,7 @@
 .diagnostics-toolbar button:disabled { opacity: .5; cursor: default; }
 .diagnostics-toolbar button:focus-visible, .diagnostics-page summary:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 3px; }
 #diagnosticsFeedback { font-size: 12px; color: var(--text-secondary); min-height: 36px; }
-.diagnostics-summary { padding: 16px; border: 1px solid var(--border-card); border-radius: var(--radius-lg); background: var(--bg-subtle); margin: 8px 0 16px; }
+.diagnostics-summary { padding: 16px; border: 1px solid var(--border-card); border-radius: var(--radius-lg); background: var(--bg-subtle); margin: 8px 0 16px; box-sizing: border-box; max-width: 100%; }
 .diagnostics-summary h2 { font-size: 17px; }
 #diagnosticsUpdated { font-size: 11px; color: var(--text-muted); }
 .diagnostics-checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 10px; }
@@ -21,7 +21,14 @@
 .diagnostics-actions button:disabled { opacity: .5; cursor: default; }
 .diagnostics-actions button:focus-visible, .diagnostics-actions a:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
 .diagnostics-actions p { flex-basis: 100%; line-height: 1.5; }
-@media (max-width: 699px) { .diagnostics-actions button, .diagnostics-actions a { min-height: 44px; } }
+@media (max-width: 699px) {
+  .diagnostics-page { padding: 12px; }
+  .diagnostics-summary { padding: 12px; }
+  .diagnostics-actions button, .diagnostics-actions a { min-height: 44px; }
+  .diagnostics-checks { grid-template-columns: minmax(0, 1fr); }
+  .diagnostics-check { box-sizing: border-box; max-width: 100%; }
+  .temperature-settings select { flex: 1 1 100%; max-width: 100%; box-sizing: border-box; }
+}
 .diagnostics-status { align-self: start; border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 650; }
 .diagnostics-status.supported { color: #6ee7b7; background: rgba(16, 185, 129, .15); }
 .diagnostics-status.unavailable { color: #cbd5e1; background: rgba(148, 163, 184, .15); }

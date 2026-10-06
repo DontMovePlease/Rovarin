@@ -46,10 +46,12 @@ function execute(command,args,cwd,timeout = 30000,input) {
     if (fs.existsSync(installed)) command = installed;
   }
   return new Promise((resolve,reject) => {
-    execFile(command,args,{cwd,windowsHide:true,encoding:'utf8',timeout,maxBuffer:4*1024*1024,env:{...process.env,GIT_TERMINAL_PROMPT:'0',GCM_INTERACTIVE:'never',GH_PROMPT_DISABLED:'1',GIT_EDITOR:'true'}},(error,stdout,stderr) => {
+    execFile(command,args,{cwd,windowsHide:true,encoding:'utf8',timeout,maxBuffer:16*1024*1024,env:{...process.env,GIT_TERMINAL_PROMPT:'0',GCM_INTERACTIVE:'never',GH_PROMPT_DISABLED:'1',GIT_EDITOR:'true'}},(error,stdout,stderr) => {
       if (error) {
         // Never forward raw command output: Git/gh errors can echo credentials.
-        const e = new Error(`${path.basename(command)} failed${error.killed ? ' or timed out' : ''} (${String(error.code || 'unknown').replace(/[^A-Za-z0-9_-]/g,'')}). Check authentication, permissions and repository state. No further release step ran.`);
+        const tail = (stderr || stdout || '').split('\n').slice(-10).join('\n').trim();
+        const details = (command === 'git' || command === 'gh') ? '' : (tail ? `\n${tail}` : '');
+        const e = new Error(`${path.basename(command)} failed${error.killed ? ' or timed out' : ''} (${String(error.code || 'unknown').replace(/[^A-Za-z0-9_-]/g,'')}). Check authentication, permissions and repository state. No further release step ran.${details}`);
         e.code = error.code; reject(e);
       } else resolve(stdout);
     }).stdin?.end(input);

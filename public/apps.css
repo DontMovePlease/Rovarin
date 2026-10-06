@@ -1,5 +1,7 @@
 .apps-toolbar,.apps-batchbar {display:flex;flex-wrap:wrap;align-items:end;gap:12px;margin-block:18px}
 .apps-toolbar label {display:grid;gap:6px;color:var(--text-secondary);font-size:12px;flex:1;min-width:110px}
+.apps-system-toggle {display:inline-flex !important;align-items:center;gap:8px !important;min-height:44px;font-size:12px;color:var(--text-secondary);cursor:pointer;user-select:none;white-space:nowrap;flex:0 0 auto !important}
+.apps-system-toggle input[type="checkbox"] {width:18px !important;height:18px !important;min-height:18px !important;padding:0;margin:0;accent-color:var(--accent-primary);cursor:pointer;flex-shrink:0}
 .apps-toolbar input,.apps-toolbar select,.apps-confirm input {width:100%;min-height:44px;background:var(--surface-content-raised);color:var(--text-primary);border:1px solid var(--border-card);border-radius:10px;padding:9px;font:inherit}
 .apps-list {display:grid;gap:9px}.apps-row {display:flex;align-items:center;gap:14px;padding:14px;border:1px solid var(--border-card);border-radius:14px;background:var(--surface-content-raised);min-width:0}
 .apps-row>input {width:22px;height:22px;accent-color:var(--accent-primary);flex-shrink:0}.apps-info {flex:1;min-width:0}.apps-info h2 {font-size:15px;margin:0 0 4px;overflow-wrap:anywhere}.apps-info p {font-size:11px;color:var(--text-secondary);margin:3px 0;overflow-wrap:anywhere}
@@ -12,43 +14,413 @@
 
 @media(min-width:700px){.apps-page .apps-list {flex:1;min-height:100px;overflow-y:auto;align-content:start}.apps-page>header,.apps-page>.apps-toolbar,.apps-page>.apps-batchbar,.apps-page>#appsStatus {flex-shrink:0}.apps-page>#appsProgress {flex-shrink:0;max-height:26dvh;overflow-y:auto}}
 /* Applications: one readable list and a reserved, persistent review bar. */
-#appsPage {display:flex;flex-direction:column;height:calc(100dvh - 138px);min-height:0;padding:14px}
+#appsPage {display:flex;flex-direction:column;height:calc(100dvh - 138px);min-height:0;padding:14px;box-sizing:border-box;max-width:100%}
 #appsPage .processes-heading h1 {font-size:24px;letter-spacing:-.025em}
 #appsPage .apps-toolbar {margin:12px 0 6px;gap:8px;flex-shrink:0}
 #appsPage .apps-toolbar label {font-size:11px;gap:4px;min-width:95px}
 #appsPage #appsStatus {margin:6px 0 10px;font-size:11px;flex-shrink:0}
 #appsPage .apps-list {display:block;flex:1;min-height:100px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;align-content:start}
-#appsPage .apps-row {display:grid;grid-template-columns:44px minmax(0,1fr) 82px 80px;gap:10px;padding:12px 4px;margin:0;border:0;border-bottom:1px solid var(--border-card);border-radius:0;background:transparent}
+.apps-icon-wrap {display:flex;align-items:center;justify-content:center;width:36px;height:36px;flex:0 0 36px;border-radius:8px;overflow:hidden}
+.apps-icon-img {width:32px;height:32px;object-fit:contain;image-rendering:-webkit-optimize-contrast}
+.apps-icon-fallback {display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:8px;background:var(--surface-content);border:1px solid var(--border-card);color:var(--accent-primary);font-size:14px;font-weight:700;line-height:1;user-select:none}
 #appsPage .apps-row.is-selected {background:var(--tint-primary)}
-#appsPage .apps-info h2 {font-size:14px;font-weight:600;line-height:1.4;margin:0 0 3px}
-#appsPage .apps-info p {font-size:11px;line-height:1.4;margin:3px 0}
-#appsPage .apps-description {display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-#appsPage .apps-size {color:var(--text-primary);font-size:14px;font-weight:600;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+
+/* List view row */
+#appsPage .apps-list:not(.is-grid) .apps-row {display:grid;grid-template-columns:44px minmax(0,1fr) auto auto;gap:12px;align-items:center;padding:10px 4px;margin:0;border:0;border-bottom:1px solid var(--border-card);border-radius:0;background:transparent}
+.apps-list:not(.is-grid) .apps-card-header {display:flex;align-items:center;gap:12px;min-width:0}
+.apps-list:not(.is-grid) .apps-icon-wrap {width:36px;height:36px;flex:0 0 36px}
+.apps-list:not(.is-grid) .apps-info {min-width:0;flex:1}
+.apps-list:not(.is-grid) .apps-info h2 {font-size:14px;font-weight:600;line-height:1.4;margin:0 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.apps-list:not(.is-grid) .apps-publisher {font-size:11px;line-height:1.4;color:var(--text-secondary);margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.apps-list:not(.is-grid) .apps-description {display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:11px}
+.apps-list:not(.is-grid) .apps-card-meta {display:flex;align-items:center;gap:16px;flex-shrink:0}
+.apps-list:not(.is-grid) .apps-category {font-size:11px;color:var(--text-secondary);white-space:nowrap;width:120px}
+.apps-list:not(.is-grid) .apps-size {font-size:13px;font-weight:600;color:var(--text-primary);text-align:right;white-space:nowrap;width:80px;font-variant-numeric:tabular-nums}
+.apps-list:not(.is-grid) .apps-row-actions {flex-shrink:0}
+
 .apps-row-action,.apps-review-remove {min-height:44px;padding:0 8px;font:inherit;font-size:12px;color:var(--text-secondary);background:transparent;border:1px solid var(--border-card);border-radius:10px;cursor:pointer}
 .apps-row-action:focus-visible,.apps-review-remove:focus-visible {outline:2px solid var(--accent-primary);outline-offset:2px}
 .apps-row-action:hover,.apps-review-remove:hover {color:var(--text-primary);background:var(--tint-primary)}
-#appsPage .apps-batchbar {margin:8px 0 0;padding:8px;gap:8px;align-items:center;flex-shrink:0;border:1px solid var(--border-card);border-radius:12px;background:var(--surface-content-raised)}
-#appsPage .apps-batchbar[hidden] {display:none}
-#appsPage .apps-batchbar>div {flex:1;min-width:70px;font-size:12px}#appsHiddenSelection {display:block;color:var(--text-secondary);font-size:10px;margin-top:3px}
-#appsPage .apps-batchbar button {font-size:11px;padding-inline:9px;min-height:44px}
-.apps-confirm ul {padding:0;list-style:none}.apps-confirm li {display:flex;align-items:flex-start;gap:8px;padding:12px 0;border-bottom:1px solid var(--border-card)}
+
+/* Persistent Floating Selection Tray */
+.apps-selection-tray, #appsPage .apps-selection-tray {
+  position: fixed !important;
+  bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  left: max(12px, env(safe-area-inset-left, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  max-width: 680px;
+  margin: 0 auto;
+  z-index: 100;
+  background: rgba(14, 23, 38, 0.94);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  backdrop-filter: blur(24px) saturate(1.4);
+  border: 1px solid rgba(140, 180, 220, 0.2);
+  border-radius: 16px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+  padding: 10px 12px;
+  box-sizing: border-box;
+  color: var(--text-primary);
+}
+.apps-selection-tray[hidden], #appsPage .apps-selection-tray[hidden] {
+  display: none !important;
+}
+html:not(.native-shell) body.sidebar-expanded .apps-selection-tray,
+html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s ease;
+}
+#appsPage.has-selection-tray #appsList {
+  padding-bottom: calc(115px + env(safe-area-inset-bottom, 0px));
+}
+.apps-tray-collapsed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.apps-selection-tray.is-expanded .apps-tray-collapsed {
+  display: none;
+}
+.apps-tray-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 6px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 8px;
+  text-align: left;
+  transition: background .15s;
+}
+.apps-tray-summary:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.apps-tray-summary:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+.apps-tray-summary-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.apps-tray-count-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.apps-tray-count {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+.apps-tray-size {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-primary);
+}
+.apps-tray-preview {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.apps-tray-hidden {
+  font-size: 10px;
+  color: var(--accent-amber);
+  margin-top: 1px;
+}
+.apps-tray-expand-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  transition: transform .2s ease;
+}
+.apps-selection-tray.is-expanded .apps-tray-expand-icon {
+  transform: rotate(180deg);
+}
+.apps-tray-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.apps-tray-clear-btn {
+  min-height: 40px;
+  padding: 0 14px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 10px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.apps-tray-review-btn {
+  min-height: 40px;
+  padding: 0 16px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 10px;
+  cursor: pointer;
+  flex: 1;
+  background: rgba(239, 68, 68, 0.16);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+  transition: all .15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+.apps-tray-review-btn:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.3);
+  border-color: #ef4444;
+  color: #fff;
+}
+.apps-tray-review-btn:focus-visible {
+  outline: 2px solid #ef4444;
+  outline-offset: 2px;
+}
+.apps-tray-review-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.apps-tray-done-btn {
+  min-height: 40px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+/* Expanded View */
+.apps-tray-expanded {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-height: min(70dvh, 440px);
+}
+.apps-tray-expanded[hidden] {
+  display: none !important;
+}
+.apps-tray-expanded-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-card);
+}
+.apps-tray-expanded-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.apps-tray-expanded-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text-primary);
+}
+.apps-tray-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--tint-primary);
+  color: var(--accent-primary);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+}
+.apps-tray-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid var(--border-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all .15s;
+}
+.apps-tray-collapse-btn:hover {
+  background: var(--tint-primary);
+  color: var(--text-primary);
+}
+.apps-tray-collapse-btn:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+.apps-tray-selected-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 4px;
+}
+.apps-tray-item {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto 32px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: var(--surface-content-raised);
+  border: 1px solid var(--border-card);
+}
+.apps-tray-item .apps-icon-wrap {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+}
+.apps-tray-item .apps-icon-img {
+  width: 26px;
+  height: 26px;
+}
+.apps-tray-item .apps-icon-fallback {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+}
+.apps-tray-item-info {
+  min-width: 0;
+}
+.apps-tray-item-info strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.apps-tray-item-size {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.apps-tray-item-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border-card);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.apps-tray-item-remove:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #f87171;
+}
+.apps-tray-item-remove:focus-visible {
+  outline: 2px solid #ef4444;
+  outline-offset: 1px;
+}
+.apps-tray-expanded-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-card);
+}
+.apps-tray-expanded-sizes {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+.apps-tray-known-size {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.apps-tray-unknown-size {
+  color: var(--accent-amber);
+}
+.apps-tray-expanded-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.apps-tray-expanded-actions button {
+  flex: 1;
+}
+@media(min-width: 700px) {
+  .apps-tray-collapsed {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .apps-tray-summary {
+    flex: 1;
+    min-width: 0;
+  }
+  .apps-tray-actions {
+    width: auto;
+    flex-shrink: 0;
+  }
+}
+.apps-confirm ul {padding:0;list-style:none}.apps-confirm li {display:flex;align-items:flex-start;gap:10px;padding:12px 0;border-bottom:1px solid var(--border-card)}
+.apps-confirm li .apps-icon-wrap {flex-shrink:0;margin-top:2px}
 .apps-confirm li>div {flex:1;min-width:0}.apps-confirm li strong,.apps-confirm li small {display:block;line-height:1.5}.apps-confirm li small {font-size:11px;color:var(--text-secondary)}
 .apps-confirm li details {margin-top:6px;font-size:11px;color:var(--text-secondary)}.apps-confirm li summary {cursor:pointer;min-height:28px}
 .apps-confirm .apps-removal-support {margin-top:5px;color:var(--accent-primary)}.apps-confirm #appsReviewLimitations {color:var(--state-warning)}
 .apps-confirm button:disabled {opacity:.45;cursor:not-allowed}.apps-empty {font-size:13px;color:var(--text-secondary);padding:20px 8px}
 @media(max-width:699px){
- #appsPage {height:calc(100dvh - 148px);padding:12px;border-radius:16px}
+ #appsPage {height:calc(100dvh - 148px);padding:12px;border-radius:16px;box-sizing:border-box;max-width:100%;overflow-x:hidden}
+ #appsPage .apps-toolbar {gap:8px}
+ #appsPage .apps-toolbar label {min-width:70px}
  #appsPage .apps-toolbar label:first-child {flex-basis:100%}
- #appsPage .apps-row {grid-template-columns:44px minmax(0,1fr) 68px;gap:8px;padding:10px 0}
- #appsPage .apps-info {grid-column:2;grid-row:1;min-width:0}
- #appsPage .apps-row .apps-select {grid-column:1;grid-row:1;align-self:start}
- #appsPage .apps-size {grid-column:3;grid-row:1;align-self:start;padding-top:4px;font-size:13px}
- #appsPage .apps-row>.apps-row-action {grid-column:2/4;justify-self:start;margin:0;font-size:11px;border:0;min-height:44px;padding:0 4px}
- #appsPage .apps-batchbar {padding-bottom:max(8px,env(safe-area-inset-bottom))}
+ .apps-system-toggle {flex-basis:100% !important;margin-top:2px}
+ .quick-launch-header {flex-wrap:wrap;gap:6px}
+ .quick-launch-controls {flex-wrap:wrap;gap:6px}
+ .quick-launch-empty-card {max-width:100%;box-sizing:border-box}
+ #appsPage .apps-list:not(.is-grid) .apps-row {grid-template-columns:44px minmax(0,1fr) auto;gap:8px;padding:10px 0;align-items:start;box-sizing:border-box;max-width:100%}
+ .apps-list:not(.is-grid) .apps-card-header {align-items:flex-start;gap:10px;min-width:0}
+ .apps-list:not(.is-grid) .apps-icon-wrap {margin-top:2px}
+ .apps-list:not(.is-grid) .apps-info {min-width:0}
+ .apps-list:not(.is-grid) .apps-info h2 {font-size:13px;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+ .apps-list:not(.is-grid) .apps-card-meta {flex-direction:column;align-items:flex-end;gap:2px;margin-left:6px;min-width:0}
+ .apps-list:not(.is-grid) .apps-size {font-size:12px;width:auto;min-width:0}
+ .apps-list:not(.is-grid) .apps-category {font-size:10px;width:auto;max-width:80px;overflow:hidden;text-overflow:ellipsis;min-width:0}
+ .apps-list:not(.is-grid) .apps-row-actions {grid-column:2/-1;display:flex;justify-content:flex-end;margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,255,255,.05)}
  #appsPage .apps-description {font-size:10px}
 }
+
 @media(prefers-reduced-motion:reduce){.apps-row,.apps-row-action {transition:none}}
-@media(prefers-contrast:more){.apps-row.is-selected {outline:1px solid var(--accent-primary);outline-offset:-1px}.apps-size {color:var(--text-primary)}}
+@media(prefers-contrast:more){.apps-row.is-selected {outline:1px solid var(--accent-primary);outline-offset:-1px}.apps-size {color:var(--text-primary)}.apps-icon-fallback {border-color:var(--text-primary);color:var(--text-primary)}}
 /* Keep input text legible and avoid iOS focus zoom in Applications controls. */
 #appsPage .apps-toolbar input,#appsPage .apps-toolbar select {font-size:13px}
 .apps-confirm input {font-size:16px}
@@ -66,12 +438,23 @@
 #appsList::-webkit-scrollbar-thumb {background:#526b85;border:2px solid #101b28;border-radius:8px}
 #appsList::-webkit-scrollbar-thumb:hover {background:#7596b8}
 #appsPage #appsList.is-grid {display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;align-content:start}
-#appsPage .is-grid .apps-row {grid-template-columns:44px minmax(0,1fr);grid-template-rows:auto 1fr auto;gap:8px;padding:12px;border:1px solid var(--border-card);border-radius:14px;background:var(--surface-content-raised);align-items:start}
-#appsPage .is-grid .apps-select {grid-column:1;grid-row:1}
-#appsPage .is-grid .apps-size {grid-column:2;grid-row:1;align-self:center}
-#appsPage .is-grid .apps-info {grid-column:1/-1;grid-row:2}
-#appsPage .is-grid .apps-row-action {grid-column:1/-1;grid-row:3;justify-self:stretch;margin:0;border:1px solid var(--border-card);min-height:44px}
+#appsPage .is-grid .apps-row {display:flex;flex-direction:column;padding:12px;border:1px solid var(--border-card);border-radius:14px;background:var(--surface-content-raised);min-width:0;box-sizing:border-box;position:relative}
 #appsPage .is-grid .apps-row.is-selected {background:var(--tint-primary);border-color:var(--accent-primary)}
+#appsPage .is-grid .apps-row .apps-select {position:absolute;top:4px;right:4px;z-index:2;width:44px;height:44px}
+#appsPage .is-grid .apps-card-header {padding-right:38px}
+#appsPage .is-grid .apps-card-header {display:flex;align-items:flex-start;gap:10px;width:100%;min-width:0}
+#appsPage .is-grid .apps-icon-wrap {flex:0 0 38px;width:38px;height:38px;border-radius:8px}
+#appsPage .is-grid .apps-icon-img {width:34px;height:34px}
+#appsPage .is-grid .apps-icon-fallback {width:36px;height:36px;font-size:15px}
+#appsPage .is-grid .apps-info {flex:1;min-width:0}
+#appsPage .is-grid .apps-info h2 {font-size:13px;font-weight:600;line-height:1.35;margin:0 0 3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+#appsPage .is-grid .apps-publisher {font-size:11px;color:var(--text-secondary);margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
+#appsPage .is-grid .apps-description {display:none}
+#appsPage .is-grid .apps-card-meta {display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;margin-top:auto;padding-top:10px;min-width:0}
+#appsPage .is-grid .apps-category {font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+#appsPage .is-grid .apps-size {font-size:12px;font-weight:600;color:var(--text-primary);text-align:right;white-space:nowrap;flex-shrink:0;font-variant-numeric:tabular-nums}
+#appsPage .is-grid .apps-row-actions {width:100%;margin-top:8px;padding-top:8px;border-top:1px solid var(--border-card);display:flex}
+#appsPage .is-grid .apps-row-actions button {width:100%;flex:1;min-height:44px;display:inline-flex;align-items:center;justify-content:center}
 #appsPage .is-grid .apps-empty {grid-column:1/-1}
 @media(min-width:700px){
  body:has(#appsPage:not([hidden])) {padding-inline:0}
@@ -80,13 +463,24 @@
  #appsPage {height:calc(100dvh - var(--app-bar-height) - 24px);padding:18px}
  #appsPage .apps-info h2 {font-size:15px}
 }
-@media(max-width:699px){
+@media(min-width:380px) and (max-width:699px){
  #appsPage #appsList.is-grid {grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
- #appsPage .is-grid .apps-row {padding:8px;gap:5px}
- #appsPage .is-grid .apps-info h2 {font-size:13px}
+ #appsPage .is-grid .apps-row {padding:10px 8px}
+ #appsPage .is-grid .apps-icon-wrap {flex:0 0 32px;width:32px;height:32px}
+ #appsPage .is-grid .apps-icon-img {width:28px;height:28px}
+ #appsPage .is-grid .apps-icon-fallback {width:30px;height:30px;font-size:13px}
+ #appsPage .is-grid .apps-info h2 {font-size:12px}
  #appsPage .is-grid .apps-publisher,#appsPage .is-grid .apps-category {font-size:10px}
+ #appsPage .is-grid .apps-size {font-size:11px}
+}
+@media(max-width:379px){
+ #appsPage #appsList.is-grid {grid-template-columns:1fr;gap:8px}
+ #appsPage .is-grid .apps-row {padding:12px}
+}
+@media(max-width:699px){
  .apps-view-controls button {padding-inline:5px;font-size:11px}
 }
+
 @media(prefers-contrast:more){#appsList {scrollbar-color:var(--text-primary) var(--surface-content)}}
 
 @media(max-width:699px){#appsPage #appsList {min-height:72px}}
@@ -94,3 +488,113 @@
 #appsPage .apps-toolbar {margin-top:0}
 .apps-meta {flex-wrap:wrap}
 @media(max-width:699px){html:not(.native-shell) #appsPage {height:100%}.apps-meta #appsStatus {flex-basis:100%;order:1}}
+
+/* Quick Launch Section */
+.quick-launch-section {flex-shrink:0;margin-bottom:12px;padding:12px;border:1px solid var(--border-card);border-radius:14px;background:var(--surface-content-raised);box-sizing:border-box;max-width:100%}
+.quick-launch-header {display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;min-width:0}
+.quick-launch-actions,.quick-launch-controls {display:flex;align-items:center;gap:8px;flex-shrink:0;min-width:0}
+.quick-launch-add-btn {min-height:34px;padding:0 12px;font:inherit;font-size:12px;font-weight:600;color:var(--accent-primary);background:var(--tint-primary);border:1px solid var(--accent-primary);border-radius:8px;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;transition:background .15s,color .15s,border-color .15s}
+.quick-launch-add-btn:hover {background:var(--accent-primary);color:#fff}
+.quick-launch-add-btn:focus-visible {outline:2px solid var(--accent-primary);outline-offset:2px}
+.quick-launch-empty-card {display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border:1px dashed var(--border-card);border-radius:12px;width:100%;max-width:100%;box-sizing:border-box;background:var(--surface-content)}
+.quick-launch-empty-text {font-size:12px;color:var(--text-secondary);margin:0;line-height:1.4}
+@media(max-width:699px){.quick-launch-empty-card {flex-direction:column;align-items:flex-start;gap:8px}}
+.quick-launch-title-wrap {display:flex;align-items:baseline;gap:8px;min-width:0}
+.quick-launch-title {font-size:14px;font-weight:600;color:var(--text-primary);margin:0;letter-spacing:-.01em}
+.quick-launch-count {font-size:11px;color:var(--text-secondary)}
+.quick-launch-status {font-size:11px;color:var(--accent-emerald);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.quick-launch-status.is-error {color:var(--accent-amber)}
+.quick-launch-rail {display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;scrollbar-width:thin;max-width:100%;box-sizing:border-box}
+.quick-launch-empty {font-size:12px;color:var(--text-secondary);padding:6px 0;margin:0}
+.quick-launch-tile {position:relative;flex:0 0 86px;width:86px;min-height:92px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 6px 8px;border:1px solid var(--border-card);border-radius:12px;background:var(--surface-content);cursor:pointer;scroll-snap-align:start;text-decoration:none;color:inherit;transition:background .15s,border-color .15s,transform .1s}
+.quick-launch-tile:hover {background:var(--tint-primary);border-color:var(--accent-primary)}
+.quick-launch-tile:active {transform:scale(.97)}
+.quick-launch-tile:focus-visible {outline:2px solid var(--accent-primary);outline-offset:2px}
+.quick-launch-tile.is-launching {opacity:.7;pointer-events:none;animation:ql-pulse 1s infinite alternate}
+@keyframes ql-pulse {from{transform:scale(1)}to{transform:scale(.97);border-color:var(--accent-primary)}}
+.quick-launch-tile.is-missing {opacity:.5;border-style:dashed;cursor:default}
+.quick-launch-tile.is-missing:hover {background:var(--surface-content);border-color:var(--border-card)}
+.quick-launch-tile-icon {width:38px;height:38px;object-fit:contain;margin-bottom:4px;image-rendering:-webkit-optimize-contrast}
+.quick-launch-tile-name {font-size:11px;font-weight:500;color:var(--text-primary);text-align:center;line-height:1.2;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-inline:2px}
+.quick-launch-missing-label {font-size:9px;color:var(--accent-amber);margin-top:2px}
+.quick-launch-unpin-btn {position:absolute;top:2px;right:2px;width:20px;height:20px;border:0;background:transparent;color:var(--text-secondary);border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;line-height:1;opacity:.6;padding:0}
+.quick-launch-unpin-btn:hover {opacity:1;color:var(--accent-amber);background:rgba(255,255,255,.08)}
+
+/* Quick Launch Picker Dialog */
+.ql-picker-dialog {max-width:min(520px,calc(100vw - 24px));width:100%;padding:20px}
+.ql-picker-container {display:flex;flex-direction:column;gap:12px;max-height:calc(85dvh - 32px)}
+.ql-picker-header {display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+#qlPickerTitle {font-size:18px;margin:0 0 2px}
+.ql-picker-subtitle {font-size:11px;color:var(--text-secondary);margin:0}
+.ql-picker-header button {width:32px;height:32px;min-height:32px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:8px;font-size:13px}
+.ql-picker-search-wrap input {width:100%;min-height:40px;background:var(--surface-content-raised);color:var(--text-primary);border:1px solid var(--border-card);border-radius:8px;padding:8px 12px;font:inherit;font-size:13px}
+.ql-picker-list {display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:4px}
+.ql-picker-item {display:grid;grid-template-columns:36px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid var(--border-card);background:var(--surface-content-raised);transition:background .15s}
+.ql-picker-item:hover {background:var(--tint-primary)}
+.ql-picker-item-info {min-width:0}
+.ql-picker-item-info strong {display:block;font-size:13px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ql-picker-item-info small {display:block;font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ql-picker-toggle-btn {min-height:36px;min-width:72px;padding:0 10px;font:inherit;font-size:12px;font-weight:600;border-radius:8px;border:1px solid var(--border-card);background:transparent;color:var(--text-primary);cursor:pointer;transition:all .15s}
+.ql-picker-toggle-btn:hover:not(:disabled) {border-color:var(--accent-primary);background:var(--tint-primary);color:var(--accent-primary)}
+.ql-picker-toggle-btn.is-pinned {background:var(--tint-primary);border-color:var(--accent-primary);color:var(--accent-primary)}
+.ql-picker-toggle-btn:disabled {opacity:.45;cursor:not-allowed}
+.ql-picker-footer {display:flex;align-items:center;justify-content:space-between;padding-top:8px;border-top:1px solid var(--border-card)}
+.ql-picker-count {font-size:12px;color:var(--text-secondary)}
+
+/* Apps Subnav Tabs */
+.apps-subnav {display:flex;gap:4px;border-bottom:1px solid var(--border-card);margin-bottom:10px;flex-shrink:0}
+.apps-subnav-btn {background:transparent;border:0;border-bottom:2px solid transparent;color:var(--text-secondary);padding:6px 14px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;border-radius:6px 6px 0 0;min-height:38px}
+.apps-subnav-btn:hover {color:var(--text-primary)}
+.apps-subnav-btn.is-active {color:var(--accent-primary);border-bottom-color:var(--accent-primary)}
+.apps-subnav-btn:focus-visible {outline:2px solid var(--accent-primary);outline-offset:-2px}
+
+/* Apps Panel container */
+.apps-panel {display:flex;flex-direction:column;flex:1;min-height:0}
+.apps-panel[hidden] {display:none}
+
+/* Actions for Installed Apps row / card */
+.apps-row-actions {display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
+.apps-manage-btn {min-height:38px;padding:0 12px;font:inherit;font-size:12px;font-weight:600;border-radius:8px;white-space:nowrap;transition:all .15s}
+#appsPage.is-selecting .apps-manage-btn {color:var(--accent-primary);border-color:var(--accent-primary);background:var(--tint-primary)}
+
+/* Installed row action buttons */
+.apps-uninstall-btn {min-height:44px;min-width:74px;padding:0 14px;font:inherit;font-size:12px;font-weight:600;color:var(--text-secondary);background:transparent;border:1px solid var(--border-card);border-radius:10px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;transition:background .15s,color .15s,border-color .15s}
+.apps-uninstall-btn:hover:not(:disabled) {color:#f87171;background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.3)}
+.apps-uninstall-btn:focus-visible {outline:2px solid #f87171;outline-offset:2px}
+.apps-uninstall-btn:disabled {opacity:.45;cursor:not-allowed}
+
+.apps-details-btn {min-height:44px;min-width:74px;padding:0 14px;font:inherit;font-size:12px;font-weight:600;color:var(--text-secondary);background:transparent;border:1px solid var(--border-card);border-radius:10px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;transition:background .15s,color .15s}
+.apps-details-btn:hover:not(:disabled) {color:var(--text-primary);background:var(--tint-primary)}
+.apps-details-btn:focus-visible {outline:2px solid var(--accent-primary);outline-offset:2px}
+.apps-details-btn:disabled {opacity:.45;cursor:not-allowed}
+
+/* Startup Apps Panel & List */
+.startup-list {display:grid;gap:9px;flex:1;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;align-content:start}
+.startup-row {display:grid;grid-template-columns:36px minmax(0,1fr) auto auto;gap:12px;align-items:center;padding:12px 14px;border:1px solid var(--border-card);border-radius:14px;background:var(--surface-content-raised);min-width:0}
+.startup-info {min-width:0}
+.startup-info h2 {font-size:14px;font-weight:600;line-height:1.4;margin:0 0 3px;overflow-wrap:anywhere}
+.startup-info p {font-size:11px;color:var(--text-secondary);margin:2px 0;line-height:1.4;overflow-wrap:anywhere}
+.startup-badges {display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.startup-scope-badge,.startup-status-badge {font-size:10px;font-weight:600;padding:2px 7px;border-radius:8px;line-height:1.3;white-space:nowrap}
+.startup-scope-user {background:rgba(56,189,248,.12);color:#38bdf8;border:1px solid rgba(56,189,248,.25)}
+.startup-scope-machine {background:rgba(148,163,184,.12);color:#94a3b8;border:1px solid rgba(148,163,184,.25)}
+.startup-status-enabled {background:rgba(52,211,153,.12);color:#34d399;border:1px solid rgba(52,211,153,.25)}
+.startup-status-disabled {background:rgba(239,68,68,.12);color:#f87171;border:1px solid rgba(239,68,68,.25)}
+.startup-toggle-btn {min-height:38px;padding:0 12px;font:inherit;font-size:12px;font-weight:600;border-radius:10px;cursor:pointer;border:1px solid var(--border-card);background:transparent;color:var(--text-primary);transition:background .15s,color .15s}
+.startup-toggle-btn:hover:not(:disabled) {background:var(--tint-primary);border-color:var(--accent-primary)}
+.startup-toggle-btn:focus-visible {outline:2px solid var(--accent-primary);outline-offset:2px}
+.startup-toggle-btn:disabled {opacity:.5;cursor:not-allowed}
+.startup-confirm-details {padding:10px;border-radius:10px;background:var(--surface-content-raised);margin:12px 0;font-size:13px}
+.startup-confirm-details strong {color:var(--text-primary)}
+@media(max-width:699px){
+  .startup-row {grid-template-columns:36px minmax(0,1fr);gap:8px;padding:10px}
+  .startup-badges {grid-column:2;margin-top:2px}
+  .startup-toggle-btn {grid-column:1/-1;justify-self:stretch;margin-top:4px}
+  .quick-launch-rail {gap:6px}
+  .quick-launch-tile {flex:0 0 76px;width:76px;min-height:86px;padding:8px 4px}
+  .quick-launch-tile-icon {width:32px;height:32px}
+}
+@media(min-width:700px){
+  .quick-launch-rail {flex-wrap:wrap;overflow-x:visible}
+  .quick-launch-tile {flex:0 0 88px;width:88px}
+}

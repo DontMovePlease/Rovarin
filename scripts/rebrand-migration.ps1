@@ -135,6 +135,14 @@ try {
             # Inno remains the sole owner of file/registry/shortcut removal. Data
             # is preserved in BOTH locations until the replacement is healthy.
             $stage='legacy-uninstall'
+            if (Test-Path -LiteralPath $legacy) {
+                $items = @(Get-Item -LiteralPath $legacy -Force) + @(Get-ChildItem -LiteralPath $legacy -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { $_.PSIsContainer })
+                foreach ($item in $items) {
+                    if ($item.Attributes -band [IO.FileAttributes]::ReadOnly) {
+                        try { $item.Attributes = $item.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly) } catch {}
+                    }
+                }
+            }
             Invoke-Owned (Join-Path $legacy 'unins000.exe') @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART')
             if ((Test-Path -LiteralPath $registration) -or (Test-Path -LiteralPath (Join-Path $oldApp 'server.js'))) { throw 'legacy-uninstall-incomplete' }
         }
@@ -150,9 +158,46 @@ try {
     $stage='replacement-validation'
     Invoke-Owned (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',('"'+(Join-Path $newApp 'scripts\installed-uninstall.ps1')+'"'),'-Mode','Validate')
     . (Join-Path $newApp 'scripts\dashboard-runtime.ps1')
+    $configFile = Join-Path $destinationRoot 'data\config.json'
+    if (Test-Path -LiteralPath $configFile) {
+        $links = & cmd.exe /c "fsutil hardlink list `"$configFile`"" 2>$null
+        foreach ($link in $links) {
+            $trimmed = [string]$link.Trim()
+            if ($trimmed -and $trimmed -match '[\\/]\.tmp\.driveupload[\\/]') {
+                $drive = Split-Path -Qualifier $configFile
+                $fullPath = if ($trimmed.StartsWith('\')) { $drive + $trimmed } else { $trimmed }
+                if (Test-Path -LiteralPath $fullPath) {
+                    Remove-Item -LiteralPath $fullPath -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    }
     $stage='replacement-health'
     & (Join-Path $newApp 'scripts\start.ps1') | Out-Null
-    if ($LASTEXITCODE -ne 0 -or -not (Get-DashboardRuntime $newApp).healthy) { throw 'replacement-not-healthy' }
+    $runtime = Wait-DashboardRuntime $newApp 15
+    if (-not $runtime.healthy) {
+        Start-Sleep -Seconds 2
+        foreach ($record in @('server.pid','server-state.json','server.instance.json','server-start.lock')) {
+            $recordPath = Join-Path (Join-Path $destinationRoot 'data') $record
+            if (Test-Path -LiteralPath $recordPath) { Remove-Item -LiteralPath $recordPath -Force -ErrorAction SilentlyContinue }
+        }
+        if (Test-Path -LiteralPath $configFile) {
+            $links = & cmd.exe /c "fsutil hardlink list `"$configFile`"" 2>$null
+            foreach ($link in $links) {
+                $trimmed = [string]$link.Trim()
+                if ($trimmed -and $trimmed -match '[\\/]\.tmp\.driveupload[\\/]') {
+                    $drive = Split-Path -Qualifier $configFile
+                    $fullPath = if ($trimmed.StartsWith('\')) { $drive + $trimmed } else { $trimmed }
+                    if (Test-Path -LiteralPath $fullPath) {
+                        Remove-Item -LiteralPath $fullPath -Force -ErrorAction SilentlyContinue
+                    }
+                }
+            }
+        }
+        & (Join-Path $newApp 'scripts\start.ps1') | Out-Null
+        $runtime = Wait-DashboardRuntime $newApp 15
+    }
+    if (-not $runtime.healthy) { throw 'replacement-not-healthy' }
     $stage='settings-verification'
     foreach ($property in $record.hashes.PSObject.Properties) {
         if ($property.Name -notin $settings) { throw 'unexpected-migration-setting' }

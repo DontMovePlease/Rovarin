@@ -208,7 +208,7 @@ function spawnServer(scriptPath, cwd) {
 }
 
 async function main() {
-  assert.deepStrictEqual(Array.from(WATCHED_SERVER_FILES).sort(), ['maintenance.js', 'scripts/empty-recycle-bin.ps1', 'process-stats.js', 'server.js', 'server-lifecycle.js', 'pin-manager.js', 'process-termination.js', 'app-manager.js', 'scripts/terminate-process.ps1', 'scripts/process-tree.ps1', 'scripts/process-tree.cs', 'scripts/app-manager.ps1', 'scripts/app-uninstall.cs', 'scripts/process-display.ps1', 'scripts/application-display.ps1', 'scripts/installed-update.ps1', 'enhanced-support.js', 'uninstall-manager.js', 'update-manager.js', 'temperature-manager.js', 'cpu-temperature-provider.js', 'scripts/cpu-temperature-provider.ps1'].sort());
+  assert.deepStrictEqual(Array.from(WATCHED_SERVER_FILES).sort(), ['maintenance.js', 'scripts/empty-recycle-bin.ps1', 'process-stats.js', 'server.js', 'server-lifecycle.js', 'pin-manager.js', 'process-termination.js', 'app-manager.js', 'scripts/terminate-process.ps1', 'scripts/process-tree.ps1', 'scripts/process-tree.cs', 'scripts/app-manager.ps1', 'scripts/app-uninstall.cs', 'scripts/app-metadata.cs', 'scripts/process-display.ps1', 'scripts/application-display.ps1', 'scripts/installed-update.ps1', 'enhanced-support.js', 'uninstall-manager.js', 'update-manager.js', 'temperature-manager.js', 'cpu-temperature-provider.js', 'scripts/cpu-temperature-provider.ps1'].sort());
 
   let currentServer = { state: 'owned', pid: 7331 };
   let terminatedPid = null;

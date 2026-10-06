@@ -20,7 +20,7 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
       // Local shell QA without rebuilding or touching the installer payload.
       fs.cpSync(path.join(root,'public'),path.join(app,'public'),{recursive:true});
       for (const name of ['server.js','pin-manager.js','update-manager.js','app-manager.js','process-termination.js','process-stats.js']) fs.copyFileSync(path.join(root,name),path.join(app,name));
-      for(const name of ['terminate-process.ps1','app-manager.ps1','app-uninstall.cs','process-tree.ps1','process-tree.cs','process-display.ps1','application-display.ps1'])fs.copyFileSync(path.join(root,'scripts',name),path.join(app,'scripts',name));
+      for(const name of ['terminate-process.ps1','app-manager.ps1','app-uninstall.cs','app-metadata.cs','process-tree.ps1','process-tree.cs','process-display.ps1','application-display.ps1'])fs.copyFileSync(path.join(root,'scripts',name),path.join(app,'scripts',name));
       fs.copyFileSync(path.join(root,'scripts/native-trust.ps1'),path.join(app,'scripts/native-trust.ps1'));
       execFileSync(compiler,['/nologo','/target:winexe','/platform:x64','/optimize+','/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll',`/r:${path.join(app,'Microsoft.Web.WebView2.Core.dll')}`,`/r:${path.join(app,'Microsoft.Web.WebView2.WinForms.dll')}`,`/win32manifest:${path.join(root,'packaging/desktop.manifest')}`,`/win32icon:${path.join(app,'Rovarin.ico')}`,`/out:${path.join(app,'Rovarin.exe')}`,path.join(root,'packaging/RovarinLauncher.cs'),path.join(root,'packaging/DesktopShell.cs')],{windowsHide:true,timeout:15000});
     }

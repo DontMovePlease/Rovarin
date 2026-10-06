@@ -161,7 +161,12 @@ try {
     if ($Mode -eq 'Cleanup') {
         # Inno calls this only after StopInstalledServer confirms exit.
         . (Join-Path $PSScriptRoot 'dashboard-runtime.ps1')
-        $runtime = Get-DashboardRuntime $app
+        $cleanupDeadline = (Get-Date).AddSeconds(10)
+        do {
+            $runtime = Get-DashboardRuntime $app
+            if ($runtime.state -eq 'none') { break }
+            Start-Sleep -Milliseconds 250
+        } while ((Get-Date) -lt $cleanupDeadline)
         if ($runtime.state -ne 'none') { throw 'server-still-running' }
         $updates = Join-Path $installRoot 'updates'
         Assert-PlainPath $updates
@@ -223,9 +228,16 @@ try {
     $arguments = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART')
     if ($FullRemoval) { $arguments += '/FULLREMOVAL' }
     # Inno needs exclusive write access to its own log. Release held read locks
-    # only after ownership/exit verification, immediately before the fixed launch.
     foreach ($stream in $held) { $stream.Dispose() }; $held = @()
     $stage = 'launch'
+    if (Test-Path -LiteralPath $installRoot) {
+        $items = @(Get-Item -LiteralPath $installRoot -Force) + @(Get-ChildItem -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { $_.PSIsContainer })
+        foreach ($item in $items) {
+            if ($item.Attributes -band [IO.FileAttributes]::ReadOnly) {
+                try { $item.Attributes = $item.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly) } catch {}
+            }
+        }
+    }
     $uninstaller = Start-Process -FilePath (Join-Path $installRoot 'unins000.exe') -ArgumentList $arguments -WorkingDirectory $env:TEMP -WindowStyle Hidden -PassThru
     Save-HandoffState 'launched'
     $uninstaller.Dispose()

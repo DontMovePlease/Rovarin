@@ -18,8 +18,8 @@ const { UpdateManager } = require('./update-manager');
 
 // Configuration
 const PORT = process.env.PORT || 7331;
-// Installed payload is immutable across runs; user state survives app upgrades.
-const DATA_DIR = fs.existsSync(path.join(__dirname, 'installation.json')) ? path.join(__dirname, '..', 'data') : __dirname;
+const IS_INSTALLED = fs.existsSync(path.join(__dirname, 'installation.json'));
+const DATA_DIR = IS_INSTALLED ? path.join(__dirname, '..', 'data') : __dirname;
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const CONFIG_FILE = (() => {
   try { return configurationFile(); }
@@ -28,10 +28,21 @@ const CONFIG_FILE = (() => {
 const enhancedSupport = new EnhancedSupport({ stateDirectory: DATA_DIR });
 const uninstallManager = new UninstallManager();
 const updateManager = new UpdateManager({ configFile: CONFIG_FILE });
-const appManager = new AppManager({ onChange: broadcastAppsStatus });
+const appManager = new AppManager({ onChange: broadcastAppsStatus, stateDirectory: DATA_DIR });
 let treeInFlight = false;
 // Opaque compatibility identifiers retain existing clients and desktop trust.
 const AUTH_COOKIE = 'pc_monitor_session';
+const AUTH_DEBUG_LOG = path.join(__dirname, 'auth-debug.log');
+const SERVER_PID = process.pid;
+const SERVER_START_TIME = new Date().toISOString();
+function authLog(tag, data = {}) {
+  if (IS_INSTALLED) return;
+  const ts = new Date().toISOString();
+  const line = `[${ts}] [${tag}] PID=${SERVER_PID} ${Object.entries(data).map(([k, v]) => `${k}=${typeof v === 'string' && (v.includes(' ') || v.includes(';') || v.includes('"')) ? JSON.stringify(v) : v}`).join(' ')}`;
+  console.log(line);
+  try { fs.appendFileSync(AUTH_DEBUG_LOG, line + '\n', 'utf8'); } catch (_) {}
+}
+authLog('SERVER_INIT', { startTime: SERVER_START_TIME, port: PORT });
 const SESSION_TTL_MS = readBoundedDuration(process.env.PC_MONITOR_SESSION_TTL_MS, 90 * 24 * 60 * 60 * 1000, 1000, 90 * 24 * 60 * 60 * 1000);
 const MAX_SESSIONS = 64;
 const MAX_LEASES_PER_SESSION = 4;
@@ -54,27 +65,48 @@ try {
 let savedAccessPin = config.pin;
 if (validPin(process.env.PC_MONITOR_PIN)) config.pin = process.env.PC_MONITOR_PIN;
 let pinConfigHealthy = true;
-function refreshAccessPin() {
+let lastPinCheckTime = 0;
+const PIN_CHECK_INTERVAL_MS = 1000;
+let transientPinFailures = 0;
+
+function refreshAccessPin(force = false) {
+  const now = Date.now();
+  if (!force && pinConfigHealthy && (now - lastPinCheckTime < PIN_CHECK_INTERVAL_MS)) {
+    return true;
+  }
   try {
     const saved = readConfig(CONFIG_FILE);
+    lastPinCheckTime = now;
+    transientPinFailures = 0;
     if (!pinConfigHealthy || saved.pin !== savedAccessPin) {
       if (saved.pin !== savedAccessPin) loginAttempts.clear(); // New local credential, new guess budget.
-      for (const session of Array.from(sessions.values())) revokeSession(session);
+      authLog('REFRESH_PIN_CHANGED_OR_UNHEALTHY', { healthyBefore: pinConfigHealthy, pinMismatch: saved.pin !== savedAccessPin, activeSessions: sessions.size });
+      for (const session of Array.from(sessions.values())) revokeSession(session, 'pin-changed-or-unhealthy');
       config = saved;
+      if (validPin(process.env.PC_MONITOR_PIN)) config.pin = process.env.PC_MONITOR_PIN;
       savedAccessPin = saved.pin;
     }
     if (saved.requireDesktopPin !== config.requireDesktopPin || saved.desktopLocked !== config.desktopLocked) {
       if (saved.requireDesktopPin !== false || saved.desktopLocked) {
-        for (const session of Array.from(sessions.values())) if (session.desktopAutomatic) revokeSession(session);
+        for (const session of Array.from(sessions.values())) if (session.desktopAutomatic) revokeSession(session, 'desktop-auto-lock');
       }
       config.requireDesktopPin = saved.requireDesktopPin;
       config.desktopLocked = saved.desktopLocked;
     }
     pinConfigHealthy = true;
     return true;
-  } catch (_) {
+  } catch (err) {
+    const isTransient = err && (err.code === 'EBUSY' || err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EMFILE' || err.code === 'ENFILE');
+    if (isTransient && pinConfigHealthy && validPin(savedAccessPin) && transientPinFailures < 3) {
+      transientPinFailures++;
+      lastPinCheckTime = now;
+      authLog('REFRESH_PIN_TRANSIENT_ERROR', { error: err.message, code: err.code, transientPinFailures });
+      return true;
+    }
+    transientPinFailures = 0;
     pinConfigHealthy = false;
-    for (const session of Array.from(sessions.values())) revokeSession(session);
+    authLog('REFRESH_PIN_FATAL_ERROR', { error: err.message, code: err.code, activeSessions: sessions.size });
+    for (const session of Array.from(sessions.values())) revokeSession(session, 'pin-fatal-error');
     return false;
   }
 }
@@ -1256,7 +1288,7 @@ function safeEqualPin(candidate) {
 }
 
 function issueSession(req, res, desktopAutomatic = false) {
-  for (const session of Array.from(sessions.values())) if (session.expiresAt <= Date.now()) revokeSession(session);
+  for (const session of Array.from(sessions.values())) if (session.expiresAt <= Date.now()) revokeSession(session, 'issueSession-expired');
   if (sessions.size >= MAX_SESSIONS) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Login is temporarily unavailable.' })); return; }
   const token = crypto.randomBytes(32).toString('base64url');
   sessions.set(token, { id: crypto.randomBytes(16).toString('hex'), expiresAt: Date.now() + SESSION_TTL_MS, desktopAutomatic });
@@ -1269,21 +1301,37 @@ function issueSession(req, res, desktopAutomatic = false) {
 }
 
 function getAuthenticatedSession(req) {
-  if (!refreshAccessPin()) return null;
+  if (!refreshAccessPin()) {
+    if (req) req.authFailureReason = 'pin-config-unhealthy';
+    return null;
+  }
   const token = parseCookies(req)[AUTH_COOKIE];
-  if (!token || token.length > 128) return null;
+  if (!token) {
+    if (req) req.authFailureReason = 'no-session-cookie';
+    return null;
+  }
+  if (token.length > 128) {
+    if (req) req.authFailureReason = 'cookie-too-long';
+    return null;
+  }
   const session = sessions.get(token);
-  if (!session) return null;
+  if (!session) {
+    if (req) req.authFailureReason = `session-not-found(activeSessions=${sessions.size})`;
+    return null;
+  }
   if (session.expiresAt <= Date.now()) {
+    if (req) req.authFailureReason = 'session-expired';
     sessions.delete(token);
     for (const [id, lease] of monitoringLeases) if (lease.sessionId === session.id) removeMonitoringLease(id);
     return null;
   }
+  if (req) req.authFailureReason = 'authenticated';
   return session;
 }
 
-function revokeSession(session) {
+function revokeSession(session, reason = 'unspecified') {
   if (!session) return;
+  authLog('REVOKE_SESSION', { reason, sessionId: session.id, activeBefore: sessions.size });
   for (const [token, existing] of sessions) if (existing.id === session.id) sessions.delete(token);
   for (const [id, lease] of monitoringLeases) if (lease.sessionId === session.id) removeMonitoringLease(id);
 }
@@ -1389,17 +1437,58 @@ const server = http.createServer((req, res) => {
   const pathname = parsedUrl.pathname;
 
   const isLoginPost = req.method === 'POST' && pathname === '/api/login';
+  const isDebugLogPost = req.method === 'POST' && pathname === '/api/debug/client-log';
   const isDesktopPost = req.method === 'POST' && ['/api/desktop/auth', '/api/desktop/security', '/api/desktop/updates'].includes(pathname);
   const isLogoutPost = req.method === 'POST' && pathname === '/api/logout';
   const isMaintenancePost = req.method === 'POST' && pathname === '/api/maintenance/run';
   const isMonitoringLeasePost = req.method === 'POST' && pathname === '/api/monitoring/lease';
   const isTreePreviewPost = req.method === 'POST' && pathname === '/api/processes/tree';
   const isProcessTreePost = req.method === 'POST' && pathname === '/api/processes/kill-tree';
-  const isAppsPost = req.method === 'POST' && pathname === '/api/apps/uninstall';
+  const isAppsPost = req.method === 'POST' && ['/api/apps/uninstall', '/api/apps/quick-launch', '/api/apps/launch', '/api/apps/startup/toggle'].includes(pathname);
   const isProcessKillPost = req.method === 'POST' && ['/api/processes/kill','/api/processes/kill-tree','/api/processes/tree'].includes(pathname);
   const isTemperatureSettingsPost = req.method === 'POST' && pathname === '/api/temperature/settings';
   const isEnhancedInstallPost = req.method === 'POST' && pathname === '/api/temperature/enhanced/install';
   const isUninstallPost = req.method === 'POST' && pathname === '/api/system/uninstall';
+
+  const shouldTraceReq = pathname === '/' || pathname.startsWith('/api/') || pathname === '/login.html' || pathname === '/login.js' || pathname === '/app.js';
+  if (shouldTraceReq && !pathname.startsWith('/api/stream') && !isDebugLogPost) {
+    authLog('HTTP_REQ_START', {
+      method: req.method,
+      path: pathname,
+      ip: clientIP,
+      host: req.headers.host || 'none',
+      origin: req.headers.origin || 'none',
+      hasAuthCookie: Boolean(req.headers.cookie && req.headers.cookie.includes(AUTH_COOKIE)),
+      activeSessions: sessions.size
+    });
+    res.on('finish', () => {
+      authLog('HTTP_REQ_END', {
+        method: req.method,
+        path: pathname,
+        status: res.statusCode,
+        authReason: req.authFailureReason || 'n/a',
+        activeSessions: sessions.size
+      });
+    });
+  }
+
+  if (isDebugLogPost) {
+    readRequestBody(req, 4096, (err, body) => {
+      if (err) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: false })); return; }
+      try {
+        const data = JSON.parse(body);
+        authLog('CLIENT_TELEMETRY', {
+          clientEvent: data.event || 'unknown',
+          url: data.url || '',
+          reason: data.reason || '',
+          detail: typeof data.detail === 'object' ? JSON.stringify(data.detail) : String(data.detail || '')
+        });
+      } catch (_) {}
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    return;
+  }
 
   if (req.method !== 'GET' && !isDesktopPost && !isLoginPost && !isLogoutPost && !isMaintenancePost && !isMonitoringLeasePost && !isProcessKillPost && !isTemperatureSettingsPost && !isEnhancedInstallPost && !isUninstallPost && !isAppsPost) {
     res.writeHead(405, { 'Content-Type': 'text/plain' });
@@ -1423,7 +1512,7 @@ const server = http.createServer((req, res) => {
       readRequestBody(req, 512, (err, body) => {
         let data; try { data = JSON.parse(body); } catch (_) {}
         if (err || !data || typeof data !== 'object' || Array.isArray(data)) { reply(400, { success: false, error: 'Invalid request.' }); return; }
-        if (!refreshAccessPin()) { reply(503, { success: false, error: 'Access configuration unavailable.' }); return; }
+        if (!refreshAccessPin(true)) { reply(503, { success: false, error: 'Access configuration unavailable.' }); return; }
         if (pathname === '/api/desktop/auth') {
           if (Object.keys(data).length) { reply(400, { success: false, error: 'Invalid request.' }); return; }
           if (config.requireDesktopPin !== false || config.desktopLocked) { reply(401, { success: false, error: 'Enter your Rovarin PIN.' }); return; }
@@ -1465,19 +1554,19 @@ const server = http.createServer((req, res) => {
         try {
           if (data.action === 'lock' && fields.length === 1) {
             writeConfig(CONFIG_FILE, { ...readConfig(CONFIG_FILE), desktopLocked: true });
-            refreshAccessPin(); revokeSession(session);
+            refreshAccessPin(true); revokeSession(session, 'desktop-manual-lock');
             reply(200, { success: true }); return;
           }
           if (data.action === 'preference' && fields.length === 3 && fields.every(k => ['action', 'requireDesktopPin', 'confirmed'].includes(k)) && typeof data.requireDesktopPin === 'boolean' && data.confirmed === true) {
             writeConfig(CONFIG_FILE, { ...readConfig(CONFIG_FILE), requireDesktopPin: data.requireDesktopPin, desktopLocked: false });
-            refreshAccessPin();
-            if (data.requireDesktopPin) revokeSession(session);
+            refreshAccessPin(true);
+            if (data.requireDesktopPin) revokeSession(session, 'desktop-pin-required-changed');
             reply(200, { success: true, requireDesktopPin: data.requireDesktopPin }); return;
           }
           if (data.action === 'rotate' && fields.length === 2 && data.confirmed === true) {
             const saved = readConfig(CONFIG_FILE), pin = generatePin(saved.pin);
             writeConfig(CONFIG_FILE, { ...saved, pin, desktopLocked: true });
-            refreshAccessPin();
+            refreshAccessPin(true);
             reply(200, { success: true, pin }); return;
           }
         } catch (_) { reply(503, { success: false, error: 'Security settings could not be saved.' }); return; }
@@ -1489,43 +1578,70 @@ const server = http.createServer((req, res) => {
 
   if (isLoginPost) {
     const rate = loginRateState(req);
+    authLog('LOGIN_POST_ATTEMPT', {
+      ip: req.socket.remoteAddress,
+      host: req.headers.host || 'none',
+      origin: req.headers.origin || 'none',
+      cookiePresent: Boolean(req.headers.cookie && req.headers.cookie.includes(AUTH_COOKIE)),
+      activeSessions: sessions.size
+    });
     if (rate.state.lockedUntil > rate.now) {
+      authLog('LOGIN_RATE_LOCKED', { lockedUntil: rate.state.lockedUntil });
       res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': String(Math.ceil((rate.state.lockedUntil - rate.now) / 1000)) });
       res.end(JSON.stringify({ success: false, error: 'Too many attempts. Try again shortly.' }));
       return;
     }
     readRequestBody(req, 1024, (err, body) => {
-      if (err) { res.writeHead(err.message === 'too_large' ? 413 : 400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Invalid request body.' })); return; }
+      if (err) {
+        authLog('LOGIN_BODY_ERROR', { error: err.message });
+        res.writeHead(err.message === 'too_large' ? 413 : 400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Invalid request body.' }));
+        return;
+      }
       let data;
       try { data = JSON.parse(body); } catch (_) { data = null; }
       const validShape = data && typeof data === 'object' && !Array.isArray(data) && Object.keys(data).length === 1 && typeof data.pin === 'string';
       // Recheck after reading the body: concurrent slow requests cannot step
       // past a lockout activated by another request, or use a replaced PIN.
-      refreshAccessPin();
+      refreshAccessPin(true);
       if (rate.state.lockedUntil > Date.now()) {
+        authLog('LOGIN_RATE_LOCKED_AFTER_BODY');
         res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': String(Math.ceil((rate.state.lockedUntil - Date.now()) / 1000)) });
         res.end(JSON.stringify({ success: false, error: 'Too many attempts. Try again shortly.' })); return;
       }
       if (!pinConfigHealthy || !validShape || !validPin(data.pin) || !safeEqualPin(data.pin)) {
         rate.state.failures++;
         if (rate.state.failures >= LOGIN_FAILURE_LIMIT) rate.state.lockedUntil = Date.now() + LOGIN_LOCK_MS;
+        authLog('LOGIN_REJECTED', {
+          pinConfigHealthy,
+          validShape,
+          validPin: validPin(data && data.pin),
+          failures: rate.state.failures,
+          locked: Boolean(rate.state.lockedUntil)
+        });
         res.writeHead(rate.state.lockedUntil ? 429 : 401, { 'Content-Type': 'application/json', ...(rate.state.lockedUntil ? { 'Retry-After': String(Math.ceil(LOGIN_LOCK_MS / 1000)) } : {}) });
         res.end(JSON.stringify({ success: false, error: rate.state.lockedUntil ? 'Too many attempts. Try again shortly.' : 'Invalid PIN.' }));
         return;
       }
       loginAttempts.delete(rate.key);
       if (config.desktopLocked) {
-        try { writeConfig(CONFIG_FILE, { ...readConfig(CONFIG_FILE), desktopLocked: false }); refreshAccessPin(); }
+        try { writeConfig(CONFIG_FILE, { ...readConfig(CONFIG_FILE), desktopLocked: false }); refreshAccessPin(true); }
         catch (_) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Access configuration unavailable.' })); return; }
       }
       if (sessions.size >= MAX_SESSIONS) {
-        for (const [token, session] of sessions) if (session.expiresAt <= Date.now()) revokeSession(session);
+        for (const [token, session] of sessions) if (session.expiresAt <= Date.now()) revokeSession(session, 'login-cleanup-expired');
       }
       if (sessions.size >= MAX_SESSIONS) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Login is temporarily unavailable.' })); return; }
       const token = crypto.randomBytes(32).toString('base64url');
       const session = { id: crypto.randomBytes(16).toString('hex'), expiresAt: Date.now() + SESSION_TTL_MS };
       sessions.set(token, session);
       const secure = req.socket.encrypted ? '; Secure' : '';
+      authLog('LOGIN_SUCCESS', {
+        ip: req.socket.remoteAddress,
+        sessionId: session.id,
+        activeSessions: sessions.size,
+        cookieAttrs: `Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL_MS / 1000}${secure}`
+      });
       res.writeHead(200, { 'Content-Type': 'application/json; charset=UTF-8', 'Set-Cookie': [
         `auth_pin=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`,
         `${AUTH_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL_MS / 1000}${secure}`
@@ -1540,10 +1656,10 @@ const server = http.createServer((req, res) => {
   if (isLogoutPost) {
     if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Authentication required.' })); return; }
     if (session.desktopAutomatic) {
-      try { writeConfig(CONFIG_FILE, { ...readConfig(CONFIG_FILE), desktopLocked: true }); refreshAccessPin(); }
+      try { writeConfig(CONFIG_FILE, { ...readConfig(CONFIG_FILE), desktopLocked: true }); refreshAccessPin(true); }
       catch (_) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Could not lock Rovarin.' })); return; }
     }
-    revokeSession(session);
+    revokeSession(session, 'user-logout');
     res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': [
       `${AUTH_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secureCookieFlag}`,
       `auth_pin=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secureCookieFlag}`
@@ -1574,7 +1690,7 @@ const server = http.createServer((req, res) => {
       res.setHeader('Content-Type', 'text/html; charset=UTF-8');
       // Non-secret input mode prevents a legacy PIN prefix becoming an auth attempt.
       // No value/hash is rendered; unhealthy configuration leaves manual entry.
-      const pinMode = refreshAccessPin() ? String(config.pin.length) : 'manual';
+      const pinMode = refreshAccessPin(true) ? String(config.pin.length) : 'manual';
       res.setHeader('Cache-Control', 'no-store');
       res.end(fs.readFileSync(loginHtmlPath, 'utf8').replace(
         '<meta name="rovarin-pin-mode" content="manual">',
@@ -1591,25 +1707,113 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ currentVersion: status.currentVersion, latestVersion: status.latestVersion, state: status.state, message: status.message }));
     } catch (_) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Update settings unavailable.' })); } return;
   }
-  if (pathname === '/api/apps' || pathname === '/api/apps/status' || pathname === '/api/apps/uninstall') {
+  if (pathname.startsWith('/api/apps')) {
     const reply=(status,data)=>{if(!res.destroyed&&!res.writableEnded){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(data));}};
     if(pathname==='/api/apps/status'&&req.method==='GET'&&!parsedUrl.search){reply(200,appManager.status());return;}
     if(pathname==='/api/apps'&&req.method==='GET'&&(!parsedUrl.search||parsedUrl.search==='?refresh=1')){appManager.inventory(parsedUrl.search==='?refresh=1').then(data=>reply(200,data),()=>reply(503,{success:false,code:'inventory-unavailable',error:'Windows application inventory is unavailable.'}));return;}
-    if(!isAppsPost||parsedUrl.search){reply(400,{success:false,code:'invalid-request',error:'Unexpected operation or parameters.'});return;}
-    if(appManager.busy||appManager.blocked||uninstallManager.busy||updateManager.busy||treeInFlight||killInFlight.size){reply(409,{success:false,code:'operation-running',error:'Wait for the active system operation. If an uninstaller is still running, complete it on the PC before restarting Rovarin.'});return;}
-    if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')){reply(415,{success:false,code:'invalid-content-type',error:'JSON required.'});return;}
-    readRequestBody(req,4096,(error,body)=>{
-      let data;try{data=JSON.parse(body);}catch(_){}
-      if(error||!data||Array.isArray(data)||Object.keys(data).length!==4||!Object.keys(data).every(k=>['ids','batch','pin','confirmation'].includes(k))||!validPin(data.pin)||data.confirmation!=='uninstall-apps'||typeof data.batch!=='boolean'||!Array.isArray(data.ids)||!data.ids.length||data.ids.length>20||new Set(data.ids).size!==data.ids.length||data.ids.some(id=>typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id))||(!data.batch&&data.ids.length!==1)){reply(400,{success:false,code:'invalid-request',error:'A reviewed app selection and current PIN are required.'});return;}
+    if(pathname==='/api/apps/icon'&&req.method==='GET'){
+      const id=parsedUrl.searchParams.get('id');
+      if(!id||typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id)){reply(400,{success:false,code:'invalid-id',error:'Invalid application ID.'});return;}
+      const icon=appManager.getIcon(id);
+      if(!icon){res.writeHead(404,{'Content-Type':'text/plain','Cache-Control':'no-store'});res.end('Not Found');return;}
+      res.writeHead(200,{'Content-Type':'image/png','Cache-Control':'private, max-age=3600','Content-Length':icon.length});
+      res.end(icon);return;
+    }
+    if(pathname==='/api/apps/quick-launch'&&req.method==='GET'&&!parsedUrl.search){
+      (async()=>{
+        if(!appManager.cache)try{await appManager.inventory();}catch(_){}
+        reply(200,appManager.getQuickLaunch());
+      })();
+      return;
+    }
+    if(pathname==='/api/apps/quick-launch'&&req.method==='POST'&&!parsedUrl.search){
       if(!getAuthenticatedSession(req)){reply(401,{success:false,code:'authentication-required',error:'Authentication required.'});return;}
-      const rate=loginRateState(req);if(rate.state.lockedUntil>rate.now){reply(429,{success:false,code:'pin-locked',error:'Too many attempts. Try again shortly.'});return;}
-      if(!safeEqualPin(data.pin)){rate.state.failures++;if(rate.state.failures>=LOGIN_FAILURE_LIMIT)rate.state.lockedUntil=Date.now()+LOGIN_LOCK_MS;reply(rate.state.lockedUntil?429:401,{success:false,code:'invalid-pin',error:'PIN not accepted.'});return;}
-      loginAttempts.delete(rate.key);
-      maintenance.getStatus(async status=>{
-        if(status.isRunning||enhancedSupport.status().installing||updateManager.busy||uninstallManager.busy){reply(409,{success:false,code:'operation-running',error:'Wait for the current system operation.'});return;}
-        try{const result=await appManager.start(data.ids,data.batch,()=>Boolean(getAuthenticatedSession(req)));reply(202,result);}catch(e){reply(e.message==='authentication-required'?401:409,{success:false,code:e.message,error:'Uninstall was not accepted. Refresh the list and review the selected apps again.'});}
+      if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')){reply(415,{success:false,code:'invalid-content-type',error:'JSON required.'});return;}
+      readRequestBody(req,2048,(err,body)=>{
+        let data;try{data=JSON.parse(body);}catch(_){}
+        if(err||!data||typeof data!=='object'||!['pin','unpin'].includes(data.action)){reply(400,{success:false,code:'invalid-request',error:'Invalid quick launch request.'});return;}
+        try {
+          if(data.action==='pin'){
+            const result=appManager.pinApp(data.id);
+            reply(200,result);
+          }else{
+            const result=appManager.unpinApp({id:data.id,locator:data.locator});
+            reply(200,result);
+          }
+        }catch(e){
+          const code=e.message||'operation-failed';
+          const status=code==='not-found'?404:code==='limit-reached'||code==='already-pinned'||code==='unsupported'?409:400;
+          reply(status,{success:false,code,error:e.message});
+        }
       });
-    });return;
+      return;
+    }
+    if(pathname==='/api/apps/launch'&&req.method==='POST'&&!parsedUrl.search){
+      if(!getAuthenticatedSession(req)){reply(401,{success:false,code:'authentication-required',error:'Authentication required.'});return;}
+      if(appManager.busy||appManager.blocked||uninstallManager.busy||updateManager.busy){reply(409,{success:false,code:'operation-running',error:'Wait for the current operation to finish.'});return;}
+      if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')){reply(415,{success:false,code:'invalid-content-type',error:'JSON required.'});return;}
+      readRequestBody(req,1024,async(err,body)=>{
+        let data;try{data=JSON.parse(body);}catch(_){}
+        if(err||!data||typeof data.id!=='string'||!/^[a-f0-9]{64}$/.test(data.id)){reply(400,{success:false,code:'invalid-request',error:'Application ID required.'});return;}
+        try {
+          const result=await appManager.launch(data.id);
+          reply(200,result);
+        }catch(e){
+          const code=e.code||e.message||'launch-failed';
+          const status=code==='not-found'?404:code==='cancelled'?409:code==='access-denied'?403:code==='unsupported'?409:500;
+          reply(status,{success:false,code,error:e.message});
+        }
+      });
+      return;
+    }
+    if(pathname==='/api/apps/startup'&&req.method==='GET'&&(!parsedUrl.search||parsedUrl.search==='?refresh=1')){
+      appManager.startupInventory(parsedUrl.search==='?refresh=1').then(data=>reply(200,data),()=>reply(503,{success:false,code:'startup-unavailable',error:'Windows startup inventory is unavailable.'}));
+      return;
+    }
+    if(pathname==='/api/apps/startup/icon'&&req.method==='GET'){
+      const id=parsedUrl.searchParams.get('id');
+      if(!id||typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id)){reply(400,{success:false,code:'invalid-id',error:'Invalid item ID.'});return;}
+      const icon=appManager.getStartupIcon(id);
+      if(!icon){res.writeHead(404,{'Content-Type':'text/plain','Cache-Control':'no-store'});res.end('Not Found');return;}
+      res.writeHead(200,{'Content-Type':'image/png','Cache-Control':'private, max-age=3600','Content-Length':icon.length});
+      res.end(icon);return;
+    }
+    if(pathname==='/api/apps/startup/toggle'&&req.method==='POST'&&!parsedUrl.search){
+      if(!getAuthenticatedSession(req)){reply(401,{success:false,code:'authentication-required',error:'Authentication required.'});return;}
+      if(appManager.busy||appManager.blocked||uninstallManager.busy||updateManager.busy){reply(409,{success:false,code:'operation-running',error:'Wait for the current operation to finish.'});return;}
+      if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')){reply(415,{success:false,code:'invalid-content-type',error:'JSON required.'});return;}
+      readRequestBody(req,1024,async(err,body)=>{
+        let data;try{data=JSON.parse(body);}catch(_){}
+        if(err||!data||typeof data.id!=='string'||!/^[a-f0-9]{64}$/.test(data.id)||typeof data.enabled!=='boolean'){reply(400,{success:false,code:'invalid-request',error:'Item ID and boolean enabled state required.'});return;}
+        try {
+          const result=await appManager.toggleStartup(data.id,data.enabled);
+          reply(200,result);
+        }catch(e){
+          const code=e.code||e.message||'operation-failed';
+          const status=code==='not-found'?404:code==='elevation-required'?403:409;
+          reply(status,{success:false,code,error:e.message});
+        }
+      });
+      return;
+    }
+    if(pathname==='/api/apps/uninstall'&&req.method==='POST'&&!parsedUrl.search){
+      if(appManager.busy||appManager.blocked||uninstallManager.busy||updateManager.busy||treeInFlight||killInFlight.size){reply(409,{success:false,code:'operation-running',error:'Wait for the active system operation. If an uninstaller is still running, complete it on the PC before restarting Rovarin.'});return;}
+      if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')){reply(415,{success:false,code:'invalid-content-type',error:'JSON required.'});return;}
+      readRequestBody(req,4096,(error,body)=>{
+        let data;try{data=JSON.parse(body);}catch(_){}
+        if(error||!data||Array.isArray(data)||Object.keys(data).length!==4||!Object.keys(data).every(k=>['ids','batch','pin','confirmation'].includes(k))||!validPin(data.pin)||data.confirmation!=='uninstall-apps'||typeof data.batch!=='boolean'||!Array.isArray(data.ids)||!data.ids.length||data.ids.length>20||new Set(data.ids).size!==data.ids.length||data.ids.some(id=>typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id))||(!data.batch&&data.ids.length!==1)){reply(400,{success:false,code:'invalid-request',error:'A reviewed app selection and current PIN are required.'});return;}
+        if(!getAuthenticatedSession(req)){reply(401,{success:false,code:'authentication-required',error:'Authentication required.'});return;}
+        const rate=loginRateState(req);if(rate.state.lockedUntil>rate.now){reply(429,{success:false,code:'pin-locked',error:'Too many attempts. Try again shortly.'});return;}
+        if(!safeEqualPin(data.pin)){rate.state.failures++;if(rate.state.failures>=LOGIN_FAILURE_LIMIT)rate.state.lockedUntil=Date.now()+LOGIN_LOCK_MS;reply(rate.state.lockedUntil?429:401,{success:false,code:'invalid-pin',error:'PIN not accepted.'});return;}
+        loginAttempts.delete(rate.key);
+        maintenance.getStatus(async status=>{
+          if(status.isRunning||enhancedSupport.status().installing||updateManager.busy||uninstallManager.busy){reply(409,{success:false,code:'operation-running',error:'Wait for the current system operation.'});return;}
+          try{const result=await appManager.start(data.ids,data.batch,()=>Boolean(getAuthenticatedSession(req)));reply(202,result);}catch(e){reply(e.message==='authentication-required'?401:409,{success:false,code:e.message,error:'Uninstall was not accepted. Refresh the list and review the selected apps again.'});}
+        });
+      });return;
+    }
+    reply(400,{success:false,code:'invalid-request',error:'Unexpected operation or parameters.'});
+    return;
   }
   if((appManager.busy||appManager.blocked)&&req.method==='POST'&&(isMaintenancePost||isProcessKillPost||isUninstallPost||isEnhancedInstallPost)){res.writeHead(409,{'Content-Type':'application/json'});res.end(JSON.stringify({success:false,code:'operation-running',error:'An application uninstall is active or its completion is unconfirmed.'}));return;}
   // ── Maintenance API Endpoints ──────────────────────────────────────────────
@@ -2177,9 +2381,9 @@ const server = http.createServer((req, res) => {
 // Event-driven local credential change notification, not a polling loop.
 // Request/broadcast checks also enforce revocation if a filesystem event is lost.
 const pinWatcher = fs.watch(path.dirname(CONFIG_FILE), (event, filename) => {
-  if (!filename || String(filename) === 'config.json') refreshAccessPin();
+  if (!filename || String(filename) === 'config.json') refreshAccessPin(true);
 });
-pinWatcher.on('error', () => { pinConfigHealthy = false; for (const session of Array.from(sessions.values())) revokeSession(session); });
+pinWatcher.on('error', () => { pinConfigHealthy = false; for (const session of Array.from(sessions.values())) revokeSession(session, 'pinWatcher-error'); });
 pinWatcher.unref();
 process.on('exit', () => pinWatcher.close());
 
