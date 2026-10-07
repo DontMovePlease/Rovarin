@@ -10,11 +10,11 @@
 ![Experimental alpha](https://img.shields.io/badge/status-experimental_alpha-d99b36)
 ![Source available](https://img.shields.io/badge/license-PolyForm_Noncommercial-617184)
 
-[**Download for Windows**](https://github.com/DontMovePlease/Rovarin/releases/download/v0.3.0/RovarinSetup.exe) · [Release notes](https://github.com/DontMovePlease/Rovarin/releases) · [Report a bug](https://github.com/DontMovePlease/Rovarin/issues/new/choose)
+[**Download for Windows**](https://github.com/DontMovePlease/Rovarin/releases/download/v0.3.0/RovarinSetup.exe) · [Release notes](https://github.com/DontMovePlease/Rovarin/releases) · [Website](https://rovarinofficial.com/) · [Report a bug](https://github.com/DontMovePlease/Rovarin/issues/new/choose)
 
 </div>
 
-Rovarin is a standalone Windows monitoring application with a compact dashboard, focused graphs, process monitoring, maintenance tools, and a compatibility report. Connect another device through Tailscale to view the same PC remotely.
+Rovarin is a Windows PC monitoring and system-management app. Check CPU, GPU, memory and network activity, manage running processes, launch your apps, and uninstall supported software—all from a native Windows desktop app or your phone through Tailscale.
 
 **Experimental alpha:** useful for testing and code review, with compatibility and clean-machine validation still in progress. The installer is unsigned. This is not a production-ready release.
 
@@ -41,6 +41,33 @@ Rovarin is a standalone Windows monitoring application with a compact dashboard,
 No active monitoring lease means no continuous telemetry sampling. A visible dashboard uses modest baseline sampling; focused views request faster sampling for their relevant metrics. Closing or backgrounding a client releases or expires its lease.
 
 One Node backend. One vanilla HTML/CSS/JS frontend. The native desktop renders that same served frontend through WebView2; mobile uses it through a browser. There are **zero npm runtime dependencies**.
+
+## App launcher and uninstaller
+
+### Quick Launch — your PC's apps, a tap away
+
+Open **Applications → + Add apps**, search the apps Windows knows about, and pin up to 12 favorites. Launch a pinned app on your PC from the desktop interface or an authenticated phone connected through Tailscale.
+
+Quick Launch uses locally registered applications. It does not accept arbitrary commands or executable paths from the browser. App availability depends on its Windows registration and the current user account.
+
+### Installed applications — find it, review it, remove it
+
+Browse your installed apps in **List or Grid** view. Search by name, filter by type, and sort by name, publisher or size. Sizes use readable MB/GB units where Windows provides them.
+
+- **Uninstall one app:** review the exact application and confirm with your Rovarin PIN.
+- **Remove several:** select only apps with a supported batch handler, review the full selection, then run them one at a time.
+- **Know what happened:** see per-app results, failures and reboot-required states. Unsupported uninstallers remain manual-only.
+
+Vendor uninstallers may require interaction or local Windows administrator approval. Removing an app can also remove its data; Rovarin follows the app's own supported uninstall mechanism.
+
+![Rovarin desktop Applications page with Quick Launch, filters, Grid view and Uninstall controls](docs/images/applications-desktop.png)
+
+<table>
+<tr><th>Pin apps from your phone</th><th>Browse and uninstall apps</th></tr>
+<tr><td align="center"><img src="docs/images/quick-launch-phone.png" width="230" alt="Phone Quick Launch picker with search and Add controls"></td><td align="center"><img src="docs/images/applications-phone.png" width="230" alt="Phone Applications page with Quick Launch, app search and Uninstall buttons"></td></tr>
+</table>
+
+<sub>Existing Rovarin website screenshots, reused here unchanged. Installed apps and available actions vary by PC.</sub>
 
 ## Install on Windows
 
