@@ -10,16 +10,20 @@ const { CpuTemperatureProvider } = require('./cpu-temperature-provider');
 const { normalizeProcessRecords, isProcessSnapshotStale, ProcessDisplayCache } = require('./process-stats');
 const { terminateProcess, processTree } = require('./process-termination');
 const { AppManager } = require('./app-manager');
-const { loadConfig, readConfig, validPin, writeConfig, generatePin, desktopTrust, configurationFile } = require('./pin-manager');
+const { loadConfig, readConfig, validPin, writeConfig, generatePin, desktopTrust, configurationFile, dataDirectory } = require('./pin-manager');
 const { bindServer, claimInstance, portCandidates } = require('./server-lifecycle');
 const { EnhancedSupport, isLocalDesktopRequest } = require('./enhanced-support');
 const { UninstallManager } = require('./uninstall-manager');
 const { UpdateManager } = require('./update-manager');
+const { createDiagnostics } = require('./diagnostics');
+const { createLocalLifecycleClient } = require('./maintenance-service');
 
 // Configuration
 const PORT = process.env.PORT || 7331;
 const IS_INSTALLED = fs.existsSync(path.join(__dirname, 'installation.json'));
-const DATA_DIR = IS_INSTALLED ? path.join(__dirname, '..', 'data') : __dirname;
+const DATA_DIR = (() => { try { return dataDirectory(); } catch (_) {
+  console.error('Saved development storage is invalid or inaccessible; server will not start.'); process.exit(1);
+} })();
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const CONFIG_FILE = (() => {
   try { return configurationFile(); }
@@ -28,21 +32,17 @@ const CONFIG_FILE = (() => {
 const enhancedSupport = new EnhancedSupport({ stateDirectory: DATA_DIR });
 const uninstallManager = new UninstallManager();
 const updateManager = new UpdateManager({ configFile: CONFIG_FILE });
+const localMaintenanceClient = createLocalLifecycleClient();
 const appManager = new AppManager({ onChange: broadcastAppsStatus, stateDirectory: DATA_DIR });
 let treeInFlight = false;
 // Opaque compatibility identifiers retain existing clients and desktop trust.
 const AUTH_COOKIE = 'pc_monitor_session';
-const AUTH_DEBUG_LOG = path.join(__dirname, 'auth-debug.log');
-const SERVER_PID = process.pid;
-const SERVER_START_TIME = new Date().toISOString();
-function authLog(tag, data = {}) {
-  if (IS_INSTALLED) return;
-  const ts = new Date().toISOString();
-  const line = `[${ts}] [${tag}] PID=${SERVER_PID} ${Object.entries(data).map(([k, v]) => `${k}=${typeof v === 'string' && (v.includes(' ') || v.includes(';') || v.includes('"')) ? JSON.stringify(v) : v}`).join(' ')}`;
-  console.log(line);
-  try { fs.appendFileSync(AUTH_DEBUG_LOG, line + '\n', 'utf8'); } catch (_) {}
+// Keep operational auth messages bounded and non-sensitive; no HTTP/session tracing.
+function authLog(tag) {
+  if (['SERVER_INIT','REFRESH_PIN_CHANGED_OR_UNHEALTHY','REFRESH_PIN_FATAL_ERROR'].includes(tag))
+    console.log('[Authentication] ' + tag);
 }
-authLog('SERVER_INIT', { startTime: SERVER_START_TIME, port: PORT });
+authLog('SERVER_INIT');
 const SESSION_TTL_MS = readBoundedDuration(process.env.PC_MONITOR_SESSION_TTL_MS, 90 * 24 * 60 * 60 * 1000, 1000, 90 * 24 * 60 * 60 * 1000);
 const MAX_SESSIONS = 64;
 const MAX_LEASES_PER_SESSION = 4;
@@ -57,7 +57,7 @@ const LOGIN_LOCK_MS = 60 * 1000;
 // Load or generate PIN for private access
 let config;
 try {
-  config = loadConfig(CONFIG_FILE);
+  config = loadConfig(CONFIG_FILE, { allowCreate: IS_INSTALLED || CONFIG_FILE === path.join(__dirname, 'config.json') });
 } catch (_) {
   console.error('Saved access configuration is invalid or inaccessible; server will not start.'); process.exit(1);
 }
@@ -93,6 +93,7 @@ function refreshAccessPin(force = false) {
       config.requireDesktopPin = saved.requireDesktopPin;
       config.desktopLocked = saved.desktopLocked;
     }
+    config.requirePhoneRemovalPin=saved.requirePhoneRemovalPin===true;
     pinConfigHealthy = true;
     return true;
   } catch (err) {
@@ -655,189 +656,19 @@ function sampleCpuTemperature() {
       source: result.source, note: result.note, suppressAlerts: result.sensorType === 'system-thermal-zone'
     });
     else temperatureManager.setUnavailable('cpu', result.source, result.note);
-    diagnosticsCache = null;
+    diagnostics.invalidate();
     publishMetricsSnapshot();
   });
 }
 
-// On-demand compatibility checks: one shared request, cached for 30 seconds.
-// No monitoring lease, sampler, or background diagnostics timer is created.
-let diagnosticsInFlight = null;
-let diagnosticsCache = null;
-const DIAGNOSTICS_CACHE_MS = 30000;
-function diagnosticCheck(id, label, status, summary, value = null, required = false) {
-  return { id, label, status, summary, ...(value === null ? {} : { value }), required };
-}
-
-function runDiagnosticCommand(command, args, timeout = 3500) {
-  return new Promise(resolve => {
-    const done = (error, stdout) => resolve({
-      status: error ? (error.code === 'ENOENT' ? 'unavailable' : 'failed') : 'supported',
-      stdout: error ? '' : String(stdout || '')
-    });
-    try {
-      execFile(command, args, { windowsHide: true, timeout, maxBuffer: 512 * 1024, encoding: 'utf8' }, done);
-    } catch (error) { done(error, ''); }
-  });
-}
-
-async function runDiagnosticTelemetryProbe(name, command, args, timeout) {
-  if (activeTelemetryJobs.has(name) || terminatingTelemetryJobs.has(name)) return { status: 'unavailable', stdout: '', busy: true };
-  diagnosticToolJobs.add(name);
-  try { return await runDiagnosticCommand(command, args, timeout); }
-  finally { diagnosticToolJobs.delete(name); }
-}
-
-async function collectTailscaleDiagnostic() {
-  const interfaceIp = getTailscaleIP();
-  const installedPath = path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Tailscale', 'tailscale.exe');
-  const command = fs.existsSync(installedPath) ? installedPath : 'tailscale.exe';
-  const result = await runDiagnosticCommand(command, ['status', '--json']);
-  let state = null;
-  let ipv4 = interfaceIp;
-  let connectionStatus = 'unavailable';
-  let summary = 'Tailscale CLI is not available; remote connection status is unconfirmed.';
-  if (result.status === 'supported') {
-    try {
-      const data = JSON.parse(result.stdout);
-      state = typeof data.BackendState === 'string' ? data.BackendState : null;
-      const ips = data.Self?.TailscaleIPs || data.TailscaleIPs;
-      if (Array.isArray(ips)) ipv4 = ips.find(ip => typeof ip === 'string' && /^100\.\d+\.\d+\.\d+$/.test(ip) && isTailscaleIP(ip)) || ipv4;
-      connectionStatus = state === 'Running' ? 'supported' : state ? 'unavailable' : 'failed';
-      summary = state === 'Running' ? 'Tailscale is running. Peer connectivity is not tested.' : state ? 'Tailscale is installed but is not running or signed in.' : 'Tailscale returned an unrecognized status.';
-      // Only allowlisted states are exposed, never peer/account data.
-      if (!['Running', 'Stopped', 'NeedsLogin', 'NeedsMachineAuth', 'Starting', 'NoState', 'InUseOtherUser'].includes(state)) state = 'Unknown';
-    } catch (_) { connectionStatus = 'failed'; summary = 'Tailscale returned unreadable status data.'; }
-  } else if (result.status === 'failed') {
-    connectionStatus = 'failed'; summary = 'Tailscale status query failed or timed out.';
-  } else if (interfaceIp) {
-    summary = 'A Tailscale-range interface address exists; connection status is unconfirmed.';
-  }
-  return [
-    diagnosticCheck('tailscale', 'Tailscale availability', result.status, result.status === 'supported' ? 'Tailscale CLI responded.' : 'Tailscale CLI is missing or could not respond.'),
-    diagnosticCheck('tailscale-status', 'Tailscale connection', connectionStatus, summary, state),
-    diagnosticCheck('tailscale-ip', 'Tailscale IPv4', ipv4 ? 'supported' : 'unavailable', ipv4 ? 'Detected private Tailscale address.' : 'No Tailscale IPv4 address detected.', ipv4)
-  ];
-}
-
-async function collectNvidiaDiagnostic() {
-  const detected = systemInfo.gpuModels.filter(name => /nvidia/i.test(name));
-  let toolStatus, telemetryStatus, name = detected.join(', ') || null;
-  let probeBusy = false;
-  if (currentGpuData.sampledAt && Date.now() - currentGpuData.sampledAt < DIAGNOSTICS_CACHE_MS) {
-    toolStatus = /not found/.test(currentGpuData.statusNote) ? 'unavailable' : currentGpuData.available ? 'supported' : 'failed';
-    telemetryStatus = currentGpuData.available ? 'supported' : toolStatus === 'unavailable' ? 'unavailable' : 'failed';
-    if (currentGpuData.available) name = currentGpuData.name;
-  } else {
-    const result = await runDiagnosticTelemetryProbe('gpu', NVIDIA_SMI_COMMAND, [
-      '--query-gpu=name,utilization.gpu,utilization.memory,memory.total,memory.used,memory.free,temperature.gpu',
-      '--format=csv,noheader,nounits'
-    ], 5000);
-    probeBusy = result.busy === true;
-    toolStatus = result.status;
-    const fields = result.stdout.trim().split(/\r?\n/)[0].split(',').map(item => item.trim());
-    telemetryStatus = result.status === 'supported'
-      ? fields.length >= 7 && fields[0] && fields.slice(1).every(item => item !== '' && Number.isFinite(Number(item))) ? 'supported' : 'failed'
-      : result.status;
-    if (telemetryStatus === 'supported') name = fields[0];
-  }
-  return [
-    diagnosticCheck('nvidia-gpu', 'NVIDIA GPU', name ? 'supported' : 'unavailable', name ? 'NVIDIA hardware detected.' : 'NVIDIA hardware could not be confirmed; it may be absent or detection unavailable.', name),
-    diagnosticCheck('nvidia-smi', 'nvidia-smi', toolStatus, probeBusy ? 'An NVIDIA telemetry query is already in progress; check again after the cache expires.' : toolStatus === 'supported' ? 'NVIDIA tool detected.' : toolStatus === 'unavailable' ? 'Optional NVIDIA tool is missing.' : 'NVIDIA tool query failed or timed out.'),
-    diagnosticCheck('gpu-telemetry', 'GPU telemetry', telemetryStatus, probeBusy ? 'Waiting for the active telemetry query; no duplicate query was started.' : telemetryStatus === 'supported' ? 'NVIDIA load, VRAM, and temperature data available.' : telemetryStatus === 'unavailable' ? 'Optional GPU telemetry is unavailable.' : 'NVIDIA telemetry query failed or returned invalid data.')
-  ];
-}
-
-async function collectWindowsToolsDiagnostic() {
-  if (process.platform !== 'win32') return [
-    diagnosticCheck('process-monitoring', 'Process monitoring', 'unavailable', 'This collector requires Windows PowerShell.'),
-    diagnosticCheck('permissions', 'Administrator access', 'unavailable', 'Windows elevation is not applicable.')
-  ];
-  const result = await runDiagnosticCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    "$ErrorActionPreference='Stop'; $identity=[Security.Principal.WindowsIdentity]::GetCurrent(); $principal=New-Object Security.Principal.WindowsPrincipal($identity); [pscustomobject]@{admin=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator);processCollector=[bool](Get-Command Get-Process -ErrorAction Stop)} | ConvertTo-Json -Compress"
-  ], 5000);
-  let data = null;
-  try { if (result.status === 'supported') data = JSON.parse(result.stdout); } catch (_) {}
-  const status = result.status === 'supported' && !data ? 'failed' : result.status;
-  const processStatus = processSnapshot.error === 'unavailable' ? 'unavailable' : processSnapshot.error ? 'failed' : processSnapshot.sampledAt || data?.processCollector === true ? 'supported' : status === 'supported' ? 'failed' : status;
-  return [
-    diagnosticCheck('process-monitoring', 'Process monitoring', processStatus, processStatus === 'supported' ? 'PowerShell process collector is available; enumeration runs only in the Processes profile.' : 'Process collector unavailable or its last collection failed.'),
-    diagnosticCheck('permissions', 'Administrator access', typeof data?.admin === 'boolean' ? 'supported' : status === 'supported' ? 'failed' : status, typeof data?.admin === 'boolean' ? data.admin ? 'Server is elevated.' : 'Standard user; administrator-only maintenance requires elevation.' : 'Server elevation could not be determined.', typeof data?.admin === 'boolean' ? data.admin ? 'Administrator' : 'Standard user' : null)
-  ];
-}
-
-async function collectNetworkDiagnostic() {
-  if (networkCollectionStatus === 'supported' && currentNetSpeed.sampledAt && Date.now() - currentNetSpeed.sampledAt < DIAGNOSTICS_CACHE_MS)
-    return diagnosticCheck('network-telemetry', 'Network telemetry', 'supported', 'Recent network traffic sample available.');
-  if (process.platform !== 'win32')
-    return diagnosticCheck('network-telemetry', 'Network telemetry', 'unavailable', 'Windows netstat collector required.');
-  const result = await runDiagnosticTelemetryProbe('network', 'netstat', ['-e'], 3000);
-  const status = result.status === 'supported' && !parseNetworkCounters(result.stdout) ? 'failed' : result.status;
-  return diagnosticCheck('network-telemetry', 'Network telemetry', status, result.busy ? 'Network sampling is in progress; no duplicate command was started.' : status === 'supported' ? 'Windows network byte counters available. Internet latency is not tested here.' : 'Network byte counters unavailable or unreadable.');
-}
-
-async function collectDiagnostics() {
-  const [tailscale, nvidia, windowsTools, network] = await Promise.all([
-    collectTailscaleDiagnostic(), collectNvidiaDiagnostic(), collectWindowsToolsDiagnostic(), collectNetworkDiagnostic(), enhancedSupport.detectDriver()
-  ]);
-  const actualPort = server.address().port;
-  const windows = process.platform === 'win32';
-  let cpus = [], totalMemory = 0, storageStatus = 'unavailable';
-  try { cpus = os.cpus(); } catch (_) {}
-  try { totalMemory = os.totalmem(); } catch (_) {}
-  try { const stat = fs.statfsSync(path.parse(__dirname).root); storageStatus = stat.blocks > 0 ? 'supported' : 'failed'; } catch (_) { storageStatus = 'failed'; }
-  const checks = [
-    diagnosticCheck('windows', 'Windows version / edition', windows ? 'supported' : 'unavailable', windowsCaptionDetected ? 'Detected Windows edition; build ' + os.release() : 'Edition unconfirmed; native OS release shown.', windowsCaptionDetected ? systemInfo.windowsVersion : os.type() + ' ' + os.release(), true),
-    diagnosticCheck('os-architecture', 'OS architecture', 'supported', 'Native machine architecture; Node runtime architecture: ' + process.arch, os.machine()),
-    diagnosticCheck('node-runtime', 'Node.js runtime', 'supported', 'Current server runtime.', process.version, true),
-    diagnosticCheck('server-version', 'Rovarin version', 'supported', 'Version declared in package.json.', require('./package.json').version),
-    diagnosticCheck('server-port', 'Server port', bindingState.status === 'listening' ? 'supported' : 'failed', 'Preferred port: ' + bindingState.preferredPort + '; active port: ' + actualPort + '; fallback required: ' + (bindingState.fallbackRequired ? 'yes' : 'no') + '.', actualPort, true),
-    diagnosticCheck('default-port', 'Default port 7331', 'supported', 'Requested: ' + (Number(PORT) === 7331 ? 'yes' : 'no') + '; used: ' + (actualPort === 7331 ? 'yes' : 'no') + '.', { requested: Number(PORT) === 7331, used: actualPort === 7331 }),
-    ...tailscale, ...nvidia,
-    ...cpuTemperatureDiagnostics(),
-    diagnosticCheck('cpu-telemetry', 'CPU telemetry', cpus.length ? 'supported' : 'failed', 'Native CPU counters; logical processors: ' + cpus.length + '.', cpus.length, true),
-    diagnosticCheck('ram-telemetry', 'RAM telemetry', totalMemory > 0 ? 'supported' : 'failed', 'Native system memory counters.', Math.round(totalMemory / 1024 ** 3 * 10) / 10 + ' GB', true),
-    diagnosticCheck('storage-telemetry', 'Storage telemetry', storageStatus, storageStatus === 'supported' ? 'Local filesystem capacity readable; individual inaccessible drives may be omitted.' : 'Local filesystem capacity could not be read.', null, true),
-    network, ...windowsTools
-  ];
-  const failures = checks.filter(check => check.required && check.status !== 'supported').length;
-  return { generatedAt: new Date().toISOString(), overall: {
-    status: failures ? 'failed' : 'supported',
-    title: failures ? 'Core compatibility needs attention' : 'Core monitoring compatible',
-    summary: failures ? 'One or more core capabilities could not be confirmed.' : 'Optional unavailable or failing capabilities do not make the application unhealthy.',
-    supported: checks.filter(check => check.status === 'supported').length,
-    unavailable: checks.filter(check => check.status === 'unavailable').length,
-    failed: checks.filter(check => check.status === 'failed').length
-  }, checks, binding: { ...bindingState }, temperatureSettings: cpuTemperatureProvider.settings(), temperatureProvider: cpuTemperatureProvider.snapshot() };
-}
-
-function cpuTemperatureDiagnostics() {
-  const state = cpuTemperatureProvider.snapshot(), settings = cpuTemperatureProvider.settings();
-  const status = state.status === 'available' && temperatureManager.snapshot().readings.cpu.available ? 'supported' : state.status === 'failed' ? 'failed' : 'unavailable';
-  const thermal = settings.observations['thermal-zone'];
-  const enhanced = settings.observations.enhanced;
-  const support = enhancedSupport.status(enhanced);
-  return [
-    diagnosticCheck('enhanced-driver', 'Enhanced hardware support (PawnIO)', support.driverInstalled === true ? 'supported' : support.driverStatus === 'failed' ? 'failed' : 'unavailable', support.driverInstalled === true ? 'Driver installed; this does not guarantee compatible CPU sensors.' : support.driverInstalled === false ? 'Optional driver not installed; core monitoring remains usable.' : 'Optional driver detection unavailable or failed.', support.driverInstalled === null ? 'Unconfirmed' : support.driverInstalled ? 'Installed' : 'Not installed'),
-    diagnosticCheck('enhanced-installation', 'Enhanced installation result', support.result?.success ? 'supported' : support.result ? 'failed' : 'unavailable', support.result?.message || support.result?.error || 'No Rovarin installation result recorded.', support.result?.code || 'Not attempted'),
-    diagnosticCheck('cpu-temperature', state.mode === 'thermal-zone' ? 'System thermal zone' : 'CPU temperature', status, state.note, state.sensorName ? state.sensorName + ' · ' + state.temperatureC + '°C' : state.status),
-    diagnosticCheck('temperature-mode', 'Temperature mode', 'supported', 'Optional, lease-driven sampling at 20 seconds; Off stops this sampler.', state.mode),
-    diagnosticCheck('enhanced-temperature-provider', 'Enhanced provider assets', settings.enhancedAssetsAvailable ? 'supported' : 'unavailable', 'Official LibreHardwareMonitor ' + settings.enhancedVersion + ' (MPL-2.0); CPU-only helper. Assets do not guarantee sensor access.', settings.enhancedAssetsAvailable ? 'Bundled ' + settings.enhancedVersion : 'Missing'),
-    diagnosticCheck('enhanced-cpu-sensors', 'Enhanced CPU sensors', enhanced?.status === 'available' ? 'supported' : enhanced?.status === 'failed' ? 'failed' : 'unavailable', enhanced?.note || 'Not sampled; requires Enhanced mode with an active lease.', enhanced?.sensorName || enhanced?.status || 'Not sampled'),
-    diagnosticCheck('cpu-temperature-sensor', 'Selected temperature sensor', status, state.sensorType === 'system-thermal-zone' ? 'ACPI firmware zone; not verified as CPU package. CPU alerts disabled.' : state.note, state.sensorName),
-    diagnosticCheck('thermal-zone', 'Windows thermal-zone capability', thermal?.status === 'available' ? 'supported' : thermal?.status === 'failed' ? 'failed' : 'unavailable', 'Experimental ACPI/CIM source; only probed when selected with a lease. May represent a broader system zone.', thermal?.status || 'Not sampled'),
-    diagnosticCheck('temperature-permissions', 'Enhanced sensor access', enhanced?.pawnIoInstalled === false ? 'unavailable' : enhanced?.code === 'access-denied' ? 'failed' : typeof enhanced?.admin === 'boolean' ? 'supported' : 'unavailable', 'Enhanced CPU sensors require an installed PawnIO driver and may require elevation; last Enhanced probe shown. Rovarin does not install drivers.', enhanced?.pawnIoInstalled === false ? 'PawnIO not installed' : typeof enhanced?.admin === 'boolean' ? enhanced.admin ? 'Administrator' : 'Standard user' : 'Not sampled')
-  ];
-}
-
-function getDiagnostics(refresh = false) {
-  // Explicit setup re-checks share the existing collector and remain bounded.
-  if (diagnosticsCache && Date.now() - Date.parse(diagnosticsCache.generatedAt) < (refresh ? 5000 : DIAGNOSTICS_CACHE_MS)) return Promise.resolve(diagnosticsCache);
-  if (!diagnosticsInFlight) {
-    diagnosticsInFlight = collectDiagnostics().then(data => (diagnosticsCache = data)).finally(() => { diagnosticsInFlight = null; });
-  }
-  return diagnosticsInFlight;
-}
+const diagnostics = createDiagnostics({
+  rootDirectory: __dirname, PORT, NVIDIA_SMI_COMMAND,
+  getState: () => ({ systemInfo, windowsCaptionDetected, currentGpuData, processSnapshot, networkCollectionStatus, currentNetSpeed, bindingState }),
+  getServerPort: () => server.address().port,
+  getTailscaleIP, isTailscaleIP, parseNetworkCounters,
+  activeTelemetryJobs, terminatingTelemetryJobs, diagnosticToolJobs,
+  cpuTemperatureProvider, temperatureManager, enhancedSupport
+});
 
 // Health Assessment Logic
 function assessHealth(cpu, ram, gpu, drives, latency) {
@@ -1300,6 +1131,24 @@ function issueSession(req, res, desktopAutomatic = false) {
   res.end(JSON.stringify({ success: true }));
 }
 
+async function nativeRemovalRequest(req){
+  if(!isLocalDesktopRequest(req))return false;
+  const supplied=req.headers['x-pc-monitor-desktop'];
+  if(typeof supplied!=='string'||supplied.length!==44||!/^[A-Za-z0-9+/]{43}=$/.test(supplied))return false;
+  const key=await desktopTrust();return Boolean(key&&crypto.timingSafeEqual(Buffer.from(key),Buffer.from(supplied)));
+}
+async function removalPolicy(req){
+  const native=await nativeRemovalRequest(req);
+  if(!getAuthenticatedSession(req)||!refreshAccessPin(true))throw Error('authentication-required');
+  return {requirePhoneRemovalPin:config.requirePhoneRemovalPin===true,requirePin:!native&&config.requirePhoneRemovalPin===true,native};
+}
+function verifyRemovalPin(req,pin,reply){
+  const rate=loginRateState(req);
+  if(rate.state.lockedUntil>rate.now){reply(429,{success:false,code:'pin-locked',error:'Too many attempts. Try again shortly.'});return false;}
+  if(!validPin(pin)){reply(401,{success:false,code:'pin-required',error:'Enter your current Rovarin PIN.'});return false;}
+  if(!safeEqualPin(pin)){rate.state.failures++;if(rate.state.failures>=LOGIN_FAILURE_LIMIT)rate.state.lockedUntil=Date.now()+LOGIN_LOCK_MS;reply(rate.state.lockedUntil?429:401,{success:false,code:'invalid-pin',error:'PIN not accepted.'});return false;}
+  loginAttempts.delete(rate.key);return true;
+}
 function getAuthenticatedSession(req) {
   if (!refreshAccessPin()) {
     if (req) req.authFailureReason = 'pin-config-unhealthy';
@@ -1370,14 +1219,42 @@ function readRequestBody(req, maxBytes, callback) {
 }
 
 function sameOriginRequest(req) {
-  if (req.headers['sec-fetch-site'] === 'cross-site') return false;
+  if (req.headers['sec-fetch-site'] === 'cross-site') {
+    authLog('SAME_ORIGIN_REJECT', { reqId: req.reqId, reason: 'sec-fetch-site-cross-site', ip: req.socket.remoteAddress });
+    return false;
+  }
   const origin = req.headers.origin;
   if (!origin) return true;
+  if (origin === 'null') {
+    const referer = req.headers.referer;
+    if (referer) {
+      try {
+        const parsedReferer = new URL(referer);
+        const requestHost = String(req.headers.host || '').toLowerCase();
+        const ok = (parsedReferer.protocol === 'http:' || parsedReferer.protocol === 'https:') && parsedReferer.host.toLowerCase() === requestHost;
+        if (!ok) {
+          authLog('SAME_ORIGIN_REJECT', { reqId: req.reqId, reason: 'referer-host-mismatch', referer, requestHost, ip: req.socket.remoteAddress });
+        }
+        return ok;
+      } catch (err) {
+        authLog('SAME_ORIGIN_REJECT', { reqId: req.reqId, reason: 'invalid-referer-url', referer, error: err.message, ip: req.socket.remoteAddress });
+        return false;
+      }
+    }
+    return true;
+  }
   try {
     const parsedOrigin = new URL(origin);
     const requestHost = String(req.headers.host || '').toLowerCase();
-    return (parsedOrigin.protocol === 'http:' || parsedOrigin.protocol === 'https:') && parsedOrigin.host.toLowerCase() === requestHost;
-  } catch (_) { return false; }
+    const ok = (parsedOrigin.protocol === 'http:' || parsedOrigin.protocol === 'https:') && parsedOrigin.host.toLowerCase() === requestHost;
+    if (!ok) {
+      authLog('SAME_ORIGIN_REJECT', { reqId: req.reqId, reason: 'host-mismatch', origin, requestHost, ip: req.socket.remoteAddress });
+    }
+    return ok;
+  } catch (err) {
+    authLog('SAME_ORIGIN_REJECT', { reqId: req.reqId, reason: 'invalid-origin-url', origin, error: err.message, ip: req.socket.remoteAddress });
+    return false;
+  }
 }
 
 // MIME types for static assets
@@ -1390,7 +1267,7 @@ const MIME_TYPES = {
   '.png': 'image/png',
   '.ico': 'image/x-icon'
 };
-const PUBLIC_FILES = new Set(['index.html', 'login.html', 'app.css', 'maintenance.css', 'processes.css', 'desktop.css', 'app.js', 'maintenance.js', 'processes.js', 'login.js', 'diagnostics.js', 'diagnostics.css', 'enhanced-support.js', 'uninstall.js', 'apps.js', 'apps.css']);
+const PUBLIC_FILES = new Set(['index.html', 'login.html', 'app.css', 'maintenance.css', 'processes.css', 'desktop.css', 'app.js', 'maintenance.js', 'processes.js', 'login.js', 'diagnostics.js', 'diagnostics.css', 'enhanced-support.js', 'uninstall.js', 'apps.js', 'apps.css', 'app-leftovers.js']);
 
 let dashboardAssetSignature = '';
 let dashboardAssetRevision = '';
@@ -1411,6 +1288,8 @@ function getDashboardAssetRevision() {
   return dashboardAssetRevision;
 }
 
+let nextReqId = 1;
+
 // HTTP Server
 const server = http.createServer((req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -1421,6 +1300,8 @@ const server = http.createServer((req, res) => {
   const secureCookieFlag = req.socket.encrypted ? '; Secure' : '';
   res.setHeader('Set-Cookie', `auth_pin=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secureCookieFlag}`);
   const clientIP = req.socket.remoteAddress;
+  const reqId = nextReqId++;
+  req.reqId = reqId;
 
   // Tailscale and local isolation check
   if (!isAllowedClient(clientIP)) {
@@ -1438,33 +1319,37 @@ const server = http.createServer((req, res) => {
 
   const isLoginPost = req.method === 'POST' && pathname === '/api/login';
   const isDebugLogPost = req.method === 'POST' && pathname === '/api/debug/client-log';
-  const isDesktopPost = req.method === 'POST' && ['/api/desktop/auth', '/api/desktop/security', '/api/desktop/updates'].includes(pathname);
+  const isDesktopPost = req.method === 'POST' && ['/api/desktop/auth', '/api/desktop/security', '/api/desktop/updates', '/api/desktop/maintenance'].includes(pathname);
   const isLogoutPost = req.method === 'POST' && pathname === '/api/logout';
   const isMaintenancePost = req.method === 'POST' && pathname === '/api/maintenance/run';
   const isMonitoringLeasePost = req.method === 'POST' && pathname === '/api/monitoring/lease';
   const isTreePreviewPost = req.method === 'POST' && pathname === '/api/processes/tree';
   const isProcessTreePost = req.method === 'POST' && pathname === '/api/processes/kill-tree';
-  const isAppsPost = req.method === 'POST' && ['/api/apps/uninstall', '/api/apps/quick-launch', '/api/apps/launch', '/api/apps/startup/toggle'].includes(pathname);
+  const isAppsPost = req.method === 'POST' && ['/api/apps/removal-security', '/api/apps/uninstall', '/api/apps/quick-launch', '/api/apps/launch', '/api/apps/startup/toggle', '/api/apps/leftovers/scan', '/api/apps/leftovers/delete', '/api/apps/leftovers/cancel'].includes(pathname);
   const isProcessKillPost = req.method === 'POST' && ['/api/processes/kill','/api/processes/kill-tree','/api/processes/tree'].includes(pathname);
   const isTemperatureSettingsPost = req.method === 'POST' && pathname === '/api/temperature/settings';
   const isEnhancedInstallPost = req.method === 'POST' && pathname === '/api/temperature/enhanced/install';
   const isUninstallPost = req.method === 'POST' && pathname === '/api/system/uninstall';
 
-  const shouldTraceReq = pathname === '/' || pathname.startsWith('/api/') || pathname === '/login.html' || pathname === '/login.js' || pathname === '/app.js';
+  const shouldTraceReq = pathname === '/' || pathname.startsWith('/api/') || pathname === '/login.html' || pathname === '/login.js' || pathname === '/app.js' || pathname === '/apps.js' || pathname === '/processes.js';
   if (shouldTraceReq && !pathname.startsWith('/api/stream') && !isDebugLogPost) {
     authLog('HTTP_REQ_START', {
+      reqId,
       method: req.method,
       path: pathname,
       ip: clientIP,
       host: req.headers.host || 'none',
       origin: req.headers.origin || 'none',
+      secFetchSite: req.headers['sec-fetch-site'] || 'none',
       hasAuthCookie: Boolean(req.headers.cookie && req.headers.cookie.includes(AUTH_COOKIE)),
       activeSessions: sessions.size
     });
     res.on('finish', () => {
       authLog('HTTP_REQ_END', {
+        reqId,
         method: req.method,
         path: pathname,
+        ip: clientIP,
         status: res.statusCode,
         authReason: req.authFailureReason || 'n/a',
         activeSessions: sessions.size
@@ -1473,13 +1358,15 @@ const server = http.createServer((req, res) => {
   }
 
   if (isDebugLogPost) {
-    readRequestBody(req, 4096, (err, body) => {
+    readRequestBody(req, 8192, (err, body) => {
       if (err) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: false })); return; }
       try {
         const data = JSON.parse(body);
         authLog('CLIENT_TELEMETRY', {
           clientEvent: data.event || 'unknown',
           url: data.url || '',
+          page: data.page || '',
+          visibility: data.visibility || '',
           reason: data.reason || '',
           detail: typeof data.detail === 'object' ? JSON.stringify(data.detail) : String(data.detail || '')
         });
@@ -1524,12 +1411,12 @@ const server = http.createServer((req, res) => {
         if (pathname === '/api/desktop/updates') {
           if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '') || parsedUrl.search || Object.keys(data).length !== 1 || !['status','check','automatic','preference','download','prepare','cancel'].includes(data.action)) { reply(400, { success: false, code: 'invalid-request', error: 'Fixed update action required.' }); return; }
           if (data.action === 'status') { try { reply(200, { success: true, ...updateManager.status() }); } catch (_) { reply(503, { success: false, error: 'Update settings unavailable.' }); } return; }
-          if (appManager.busy || appManager.blocked || treeInFlight || killInFlight.size || uninstallManager.busy || enhancedSupport.status().installing) { reply(409, { success: false, code: 'operation-running', error: 'Wait for the current operation to finish.' }); return; }
+          if (appManager.busy || appManager.blocked || appManager.leftovers.busy || treeInFlight || killInFlight.size || uninstallManager.busy || enhancedSupport.status().installing) { reply(409, { success: false, code: 'operation-running', error: 'Wait for the current operation to finish.' }); return; }
           if (data.action === 'prepare') {
             maintenance.getStatus(status => {
               if (!getAuthenticatedSession(req)) { reply(401, { success: false, error: 'Authentication required.' }); return; }
               try {
-                if (status.isRunning || appManager.busy || appManager.blocked || treeInFlight || killInFlight.size || uninstallManager.busy || enhancedSupport.status().installing) throw new Error('operation-running');
+                if (status.isRunning || appManager.busy || appManager.blocked || appManager.leftovers.busy || treeInFlight || killInFlight.size || uninstallManager.busy || enhancedSupport.status().installing) throw new Error('operation-running');
                 reply(200, { success: true, ...updateManager.reserve() });
               } catch (_) { reply(409, { success: false, error: 'Verified update handoff unavailable. Finish other operations first.' }); }
             }); return;
@@ -1543,11 +1430,33 @@ const server = http.createServer((req, res) => {
             if (!updateManager.installed() || updateManager.busy) { reply(409, { success: false, code: 'update-unavailable', error: 'Update installation requires an idle installed native copy.' }); return; }
             maintenance.getStatus(status => {
               if (!getAuthenticatedSession(req)) { reply(401, { success: false, error: 'Authentication required.' }); return; }
-              if (status.isRunning || appManager.busy || appManager.blocked || treeInFlight || killInFlight.size || uninstallManager.busy || enhancedSupport.status().installing || updateManager.busy) { reply(409, { success: false, error: 'Wait for the current operation to finish.' }); return; }
+              if (status.isRunning || appManager.busy || appManager.blocked || appManager.leftovers.busy || treeInFlight || killInFlight.size || uninstallManager.busy || enhancedSupport.status().installing || updateManager.busy) { reply(409, { success: false, error: 'Wait for the current operation to finish.' }); return; }
               updateManager.download().catch(() => {}); reply(202, { success: true });
             }); return;
           }
           updateManager.check(data.action === 'automatic').then(status => reply(200, { success: true, ...status })).catch(() => reply(503, { success: false, error: 'Update check unavailable.' })); return;
+        }
+        if (pathname === '/api/desktop/maintenance') {
+          if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '') || parsedUrl.search || Object.keys(data).length !== 1 || !['status', 'enable', 'disable'].includes(data.action)) {
+            reply(400, { success: false, code: 'invalid-request', error: 'Fixed maintenance action required.' });
+            return;
+          }
+          if (data.action === 'status') {
+            localMaintenanceClient.status().then(status => reply(200, { success: true, ...status })).catch(() => reply(503, { success: false, error: 'Maintenance settings unavailable.' }));
+            return;
+          }
+          if (appManager.busy || appManager.blocked || appManager.leftovers.busy || treeInFlight || killInFlight.size || uninstallManager.busy || enhancedSupport.status().installing || updateManager.busy) {
+            reply(409, { success: false, code: 'operation-running', error: 'Wait for the current operation to finish.' });
+            return;
+          }
+          if (data.action === 'enable') {
+            localMaintenanceClient.provision().then(res => reply(200, { success: res.enabled, ...res })).catch(() => reply(503, { success: false, error: 'Could not enable administrator maintenance.' }));
+            return;
+          }
+          if (data.action === 'disable') {
+            localMaintenanceClient.revoke().then(res => reply(200, { success: !res.enabled, ...res })).catch(() => reply(503, { success: false, error: 'Could not disable administrator maintenance.' }));
+            return;
+          }
         }
         const fields = Object.keys(data);
         if (data.action === 'status' && fields.length === 1) { reply(200, { success: true, requireDesktopPin: config.requireDesktopPin !== false }); return; }
@@ -1668,7 +1577,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const isStaticAsset = ['/app.css', '/maintenance.css', '/processes.css', '/app.js', '/maintenance.js', '/processes.js', '/apps.js', '/apps.css', '/login.js'].includes(pathname);
+  const isStaticAsset = ['/app.css', '/maintenance.css', '/processes.css', '/app.js', '/maintenance.js', '/processes.js', '/apps.js', '/apps.css', '/app-leftovers.js', '/login.js'].includes(pathname);
 
   // Reuse authenticated lease traffic to detect UI edits without another poller.
   if (session && pathname === '/api/monitoring/lease') {
@@ -1692,9 +1601,16 @@ const server = http.createServer((req, res) => {
       // No value/hash is rendered; unhealthy configuration leaves manual entry.
       const pinMode = refreshAccessPin(true) ? String(config.pin.length) : 'manual';
       res.setHeader('Cache-Control', 'no-store');
-      res.end(fs.readFileSync(loginHtmlPath, 'utf8').replace(
+      let loginHtml = fs.readFileSync(loginHtmlPath, 'utf8').replace(
         '<meta name="rovarin-pin-mode" content="manual">',
-        '<meta name="rovarin-pin-mode" content="' + pinMode + '">'));
+        '<meta name="rovarin-pin-mode" content="' + pinMode + '">'
+      );
+      try {
+        const revision = getDashboardAssetRevision();
+        loginHtml = loginHtml.replace(/(href|src)="\/([a-z-]+\.(?:css|js))(?:\?[^" ]*)?"/g,
+          (match, attribute, asset) => PUBLIC_FILES.has(asset) ? `${attribute}="/${asset}?v=${revision}"` : match);
+      } catch (_) {}
+      res.end(loginHtml);
       return;
     }
   }
@@ -1709,6 +1625,24 @@ const server = http.createServer((req, res) => {
   }
   if (pathname.startsWith('/api/apps')) {
     const reply=(status,data)=>{if(!res.destroyed&&!res.writableEnded){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(data));}};
+    if(pathname==='/api/apps/removal-security'&&!parsedUrl.search){
+      if(req.method==='GET'){removalPolicy(req).then(value=>reply(200,value),()=>reply(503,{success:false,error:'Security policy unavailable.'}));return;}
+      if(req.method==='POST'){
+        if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')){reply(415,{success:false,error:'JSON required.'});return;}
+        readRequestBody(req,512,async(error,body)=>{
+          let data;try{data=JSON.parse(body);}catch(_){}
+          if(error||!data||Array.isArray(data)||!Object.keys(data).every(key=>['requirePhoneRemovalPin','pin'].includes(key))||typeof data.requirePhoneRemovalPin!=='boolean'||('pin' in data&&!validPin(data.pin))){reply(400,{success:false,error:'Invalid removal preference.'});return;}
+          try{
+            const policy=await removalPolicy(req);
+            if(!policy.native&&policy.requirePhoneRemovalPin&&!data.requirePhoneRemovalPin&&!verifyRemovalPin(req,data.pin,reply))return;
+            writeConfig(CONFIG_FILE,{...readConfig(CONFIG_FILE),requirePhoneRemovalPin:data.requirePhoneRemovalPin});
+            config.requirePhoneRemovalPin=data.requirePhoneRemovalPin;
+            reply(200,{...policy,requirePhoneRemovalPin:data.requirePhoneRemovalPin,requirePin:!policy.native&&data.requirePhoneRemovalPin});
+          }catch(_){reply(503,{success:false,error:'Security preference could not be saved.'});}
+        });return;
+      }
+    }
+    if(pathname==='/api/apps/status'&&req.method==='GET'&&parsedUrl.search==='?check=1'){appManager.reconcile(()=>Boolean(getAuthenticatedSession(req))).then(data=>reply(200,data),()=>reply(503,{success:false,code:'verification-unavailable',error:'Windows removal verification is unavailable.'}));return;}
     if(pathname==='/api/apps/status'&&req.method==='GET'&&!parsedUrl.search){reply(200,appManager.status());return;}
     if(pathname==='/api/apps'&&req.method==='GET'&&(!parsedUrl.search||parsedUrl.search==='?refresh=1')){appManager.inventory(parsedUrl.search==='?refresh=1').then(data=>reply(200,data),()=>reply(503,{success:false,code:'inventory-unavailable',error:'Windows application inventory is unavailable.'}));return;}
     if(pathname==='/api/apps/icon'&&req.method==='GET'){
@@ -1718,6 +1652,32 @@ const server = http.createServer((req, res) => {
       if(!icon){res.writeHead(404,{'Content-Type':'text/plain','Cache-Control':'no-store'});res.end('Not Found');return;}
       res.writeHead(200,{'Content-Type':'image/png','Cache-Control':'private, max-age=3600','Content-Length':icon.length});
       res.end(icon);return;
+    }
+    if(['/api/apps/leftovers/scan','/api/apps/leftovers/delete','/api/apps/leftovers/cancel'].includes(pathname)&&req.method==='POST'&&!parsedUrl.search){
+      if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')){reply(415,{success:false,code:'invalid-content-type',error:'JSON required.'});return;}
+      readRequestBody(req,1024,async(err,body)=>{
+        let data;try{data=JSON.parse(body);}catch(_){}
+        const action=pathname.split('/').pop(),keys=action==='scan'?['receiptId']:action==='delete'?['scanId','confirmation']:['scanId'];
+        if(err||!data||Array.isArray(data)||(Object.keys(data).length<keys.length||Object.keys(data).length>keys.length+(action==='delete'?1:0))||!keys.every(k=>k in data)||!Object.keys(data).every(k=>keys.includes(k)||(action==='delete'&&k==='pin'))||typeof data[action==='scan'?'receiptId':'scanId']!=='string'||!/^[a-f0-9]{32}$/.test(data[action==='scan'?'receiptId':'scanId'])||(action==='delete'&&(('pin' in data&&!validPin(data.pin))||data.confirmation!=='delete-leftovers'))){reply(400,{success:false,code:'invalid-request',error:'A valid cleanup preview is required.'});return;}
+        const authorized=()=>Boolean(getAuthenticatedSession(req));
+        if(!authorized()){reply(401,{success:false,code:'authentication-required',error:'Authentication required.'});return;}
+        if(action==='delete'){
+          let policy;try{policy=await removalPolicy(req);}catch(_){reply(503,{success:false,error:'Security policy unavailable.'});return;}
+          if(policy.requirePin&&!verifyRemovalPin(req,data.pin,reply))return;
+        }
+        try{
+          if(appManager.busy||appManager.blocked||appManager.leftovers.busy||uninstallManager.busy||updateManager.busy)throw Error('operation-running');
+          if(action==='cancel'){reply(200,appManager.leftovers.cancel(data.scanId));return;}
+          await appManager.inventory(true);
+          const maintenanceState=action==='delete'?await new Promise(resolve=>maintenance.getStatus(resolve)):null;
+          if(maintenanceState?.isRunning||enhancedSupport.status().installing||treeInFlight||killInFlight.size)throw Error('operation-running');
+          if(!authorized())throw Error('authentication-required');
+          if(appManager.busy||appManager.blocked||appManager.leftovers.busy||uninstallManager.busy||updateManager.busy)throw Error('operation-running');
+          const rows=[...appManager.rows.values()];
+          if(action==='scan')reply(200,{success:true,preview:await appManager.leftovers.scan(data.receiptId,rows,authorized)});
+          else reply(202,appManager.leftovers.startDelete(data.scanId,rows,authorized));
+        }catch(e){const code=e.message;reply(code==='authentication-required'?401:code==='not-found'?404:409,{success:false,code,error:code==='not-found'?'This preview expired. Scan again.':code==='application-present'?'The application is installed again. Cleanup was refused.':code==='operation-running'?'Wait for the current operation to finish.':'Cleanup could not be safely verified. Scan again later.'});}
+      });return;
     }
     if(pathname==='/api/apps/quick-launch'&&req.method==='GET'&&!parsedUrl.search){
       (async()=>{
@@ -1750,7 +1710,7 @@ const server = http.createServer((req, res) => {
     }
     if(pathname==='/api/apps/launch'&&req.method==='POST'&&!parsedUrl.search){
       if(!getAuthenticatedSession(req)){reply(401,{success:false,code:'authentication-required',error:'Authentication required.'});return;}
-      if(appManager.busy||appManager.blocked||uninstallManager.busy||updateManager.busy){reply(409,{success:false,code:'operation-running',error:'Wait for the current operation to finish.'});return;}
+      if(appManager.busy||appManager.blocked||appManager.leftovers.busy||uninstallManager.busy||updateManager.busy){reply(409,{success:false,code:'operation-running',error:'Wait for the current operation to finish.'});return;}
       if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')){reply(415,{success:false,code:'invalid-content-type',error:'JSON required.'});return;}
       readRequestBody(req,1024,async(err,body)=>{
         let data;try{data=JSON.parse(body);}catch(_){}
@@ -1780,11 +1740,15 @@ const server = http.createServer((req, res) => {
     }
     if(pathname==='/api/apps/startup/toggle'&&req.method==='POST'&&!parsedUrl.search){
       if(!getAuthenticatedSession(req)){reply(401,{success:false,code:'authentication-required',error:'Authentication required.'});return;}
-      if(appManager.busy||appManager.blocked||uninstallManager.busy||updateManager.busy){reply(409,{success:false,code:'operation-running',error:'Wait for the current operation to finish.'});return;}
+      if(appManager.busy||appManager.blocked||appManager.leftovers.busy||uninstallManager.busy||updateManager.busy){reply(409,{success:false,code:'operation-running',error:'Wait for the current operation to finish.'});return;}
       if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')){reply(415,{success:false,code:'invalid-content-type',error:'JSON required.'});return;}
       readRequestBody(req,1024,async(err,body)=>{
         let data;try{data=JSON.parse(body);}catch(_){}
-        if(err||!data||typeof data.id!=='string'||!/^[a-f0-9]{64}$/.test(data.id)||typeof data.enabled!=='boolean'){reply(400,{success:false,code:'invalid-request',error:'Item ID and boolean enabled state required.'});return;}
+        if(err||!data||Array.isArray(data)||Object.keys(data).length!==4||!Object.keys(data).every(k=>['id','enabled','pin','confirmation'].includes(k))||typeof data.id!=='string'||!/^[a-f0-9]{64}$/.test(data.id)||(typeof data.enabled!=='boolean'&&data.enabled!=='restore')||!validPin(data.pin)||data.confirmation!=='change-startup'){reply(400,{success:false,code:'invalid-request',error:'Reviewed startup action and current PIN required.'});return;}
+        if(!getAuthenticatedSession(req)){reply(401,{success:false,code:'authentication-required',error:'Authentication required.'});return;}
+        const rate=loginRateState(req);if(rate.state.lockedUntil>rate.now){reply(429,{success:false,code:'pin-locked',error:'Too many attempts. Try again shortly.'});return;}
+        if(!safeEqualPin(data.pin)){rate.state.failures++;if(rate.state.failures>=LOGIN_FAILURE_LIMIT)rate.state.lockedUntil=Date.now()+LOGIN_LOCK_MS;reply(rate.state.lockedUntil?429:401,{success:false,code:'invalid-pin',error:'PIN not accepted.'});return;}
+        loginAttempts.delete(rate.key);
         try {
           const result=await appManager.toggleStartup(data.id,data.enabled);
           reply(200,result);
@@ -1797,15 +1761,15 @@ const server = http.createServer((req, res) => {
       return;
     }
     if(pathname==='/api/apps/uninstall'&&req.method==='POST'&&!parsedUrl.search){
-      if(appManager.busy||appManager.blocked||uninstallManager.busy||updateManager.busy||treeInFlight||killInFlight.size){reply(409,{success:false,code:'operation-running',error:'Wait for the active system operation. If an uninstaller is still running, complete it on the PC before restarting Rovarin.'});return;}
+      if(appManager.busy||appManager.blocked||appManager.leftovers.busy||uninstallManager.busy||updateManager.busy||treeInFlight||killInFlight.size){reply(409,{success:false,code:'operation-running',error:'Wait for the active system operation. If an uninstaller is still running, complete it on the PC before restarting Rovarin.'});return;}
       if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')){reply(415,{success:false,code:'invalid-content-type',error:'JSON required.'});return;}
-      readRequestBody(req,4096,(error,body)=>{
+      readRequestBody(req,4096,async(error,body)=>{
         let data;try{data=JSON.parse(body);}catch(_){}
-        if(error||!data||Array.isArray(data)||Object.keys(data).length!==4||!Object.keys(data).every(k=>['ids','batch','pin','confirmation'].includes(k))||!validPin(data.pin)||data.confirmation!=='uninstall-apps'||typeof data.batch!=='boolean'||!Array.isArray(data.ids)||!data.ids.length||data.ids.length>20||new Set(data.ids).size!==data.ids.length||data.ids.some(id=>typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id))||(!data.batch&&data.ids.length!==1)){reply(400,{success:false,code:'invalid-request',error:'A reviewed app selection and current PIN are required.'});return;}
+        if(error||!data||Array.isArray(data)||(Object.keys(data).length!==3&&Object.keys(data).length!==4)||!Object.keys(data).every(k=>['ids','batch','pin','confirmation'].includes(k))||('pin' in data&&!validPin(data.pin))||data.confirmation!=='uninstall-apps'||typeof data.batch!=='boolean'||!Array.isArray(data.ids)||!data.ids.length||data.ids.length>20||new Set(data.ids).size!==data.ids.length||data.ids.some(id=>typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id))||(!data.batch&&data.ids.length!==1)){reply(400,{success:false,code:'invalid-request',error:'A reviewed app selection and current PIN are required.'});return;}
         if(!getAuthenticatedSession(req)){reply(401,{success:false,code:'authentication-required',error:'Authentication required.'});return;}
-        const rate=loginRateState(req);if(rate.state.lockedUntil>rate.now){reply(429,{success:false,code:'pin-locked',error:'Too many attempts. Try again shortly.'});return;}
-        if(!safeEqualPin(data.pin)){rate.state.failures++;if(rate.state.failures>=LOGIN_FAILURE_LIMIT)rate.state.lockedUntil=Date.now()+LOGIN_LOCK_MS;reply(rate.state.lockedUntil?429:401,{success:false,code:'invalid-pin',error:'PIN not accepted.'});return;}
-        loginAttempts.delete(rate.key);
+        let policy;try{policy=await removalPolicy(req);}catch(_){reply(503,{success:false,error:'Security policy unavailable.'});return;}
+        if(policy.requirePin&&!verifyRemovalPin(req,data.pin,reply))return;
+
         maintenance.getStatus(async status=>{
           if(status.isRunning||enhancedSupport.status().installing||updateManager.busy||uninstallManager.busy){reply(409,{success:false,code:'operation-running',error:'Wait for the current system operation.'});return;}
           try{const result=await appManager.start(data.ids,data.batch,()=>Boolean(getAuthenticatedSession(req)));reply(202,result);}catch(e){reply(e.message==='authentication-required'?401:409,{success:false,code:e.message,error:'Uninstall was not accepted. Refresh the list and review the selected apps again.'});}
@@ -1815,7 +1779,7 @@ const server = http.createServer((req, res) => {
     reply(400,{success:false,code:'invalid-request',error:'Unexpected operation or parameters.'});
     return;
   }
-  if((appManager.busy||appManager.blocked)&&req.method==='POST'&&(isMaintenancePost||isProcessKillPost||isUninstallPost||isEnhancedInstallPost)){res.writeHead(409,{'Content-Type':'application/json'});res.end(JSON.stringify({success:false,code:'operation-running',error:'An application uninstall is active or its completion is unconfirmed.'}));return;}
+  if((appManager.busy||appManager.blocked||appManager.leftovers.busy)&&req.method==='POST'&&(isMaintenancePost||isProcessKillPost||isUninstallPost||isEnhancedInstallPost)){res.writeHead(409,{'Content-Type':'application/json'});res.end(JSON.stringify({success:false,code:'operation-running',error:'An application removal or cleanup is active or unconfirmed.'}));return;}
   // ── Maintenance API Endpoints ──────────────────────────────────────────────
 
   if ((uninstallManager.busy || (updateManager.busy && ['downloading','verifying','handoff'].includes(updateManager.state) && (isMaintenancePost || isEnhancedInstallPost || isProcessKillPost || isTemperatureSettingsPost))) && req.method === 'POST' && !isUninstallPost) {
@@ -1893,7 +1857,7 @@ const server = http.createServer((req, res) => {
       if (error || !data || Array.isArray(data) || Object.keys(data).length) { reply(400, { success: false, code: 'invalid-request', error: 'Send an empty JSON object.' }); return; }
       if (!getAuthenticatedSession(req)) { reply(401, { success: false, code: 'authentication-required', error: 'Authentication required.' }); return; }
       enhancedSupport.install().then(result => {
-        diagnosticsCache = null;
+        diagnostics.invalidate();
         if (result.success && !result.rebootRequired) {
           // Recheck using the existing sampler only, preserving the chosen mode.
           cpuTemperatureProvider.retryAt = 0;
@@ -1926,7 +1890,7 @@ const server = http.createServer((req, res) => {
       }
       temperatureManager.clearReading('cpu');
       temperatureManager.setUnavailable('cpu', cpuTemperatureProvider.snapshot().source, cpuTemperatureProvider.snapshot().note);
-      diagnosticsCache = null;
+      diagnostics.invalidate();
       reconcileMonitoringSchedule();
       if (monitoringActive) sampleCpuTemperature();
       publishMetricsSnapshot();
@@ -1942,7 +1906,7 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ error: 'Unexpected diagnostics parameters.' }));
       return;
     }
-    getDiagnostics(parsedUrl.search === '?refresh=1').then(data => {
+    diagnostics.get(parsedUrl.search === '?refresh=1').then(data => {
       if (res.destroyed || res.writableEnded) return;
       if (!getAuthenticatedSession(req)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -2078,7 +2042,7 @@ const server = http.createServer((req, res) => {
     maintenance.getStatus((status) => {
       if (!getAuthenticatedSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Authentication required.' })); return; }
       res.writeHead(200, { 'Content-Type': 'application/json; charset=UTF-8', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify(status));
+      res.end(JSON.stringify({ ...status, isLocal: isLocalDesktopRequest(req) }));
     });
     return;
   }
@@ -2100,7 +2064,7 @@ const server = http.createServer((req, res) => {
       if (bodyError) { res.writeHead(bodyError.message === 'too_large' ? 413 : 400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Invalid request body.' })); return; }
       let parsed;
       try { parsed = JSON.parse(body); } catch (_) { parsed = null; }
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.keys(parsed).length !== 1 || typeof parsed.action !== 'string') {
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.keys(parsed).some(key => !['action', 'confirmed', 'pin'].includes(key)) || typeof parsed.action !== 'string' || (Object.hasOwn(parsed, 'confirmed') && parsed.confirmed !== true) || (Object.hasOwn(parsed, 'pin') && (typeof parsed.pin !== 'string' || !validPin(parsed.pin)))) {
         res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Invalid request body.' })); return;
       }
       const actionId = parsed.action;
@@ -2108,7 +2072,37 @@ const server = http.createServer((req, res) => {
         res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Unknown maintenance action.' })); return;
       }
 
-      const result = maintenance.runAction(actionId, () => {}, () => {});
+      if (maintenance.ACTIONS[actionId].requiresAdmin && parsed.confirmed !== true) {
+        res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Confirm this maintenance action before requesting administrator approval.' })); return;
+      }
+
+      const isLocal = isLocalDesktopRequest(req);
+      if (maintenance.ACTIONS[actionId].requiresAdmin) {
+        if (!isLocal && typeof parsed.pin !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, code: 'pin-required', error: 'Enter your Rovarin PIN to authorize administrator maintenance.' }));
+          return;
+        }
+        if (typeof parsed.pin === 'string') {
+          const rate = loginRateState(req);
+          if (rate.state.lockedUntil > rate.now) {
+            res.setHeader('Retry-After', String(Math.ceil((rate.state.lockedUntil - rate.now) / 1000)));
+            res.writeHead(429, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, code: 'pin-locked', error: 'Too many attempts. Try again shortly.' }));
+            return;
+          }
+          if (!safeEqualPin(parsed.pin)) {
+            rate.state.failures++;
+            if (rate.state.failures >= LOGIN_FAILURE_LIMIT) rate.state.lockedUntil = Date.now() + LOGIN_LOCK_MS;
+            res.writeHead(rate.state.lockedUntil ? 429 : 401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, code: 'invalid-pin', error: 'PIN not accepted.' }));
+            return;
+          }
+          loginAttempts.delete(rate.key);
+        }
+      }
+
+      const result = maintenance.runAction(actionId, () => {}, () => {}, { isLocal });
       if (!result.success) {
         res.writeHead(409, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
@@ -2314,6 +2308,7 @@ const server = http.createServer((req, res) => {
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive'
     });
+    authLog('SSE_CONNECT', { reqId, ip: clientIP, leaseId, activeStreams: sseClients.size + 1 });
     res.write(`data: ${JSON.stringify(latestMetrics)}\n\n`);
     sseClients.set(res, leaseId);
 
@@ -2324,6 +2319,7 @@ const server = http.createServer((req, res) => {
 
     res.on('close', () => {
       sseClients.delete(res);
+      authLog('SSE_CLOSE', { ip: clientIP, leaseId, remainingStreams: sseClients.size });
     });
     return;
   }

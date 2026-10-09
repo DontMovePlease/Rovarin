@@ -11,11 +11,15 @@
   const state = {
     isAdmin: false,
     isRunning: false,
+    isLocal: (!window.location.hostname || ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname)),
+    serviceEnabled: false,
+    serviceState: 'disabled',
     lastLogCount: 0,
     pollTimer: null,
     runningActionId: null,
     pendingToastActionId: null,
-    toastTimer: null
+    toastTimer: null,
+    resetNetworkOfflineCount: 0
   };
 
   // ── Action Definitions (mirrors server ACTIONS) ───────────────────────────
@@ -50,7 +54,7 @@
       title: 'Clear DNS Cache',
       desc: 'Flushes the Windows DNS resolver cache. Useful when websites fail to load due to stale or incorrect DNS entries.',
       category: 'Cleanup',
-      requiresAdmin: false,
+      requiresAdmin: true,
       confirm: false
     },
     // Windows Repair
@@ -154,7 +158,7 @@
               <span class="maint-card-title">${a.title}</span>
             </div>
             <div class="maint-card-desc">${a.desc}</div>
-            ${a.requiresAdmin ? '<span class="maint-requires-admin">⚠ Requires Administrator</span>' : ''}
+            ${a.requiresAdmin ? '<span class="maint-requires-admin">⚠ Administrator approval required</span>' : ''}
             <div class="maint-card-running-bar"></div>
           </button>`;
       });
@@ -203,6 +207,11 @@
           <div id="maintModalTitle" class="maint-modal-title"></div>
           <div id="maintModalBody" class="maint-modal-body"></div>
           <div id="maintModalWarn" class="maint-modal-warn" style="display:none"></div>
+          <div id="maintModalPinSection" style="display:none;margin-top:0.75rem;text-align:left;">
+            <label for="maintModalPin" style="font-size:0.9rem;opacity:0.9;display:block;margin-bottom:0.25rem;">Enter your Rovarin PIN to authorize:</label>
+            <input id="maintModalPin" type="password" inputmode="numeric" pattern="[0-9]{6}|[0-9]{12}" maxlength="12" autocomplete="off" placeholder="PIN" style="width:100%;box-sizing:border-box;padding:0.6rem;font-size:1.1rem;letter-spacing:0.15em;text-align:center;border-radius:6px;border:1px solid rgba(255,255,255,0.25);background:rgba(0,0,0,0.3);color:#fff;">
+            <p id="maintModalPinError" style="display:none;color:#ff6b6b;font-size:0.85rem;margin-top:0.35rem;"></p>
+          </div>
           <div class="maint-modal-buttons">
             <button id="maintModalCancel" class="maint-btn maint-btn-cancel">Cancel</button>
             <button id="maintModalConfirm" class="maint-btn maint-btn-confirm">Confirm</button>
@@ -236,14 +245,50 @@
     qs('#maintModalCancel').addEventListener('click', closeModal);
     qs('#maintToastClose').addEventListener('click', dismissMaintenanceToast);
     qs('#maintModalConfirm').addEventListener('click', () => {
-      const actionId = qs('#maintModal').dataset.pendingAction;
+      const modal = qs('#maintModal');
+      const actionId = modal.dataset.pendingAction;
+      if (!actionId) { closeModal(); return; }
+      const action = ACTIONS.find(a => a.id === actionId);
+      let pin = undefined;
+      if (action && action.requiresAdmin && !state.isLocal) {
+        const pinInput = qs('#maintModalPin');
+        const pinError = qs('#maintModalPinError');
+        const val = pinInput ? pinInput.value.trim() : '';
+        if (!val || val.length < 6) {
+          if (pinError) {
+            pinError.textContent = 'Please enter your 6-digit PIN.';
+            pinError.style.display = 'block';
+          }
+          if (pinInput) pinInput.focus();
+          return;
+        }
+        pin = val;
+      }
       closeModal();
-      if (actionId) executeAction(actionId);
+      executeAction(actionId, pin);
     });
+
+    const pinInput = qs('#maintModalPin');
+    if (pinInput) {
+      pinInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          qs('#maintModalConfirm').click();
+        }
+      });
+      pinInput.addEventListener('input', () => {
+        const pinError = qs('#maintModalPinError');
+        if (pinError) pinError.style.display = 'none';
+      });
+    }
 
     // Start status polling (4 s idle, 1 s when running)
     schedulePoll();
-    fetchStatus(); // immediate first load
+    if (typeof window.currentAppPage !== 'undefined' && window.currentAppPage === 'maintenancePage') {
+      fetchStatus();
+    } else {
+      setTimeout(fetchStatus, 1500);
+    }
   }
 
   // ── Action Click Handler ──────────────────────────────────────────────────
@@ -251,7 +296,7 @@
   function onActionClick(action) {
     if (state.isRunning) return;
 
-    if (action.confirm) {
+    if (action.confirm || action.requiresAdmin) {
       showConfirmModal(action);
     } else {
       executeAction(action.id);
@@ -263,10 +308,43 @@
   function showConfirmModal(action) {
     const modal = qs('#maintModal');
     qs('#maintModalIcon').textContent = action.emoji;
-    qs('#maintModalTitle').textContent = action.confirmTitle || `Run: ${action.title}?`;
-    qs('#maintModalBody').textContent = action.confirmBody || action.desc;
-
+    const confirmBtn = qs('#maintModalConfirm');
+    const cancelBtn = qs('#maintModalCancel');
     const warnEl = qs('#maintModalWarn');
+    const pinSection = qs('#maintModalPinSection');
+    const pinInput = qs('#maintModalPin');
+    const pinError = qs('#maintModalPinError');
+
+    if (pinError) { pinError.textContent = ''; pinError.style.display = 'none'; }
+    if (pinInput) { pinInput.value = ''; }
+
+    // If remote caller and action requires admin but service is disabled
+    if (action.requiresAdmin && !state.isLocal && !state.serviceEnabled) {
+      qs('#maintModalTitle').textContent = 'Administrator Maintenance Disabled';
+      qs('#maintModalBody').textContent = 'Administrator maintenance is disabled on this PC. Turn on "Enable administrator maintenance" in Settings from the Rovarin desktop app before running privileged actions from your phone.';
+      warnEl.style.display = 'none';
+      if (pinSection) pinSection.style.display = 'none';
+      confirmBtn.style.display = 'none';
+      cancelBtn.textContent = 'Close';
+      modal.dataset.pendingAction = '';
+      modal.style.display = 'flex';
+      return;
+    }
+
+    confirmBtn.style.display = '';
+    cancelBtn.textContent = 'Cancel';
+    qs('#maintModalTitle').textContent = action.confirmTitle || `Run: ${action.title}?`;
+
+    let bodyText = action.confirmBody || action.desc;
+    if (action.requiresAdmin) {
+      if (!state.isLocal) {
+        bodyText += ' Enter your Rovarin PIN to authorize execution on this PC.';
+      } else if (!state.serviceEnabled) {
+        bodyText += ' Windows will ask for administrator approval on this PC for this action only.';
+      }
+    }
+    qs('#maintModalBody').textContent = bodyText;
+
     if (action.confirmWarn) {
       warnEl.textContent = '⚠ ' + action.confirmWarn;
       warnEl.style.display = 'block';
@@ -274,7 +352,13 @@
       warnEl.style.display = 'none';
     }
 
-    const confirmBtn = qs('#maintModalConfirm');
+    if (action.requiresAdmin && !state.isLocal) {
+      if (pinSection) pinSection.style.display = 'block';
+      setTimeout(() => { if (pinInput) pinInput.focus(); }, 50);
+    } else {
+      if (pinSection) pinSection.style.display = 'none';
+    }
+
     confirmBtn.textContent = action.confirmBtnLabel || 'Confirm';
     confirmBtn.className = 'maint-btn maint-btn-confirm' + (action.confirmDanger ? ' danger' : '');
 
@@ -285,6 +369,10 @@
   function closeModal() {
     qs('#maintModal').style.display = 'none';
     qs('#maintModal').dataset.pendingAction = '';
+    const pinError = qs('#maintModalPinError');
+    if (pinError) pinError.style.display = 'none';
+    const pinInput = qs('#maintModalPin');
+    if (pinInput) pinInput.value = '';
   }
 
   // Click outside modal to dismiss
@@ -295,7 +383,7 @@
 
   // ── Execute Action ─────────────────────────────────────────────────────────
 
-  async function executeAction(actionId) {
+  async function executeAction(actionId, pin) {
     if (state.isRunning) return;
 
     // Show progress panel immediately
@@ -303,40 +391,54 @@
     showProgressPanel(actionId);
     setAllButtonsDisabled(true, actionId);
 
+    const action = ACTIONS.find(a => a.id === actionId);
+    const payload = (action && (action.confirm || action.requiresAdmin))
+      ? { action: actionId, confirmed: true }
+      : { action: actionId };
+    if (pin) {
+      payload.pin = pin;
+    }
+
     try {
       const res = await fetch('/api/maintenance/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({ action: actionId })
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
         appendLocalLog('error', data.error || 'Failed to start operation.');
         state.isRunning = false;
+        state.runningActionId = null;
         const pill = qs('#maintStatusPill');
-        pill.textContent = 'Failed';
-        pill.className = 'maint-status-pill failed';
+        if (pill) { pill.textContent = 'Failed'; pill.className = 'maint-status-pill failed'; }
         const banner = qs('#maintResultBanner');
-        banner.textContent = data.error || 'Failed to start operation.';
-        banner.className = 'maint-result-banner failed';
+        if (banner) { banner.textContent = data.error || 'Failed to start operation.'; banner.className = 'maint-result-banner failed'; }
         showMaintenanceToast(false, data.error || 'Failed to start operation.', actionTitle(actionId));
         state.pendingToastActionId = null;
         setAllButtonsDisabled(false);
+        document.querySelectorAll('.maint-action-card.running').forEach(b => b.classList.remove('running'));
         return;
       }
     } catch (err) {
+      if (actionId === 'reset_network') {
+        appendLocalLog('info', 'Network resetting; reconnecting to PC…');
+        qs('#maintProgressStep').textContent = 'Reconnecting to PC after network reset…';
+        startFastPoll();
+        return;
+      }
       appendLocalLog('error', 'Network error: ' + err.message);
       state.isRunning = false;
+      state.runningActionId = null;
       const pill = qs('#maintStatusPill');
-      pill.textContent = 'Failed';
-      pill.className = 'maint-status-pill failed';
+      if (pill) { pill.textContent = 'Failed'; pill.className = 'maint-status-pill failed'; }
       const banner = qs('#maintResultBanner');
-      banner.textContent = 'Could not contact the maintenance service.';
-      banner.className = 'maint-result-banner failed';
+      if (banner) { banner.textContent = 'Could not contact the maintenance service.'; banner.className = 'maint-result-banner failed'; }
       showMaintenanceToast(false, 'Could not contact the maintenance service.', actionTitle(actionId));
       state.pendingToastActionId = null;
       setAllButtonsDisabled(false);
+      document.querySelectorAll('.maint-action-card.running').forEach(b => b.classList.remove('running'));
       return;
     }
 
@@ -386,8 +488,8 @@
     qs('#maintProgressStep').textContent = task.stepTitle || '';
 
     const pill = qs('#maintStatusPill');
-    pill.textContent = task.status === 'running' ? 'Running' : task.status === 'completed' ? 'Done' : 'Failed';
-    pill.className = 'maint-status-pill ' + (task.status === 'running' ? 'running' : task.status === 'completed' ? 'completed' : 'failed');
+    pill.textContent = task.status === 'running' ? 'Running' : task.status === 'completed' ? 'Done' : task.status === 'partially-completed' ? 'Partial' : task.status === 'cancelled' ? 'Cancelled' : 'Failed';
+    pill.className = 'maint-status-pill ' + (task.status === 'running' ? 'running' : task.status === 'completed' ? 'completed' : task.status === 'partially-completed' ? 'partially-completed' : task.status === 'cancelled' ? 'cancelled' : 'failed');
 
     // Step progress bar
     const pct = task.totalSteps > 0 ? Math.round((task.currentStep / task.totalSteps) * 100) : (task.status !== 'running' ? 100 : 20);
@@ -411,7 +513,7 @@
     if (task.status !== 'running' && task.result) {
       const banner = qs('#maintResultBanner');
       banner.textContent = task.result.summary;
-      banner.className = 'maint-result-banner ' + (task.result.success ? 'success' : 'failed');
+      banner.className = 'maint-result-banner ' + (task.status === 'cancelled' ? 'cancelled' : task.status === 'partially-completed' ? 'partially-completed' : task.result.success ? 'success' : 'failed');
     }
   }
 
@@ -436,21 +538,46 @@
       const res = await fetch('/api/maintenance/status', { credentials: 'same-origin' });
       if (!res.ok) { schedulePoll(); return; }
       const data = await res.json();
+      state.resetNetworkOfflineCount = 0;
       applyStatus(data);
     } catch (_) {
-      // silently skip on network error
+      if (state.runningActionId === 'reset_network') {
+        state.resetNetworkOfflineCount = (state.resetNetworkOfflineCount || 0) + 1;
+        const step = qs('#maintProgressStep');
+        if (step) step.textContent = 'Reconnecting to PC after network reset…';
+        const pill = qs('#maintStatusPill');
+        if (pill) { pill.textContent = 'Reconnecting'; pill.className = 'maint-status-pill running'; }
+      }
     }
     schedulePoll();
   }
 
   function applyStatus(data) {
-    // Admin badge
+    if (typeof data.isLocal === 'boolean') {
+      state.isLocal = data.isLocal;
+    }
+    if (data.service) {
+      state.serviceEnabled = !!data.service.enabled;
+      state.serviceState = data.service.state || (data.service.enabled ? 'enabled' : 'disabled');
+    }
     state.isAdmin = data.isAdmin;
+
+    // Admin badge
     const badge = qs('#maintAdminBadge');
     if (badge) {
-      badge.textContent = data.isAdmin ? '⚙ Administrator' : '⚠ Standard User';
-      badge.className = 'maint-admin-badge ' + (data.isAdmin ? 'is-admin' : 'not-admin');
-      badge.title = data.isAdmin ? 'Dashboard has Administrator privileges.' : "Stop the dashboard, then right-click 'Start Dashboard.bat' and choose 'Run as administrator' to enable administrator-only actions.";
+      if (state.serviceEnabled) {
+        badge.textContent = '🛡 Administrator Maintenance Enabled';
+        badge.className = 'maint-admin-badge is-admin';
+        badge.title = 'Authorized maintenance actions can run from your phone without repeated Windows administrator prompts.';
+      } else if (data.isAdmin) {
+        badge.textContent = '⚙ Administrator';
+        badge.className = 'maint-admin-badge is-admin';
+        badge.title = 'Rovarin is currently elevated.';
+      } else {
+        badge.textContent = '⚠ Standard User';
+        badge.className = 'maint-admin-badge not-admin';
+        badge.title = 'Rovarin runs with standard user rights. Actions requiring administrator approval can be enabled in desktop Settings.';
+      }
     }
 
     state.isRunning = data.isRunning;
@@ -461,7 +588,7 @@
       if (data.currentTask.status !== 'running') {
         if (state.pendingToastActionId && data.currentTask.id === state.pendingToastActionId) {
           const result = data.currentTask.result || {};
-          showMaintenanceToast(result.success, result.summary || (result.success ? 'Operation completed.' : 'Operation failed.'), data.currentTask.title || actionTitle(state.pendingToastActionId));
+          showMaintenanceToast(result.success, result.summary || (result.success ? 'Operation completed.' : 'Operation failed.'), data.currentTask.title || actionTitle(state.pendingToastActionId), result.detailedResult?.code === 'uac-cancelled', data.currentTask.status === 'partially-completed');
           state.pendingToastActionId = null;
         }
         // Task finished
@@ -471,7 +598,30 @@
         document.querySelectorAll('.maint-action-card.running').forEach(b => b.classList.remove('running'));
       }
     } else if (!data.isRunning) {
+      if (state.runningActionId && data.history && data.history.length > 0) {
+        const last = data.history[0];
+        if (last && last.id === state.runningActionId) {
+          const pill = qs('#maintStatusPill');
+          if (pill) {
+            pill.textContent = last.status === 'completed' ? 'Done' : last.status === 'partially-completed' ? 'Partial' : last.status === 'cancelled' ? 'Cancelled' : 'Failed';
+            pill.className = 'maint-status-pill ' + (last.status === 'completed' ? 'completed' : last.status === 'partially-completed' ? 'partially-completed' : last.status === 'cancelled' ? 'cancelled' : 'failed');
+          }
+          const stepFill = qs('#maintStepFill');
+          if (stepFill) stepFill.style.width = '100%';
+          const banner = qs('#maintResultBanner');
+          if (banner) {
+            banner.textContent = last.summary;
+            banner.className = 'maint-result-banner ' + (last.status === 'cancelled' ? 'cancelled' : last.status === 'partially-completed' ? 'partially-completed' : last.success ? 'success' : 'failed');
+          }
+          if (state.pendingToastActionId && last.id === state.pendingToastActionId) {
+            showMaintenanceToast(last.success, last.summary, last.title || actionTitle(last.id), last.status === 'cancelled', last.status === 'partially-completed');
+            state.pendingToastActionId = null;
+          }
+          state.runningActionId = null;
+        }
+      }
       setAllButtonsDisabled(false);
+      document.querySelectorAll('.maint-action-card.running').forEach(b => b.classList.remove('running'));
     }
 
     // Render history
@@ -483,15 +633,15 @@
     return action ? action.title : 'Maintenance operation';
   }
 
-  function showMaintenanceToast(success, message, title) {
+  function showMaintenanceToast(success, message, title, cancelled = false, isPartial = false) {
     const toast = qs('#maintToast');
     if (!toast) return;
     clearTimeout(state.toastTimer);
-    qs('#maintToastIcon').textContent = success ? '✓' : '×';
-    qs('#maintToastTitle').textContent = `${title} ${success ? 'succeeded' : 'failed'}`;
+    qs('#maintToastIcon').textContent = isPartial ? '!' : success ? '✓' : '×';
+    qs('#maintToastTitle').textContent = `${title} ${cancelled ? 'cancelled' : isPartial ? 'partially completed' : success ? 'succeeded' : 'failed'}`;
     qs('#maintToastMessage').textContent = message;
-    toast.classList.remove('success', 'failed');
-    toast.classList.add(success ? 'success' : 'failed', 'is-visible');
+    toast.classList.remove('success', 'failed', 'cancelled', 'partial');
+    toast.classList.add(cancelled ? 'cancelled' : isPartial ? 'partial' : success ? 'success' : 'failed', 'is-visible');
     state.toastTimer = setTimeout(dismissMaintenanceToast, 6500);
   }
 
@@ -506,10 +656,9 @@
     ACTIONS.forEach(a => {
       const btn = qs(`#maint-btn-${a.id}`);
       if (!btn) return;
-      const needsAdmin = a.requiresAdmin && !state.isAdmin;
-      btn.disabled = disabled || needsAdmin;
-      btn.title = needsAdmin
-        ? `${a.title} — requires Administrator privileges. Stop the dashboard, then start it elevated.`
+      btn.disabled = disabled;
+      btn.title = a.requiresAdmin
+        ? `${a.title} — Windows administrator approval required for this action.`
         : a.title;
       if (disabled && a.id === activeId) btn.classList.add('running');
       else btn.classList.remove('running');
@@ -529,10 +678,10 @@
 
     list.innerHTML = historyItems.slice(0, 10).map(item => `
       <div class="maint-history-item">
-        <div class="maint-history-dot ${item.success ? 'success' : 'failed'}"></div>
+        <div class="maint-history-dot ${item.status === 'partially-completed' ? 'partial' : item.success ? 'success' : 'failed'}"></div>
         <div class="maint-history-body">
           <div class="maint-history-name">${escHtml(item.title)}</div>
-          <div class="maint-history-meta">${escHtml(item.date)} ${escHtml(item.timestamp)} · ${escHtml(item.duration)} · ${item.success ? 'Succeeded' : 'Failed'}</div>
+          <div class="maint-history-meta">${escHtml(item.date)} ${escHtml(item.timestamp)} · ${escHtml(item.duration)} · ${item.status === 'cancelled' ? 'Cancelled' : item.status === 'partially-completed' ? 'Partial (Restart Required)' : item.success ? 'Succeeded' : 'Failed'}</div>
         </div>
       </div>
     `).join('');
@@ -549,6 +698,12 @@
   window.addEventListener('pc-monitor-desktop-visibility', event => {
     clearTimeout(state.pollTimer);
     if (event.detail?.visible) fetchStatus();
+  });
+
+  window.addEventListener('pc-monitor-pagechange', event => {
+    if (event.detail?.page === 'maintenancePage') {
+      fetchStatus();
+    }
   });
 
   if (document.readyState === 'loading') {

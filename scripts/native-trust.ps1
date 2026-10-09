@@ -5,8 +5,8 @@ try {
     if ($args.Count -ne 0) { throw 'Invalid invocation' }
     Add-Type -AssemblyName System.Security
     $appRoot = Split-Path -Parent $PSScriptRoot
-    $stateRoot = $appRoot
-    if (Test-Path -LiteralPath (Join-Path $appRoot 'installation.json')) { $stateRoot = Join-Path (Split-Path -Parent $appRoot) 'data' }
+    . (Join-Path $PSScriptRoot 'dashboard-runtime.ps1')
+    $stateRoot = Get-RovarinDataDirectory $appRoot
     $file = Join-Path $stateRoot 'desktop-trust.bin'
     # Compatibility-only DPAPI entropy: preserves existing desktop credentials.
     $entropy = [Text.Encoding]::UTF8.GetBytes('PCMonitor.NativeDesktop.v1')

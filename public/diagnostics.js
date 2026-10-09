@@ -77,7 +77,7 @@
     feedback.textContent = 'Checking compatibility…';
     try {
       const response = await fetch(force ? '/api/diagnostics?refresh=1' : '/api/diagnostics', { credentials: 'same-origin', cache: 'no-store' });
-      if (response.status === 401) { window.location.replace('/'); return; }
+      if (response.status === 401) { (window.redirectToLogin || (() => window.location.replace('/')))('diagnostics-refresh-401'); return; }
       if (!response.ok) throw new Error('request-failed');
       render(await response.json());
       feedback.textContent = 'Checks complete. Optional capabilities are listed separately.';
@@ -123,7 +123,7 @@
     try {
       const response = await fetch('/api/temperature/settings', { method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: selectedMode }) });
-      if (response.status === 401) { window.location.replace('/'); return; }
+      if (response.status === 401) { (window.redirectToLogin || (() => window.location.replace('/')))('diagnostics-settings-401'); return; }
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error('save-failed');
       modeSelector.value = result.settings.mode;

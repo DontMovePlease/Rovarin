@@ -2,6 +2,7 @@ const pinInput = document.getElementById('pinInput');
 const unlockBtn = document.getElementById('unlockBtn');
 const errMsg = document.getElementById('errMsg');
 try { localStorage.removeItem('auth_pin'); } catch (_) {}
+try { sessionStorage.removeItem('rovarin.cachedApps.v1'); } catch (_) {}
 let loginPending = false;
 let autoSubmittedPin = null;
 // Length mode only, rendered by the server; absent/unknown metadata fails to manual entry.
@@ -10,17 +11,41 @@ const sixDigitPinMode = document.querySelector?.('meta[name="rovarin-pin-mode"]'
 function reportClientLog(event, detail = {}) {
   try {
     if (typeof window === 'undefined' || !window.location || !window.location.origin) return;
+    const payload = JSON.stringify({
+      event,
+      url: window.location.href,
+      visibility: typeof document !== 'undefined' ? document.visibilityState : 'unknown',
+      detail
+    });
+    console.log('[Rovarin Login Log]', event, detail);
     fetch('/api/debug/client-log', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event, url: window.location.href, detail })
-    }).catch(() => {});
+      credentials: 'same-origin',
+      keepalive: true,
+      body: payload
+    }).catch(() => {
+      if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+        navigator.sendBeacon('/api/debug/client-log', new Blob([payload], { type: 'application/json' }));
+      }
+    });
   } catch (_) {}
 }
 reportClientLog('LOGIN_PAGE_MOUNT', {
   hasSessionCookie: String(document.cookie || '').includes('pc_monitor_session'),
   hasAuthPinCookie: String(document.cookie || '').includes('auth_pin')
 });
+
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function' && typeof window !== 'undefined' && window.location && window.location.origin) {
+  document.addEventListener('visibilitychange', () => {
+    reportClientLog('LOGIN_VISIBILITY_CHANGE', { state: document.visibilityState });
+  });
+}
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && window.location && window.location.origin) {
+  window.addEventListener('pageshow', (e) => {
+    reportClientLog('LOGIN_PAGE_SHOW', { persisted: e.persisted });
+  });
+}
 
 async function attemptLogin() {
   const pin = pinInput.value.trim();
@@ -47,6 +72,7 @@ async function attemptLogin() {
       error: data && data.error
     });
     if (response.ok && data.success) {
+      unlockBtn.textContent = 'Unlocked!';
       try { pinInput.blur(); } catch (_) {}
       if (typeof window.cleanupLoginViewport === 'function') {
         try { window.cleanupLoginViewport(); } catch (_) {}
@@ -96,7 +122,7 @@ pinInput.addEventListener('input', () => {
   if (!viewport) return;
   const root = document.documentElement;
   const updateViewport = () => {
-    if (root.classList.contains('native-shell') || window.innerWidth > 699) {
+    if (root.classList.contains('native-shell') || (window.innerWidth > 699 && !window.matchMedia?.('(pointer: coarse)').matches)) {
       root.style.removeProperty('--login-viewport-height');
       root.style.removeProperty('--login-viewport-top');
       root.classList.remove('login-keyboard');

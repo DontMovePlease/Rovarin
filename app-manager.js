@@ -3,12 +3,15 @@ const { execFile } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const CODES = new Set(['completed','reboot-required','not-installed','inventory-changed','unsupported','cancelled','access-denied','uninstall-failed','still-running','operation-failed','launched','launch-failed','limit-reached','already-pinned','pinned','unpinned','not-found','elevation-required','startup-changed','unavailable']);
+const {LeftoverManager}=require('./leftover-manager');
+const INVENTORY_CACHE_TTL_MS = 300000;
+const STARTUP_CACHE_TTL_MS = 300000;
+const CODES = new Set(['user-mismatch','inspected','removal-unconfirmed','removal-denied','package-in-use','package-removal-failed','completed','reboot-required','not-installed','inventory-changed','unsupported','cancelled','access-denied','uninstall-failed','still-running','operation-failed','launched','launch-failed','limit-reached','already-pinned','pinned','unpinned','not-found','elevation-required','startup-changed','unavailable']);
 function windowsOperation(request, execute = execFile) {
   return new Promise(resolve => {
     if (process.platform !== 'win32') return resolve({ success:false, code:'windows-only' });
     try {
-      const timeout = request.action === 'inventory' ? 30000 : ['startup-inventory', 'launch'].includes(request.action) ? 15000 : request.action === 'startup-toggle' ? 10000 : 110000;
+      const timeout = request.action === 'inventory' ? 45000 : ['startup-inventory', 'launch'].includes(request.action) ? 15000 : request.action === 'startup-toggle' ? 10000 : request.action==='verify-uninstall'?15000:request.action==='uninstall'&&request.locator?.scope==='appx'?300000:110000;
       const child=execute(path.join(process.env.SystemRoot || 'C:\\Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),
         ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(__dirname,'scripts/app-manager.ps1')],
         {windowsHide:true,timeout,maxBuffer:8*1024*1024},(error,stdout)=>{
@@ -18,9 +21,10 @@ function windowsOperation(request, execute = execFile) {
             if (request.action === 'inventory' && (result.success !== true || !Array.isArray(result.apps) || result.apps.length > 2048)) throw Error();
             if (request.action === 'startup-inventory' && (result.success !== true || !Array.isArray(result.items))) throw Error();
             if (!['inventory', 'startup-inventory'].includes(request.action) && !CODES.has(result.code)) throw Error();
+            if(request.action==='uninstall')result.helperExited=true;
             resolve(result);
           }
-          catch(_){resolve({success:false,code:error?.killed?'timed-out':'operation-failed'});}
+          catch(_){resolve({success:false,code:error?.killed?'timed-out':'operation-failed',helperExited:Boolean(error?.killed)});}
         });child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify(request));
     }catch(_){resolve({success:false,code:'operation-failed'});}
   });
@@ -112,9 +116,11 @@ function publicApp(row,id) {
   return app;
 }
 class AppManager {
-  constructor({operation=windowsOperation,onChange=()=>{},stateDirectory=__dirname}={}) {
+  constructor({operation=windowsOperation,onChange=()=>{},stateDirectory=__dirname,leftovers}={}) {
     this.operation=operation;
     this.onChange=onChange;
+    this.statusEpoch=crypto.randomBytes(16).toString("hex");this.revision=0;
+    this.leftovers=leftovers||new LeftoverManager({onChange:()=>this.publish(),protectedRoots:[__dirname,stateDirectory]});
     this.stateDirectory=stateDirectory;
     this.quickLaunchFile=path.join(stateDirectory,'quick-launch.json');
     this.key=crypto.randomBytes(32);
@@ -210,15 +216,17 @@ class AppManager {
     return {success:true,code:'launched'};
   }
   async startupInventory(force=false){
-    if(!force&&this.startupCache&&Date.now()-this.startupCache.sampledAt<30000)return this.startupCache;
+    if(!force&&this.startupCache&&Date.now()-this.startupCache.sampledAt<STARTUP_CACHE_TTL_MS)return this.startupCache;
     if(this.startupLoading)return this.startupLoading;
     this.startupLoading=(async()=>{
-      const result=await this.operation({action:'startup-inventory'});
+      const result=await this.operation({action:'startup-inventory',...(this.cache?.packagesAvailable && Date.now()-this.cache.sampledAt<INVENTORY_CACHE_TTL_MS && Array.isArray(this.packageStartup)?{packageStartup:this.packageStartup}:{}),...(this.cache?{appLocations:[...this.rows.values()].filter(r=>typeof r.installLocation==='string'&&r.installLocation).map(r=>({name:r.name,location:r.installLocation})).slice(0,2048)}:{})});
       if(!result.success)throw Error(result.code);
       const nextRows=new Map(),nextIcons=new Map(),items=[];
       for(const item of result.items){
         if(!item||!item.locator||typeof item.locator.source!=='string'||typeof item.locator.key!=='string')continue;
-        const id=crypto.createHmac('sha256',this.key).update(item.locator.source+'|'+item.locator.key+'|'+(item.fingerprint||'')).digest('hex');
+        if (!['registry-user','registry-user32','registry-machine','registry-machine32','folder-user','folder-machine','scheduled-task','packaged-startup','app-service'].includes(item.locator.source) || item.locator.key.length>1024 || !/^[a-f0-9]{64}$/.test(item.fingerprint||'')) continue;
+        const id=crypto.createHmac('sha256',this.key).update(item.locator.source+'|'+item.locator.key+'|'+item.fingerprint).digest('hex');
+        if(nextRows.has(id))continue;
         nextRows.set(id,item);
         if(typeof item.icon==='string'&&item.icon.length>0&&item.icon.length<131072){
           try{nextIcons.set(id,Buffer.from(item.icon,'base64'));}catch(_){}
@@ -230,14 +238,20 @@ class AppManager {
           publisher:typeof item.publisher==='string'?item.publisher.slice(0,120):'',
           source:item.source,
           scope:item.scope,
-          enabled:item.enabled===true,
-          readOnly:item.readOnly===true,
+          serviceState:['Running','Stopped','StartPending','StopPending','Paused','Unknown'].includes(item.serviceState)?item.serviceState:'Unknown',
+          startupMode:['Automatic','Manual','Disabled'].includes(item.startupMode)?item.startupMode:'Unknown',
+          method:typeof item.method==='string'?item.method.slice(0,100):'',
+          executable:typeof item.executable==='string'?path.win32.basename(item.executable).replace(/[\x00-\x1f]/g,'').slice(0,120):'',
+          enabled:typeof item.enabled==='boolean'?item.enabled:null,
+          readOnly:item.readOnly===true || (item.locator.source==='scheduled-task' && item.taskManageable!==true) || !['registry-user','folder-user','scheduled-task'].includes(item.locator.source) || typeof item.enabled!=='boolean',
+          canRestore:item.locator.source==='scheduled-task' && item.canRestore===true,
+          blockedReason:typeof item.blockedReason==='string'?item.blockedReason.slice(0,160):'',
           hasIcon:Boolean(item.icon)
         });
       }
       this.startupRows=nextRows;
       this.startupIconCache=nextIcons;
-      this.startupCache={items,sampledAt:Date.now()};
+      this.startupCache={items,sampledAt:Date.now(),warnings:Array.isArray(result.warnings)?result.warnings.filter(x=>['scheduled-tasks-incomplete','scheduled-tasks-unavailable','packaged-startup-incomplete','packaged-startup-unavailable','user-run32-unavailable','app-services-incomplete','app-services-unavailable'].includes(x)):[]};
       return this.startupCache;
     })();
     try{return await this.startupLoading;}finally{this.startupLoading=null;}
@@ -245,31 +259,39 @@ class AppManager {
   getStartupIcon(id){if(typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id))return null;return this.startupIconCache.get(id)||null;}
   async toggleStartup(id,enabled){
     if(typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id))throw Error('invalid-request');
-    if(typeof enabled!=='boolean')throw Error('invalid-request');
+    if(typeof enabled!=='boolean'&&enabled!=='restore')throw Error('invalid-request');
     const item=this.startupRows.get(id);
     if(!item)throw Error('not-found');
-    if(item.readOnly||!['registry-user','folder-user'].includes(item.locator.source))throw Error('elevation-required');
-    const result=await this.operation({action:'startup-toggle',locator:item.locator,fingerprint:item.fingerprint,enabled});
+    if(item.readOnly||(item.locator.source==='scheduled-task'&&item.taskManageable!==true)||!['registry-user','folder-user','scheduled-task'].includes(item.locator.source))throw Error('elevation-required');
+    if(enabled==='restore' && (item.locator.source!=='scheduled-task'||!item.canRestore))throw Error('unsupported');
+    if(this.startupChanging)throw Error('operation-running');
+    this.startupChanging=true;
+    try {
+    const result=await this.operation({action:'startup-toggle',locator:item.locator,fingerprint:item.fingerprint,enabled:enabled==='restore'?false:enabled,restore:enabled==='restore'});
     if(!result.success){const err=new Error(result.error||result.code);err.code=result.code;throw err;}
-    item.enabled=enabled;
+    item.enabled=typeof result.enabled==='boolean'?result.enabled:enabled;
     if(this.startupCache&&Array.isArray(this.startupCache.items)){
       const cached=this.startupCache.items.find(x=>x.id===id);
-      if(cached)cached.enabled=enabled;
+      if(cached)cached.enabled=item.enabled;
     }
     this.audit('startup-toggled',{name:item.name,enabled});
-    return {success:true,code:'startup-changed',enabled};
+    if(item.locator.source==='scheduled-task')this.startupCache=null;
+    return {success:true,code:'startup-changed',enabled:item.enabled};
+    }finally{this.startupChanging=false;}
   }
-  status(){return {busy:this.busy,blocked:this.blocked,job:this.job,history:this.history.slice(-20)};}
-  publish(){this.onChange(this.status());}
+  status(){return {epoch:this.statusEpoch,revision:this.revision,busy:this.busy||this.leftovers.busy,blocked:this.blocked,job:this.job,leftovers:this.leftovers.status(),history:this.history.slice(-20)};}
+  publish(){this.revision++;this.onChange(this.status());}
   audit(event,details={}){this.history.push({at:Date.now(),event,...details});if(this.history.length>64)this.history.shift();}
   getIcon(id){if(typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id))return null;return this.iconCache.get(id)||null;}
   async inventory(force=false){
-    if(!force&&this.cache&&Date.now()-this.cache.sampledAt<60000)return this.cache;
+    if(!force&&this.cache&&Date.now()-this.cache.sampledAt<INVENTORY_CACHE_TTL_MS)return this.cache;
     if(this.loading)return this.loading;
     this.loading=(async()=>{
       const request={action:'inventory',cachedSizes:Object.fromEntries(this.sizeCache)};
       const result=await this.operation(request);
       if(!result.success)throw Error(result.code);
+      this.packageStartup=Array.isArray(result.packageStartup)?result.packageStartup:null;
+      this.startupCache=null;
       if(result.calculatedSizes&&typeof result.calculatedSizes==='object'){
         for(const [k,v] of Object.entries(result.calculatedSizes)){
           if(v&&Number.isFinite(v.sizeKB)&&Number.isFinite(v.mtime))this.sizeCache.set(k,{sizeKB:v.sizeKB,mtime:v.mtime});
@@ -287,7 +309,7 @@ class AppManager {
     })();try{return await this.loading;}finally{this.loading=null;}
   }
   async start(ids,batch,authorize=()=>true){
-    if(this.busy||this.blocked)throw Error(this.blocked?'operation-unconfirmed':'operation-running');
+    if(this.busy||this.blocked||this.leftovers.busy)throw Error(this.blocked?'operation-unconfirmed':'operation-running');
     if(!Array.isArray(ids)||!ids.length||ids.length>20||new Set(ids).size!==ids.length||ids.some(id=>typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id))||(!batch&&ids.length!==1))throw Error('invalid-request');
     this.busy=true;
     try{
@@ -298,27 +320,58 @@ class AppManager {
       if(selected.some(x=>this.rows.get(x.id)?.fingerprint!==x.row.fingerprint))throw Error('inventory-changed');
       if(selected.some(x=>!publicApp(x.row,x.id).uninstallCapable||(batch&&!x.row.batchCapable)))throw Error('unsupported');
       this.audit(batch?'batch-started':'uninstall-requested',{count:selected.length});
-      this.job={id:crypto.randomBytes(16).toString('hex'),batch,state:'running',items:selected.map(x=>({id:x.id,name:x.row.name,state:'queued'}))};this.publish();
+      this.job={id:crypto.randomBytes(16).toString('hex'),batch,state:'running',stage:'preparing',items:selected.map(x=>({id:x.id,name:x.row.name,state:'queued'}))};this.publish();
+      this.uninstallTargets=selected;
       const jobId=this.job.id;this.running=this.run(selected,batch,authorize);return {success:true,code:'accepted',jobId};
     }catch(error){this.busy=false;throw error;}
+  }
+  async reconcile(authorize=()=>true){
+    if(this.busy||this.leftovers.busy||!this.job||!this.blocked)return this.status();
+    if(this.reconciling)return this.reconciling;
+    this.reconciling=(async()=>{
+      for(let index=0;index<this.job.items.length;index++){
+        const item=this.job.items[index],target=this.uninstallTargets?.[index];
+        if(item.state!=='unconfirmed'||!target)continue;
+        if(!authorize())throw Error('authentication-required');
+        // AppX removal runs synchronously in our helper (no detached vendor process).
+        // A killed/exited helper plus a fresh per-user registration check allows safe reconciliation.
+        if(target.row.type!=='appx'||target.outcome?.helperExited!==true)continue;
+        const verified=await this.operation({action:'verify-uninstall',locator:target.row.locator,ownerSid:target.row.ownerSid,packageFamily:target.row.cleanupPackageFamily});
+        if(!authorize())throw Error('authentication-required');
+        if(!verified.success||verified.code!=='inspected'||typeof verified.installed!=='boolean')continue;
+        const previousCode=item.code;
+        item.state=verified.installed?'failed':'completed';item.code=verified.installed?'still-installed':'removal-verified';
+        if(!verified.installed&&target.cleanup)item.leftoverReceiptId=this.leftovers.confirmed(target.cleanup);
+        this.audit('uninstall-reconciled',{appId:target.id,previousCode,code:item.code});
+      }
+      this.blocked=this.job.items.some(item=>item.state==='unconfirmed');
+      this.job.state=this.blocked?'unconfirmed':this.job.items.every(item=>['completed','reboot-required'].includes(item.state))?'completed':this.job.items.some(item=>['completed','reboot-required'].includes(item.state))?'partial':'failed';
+      this.job.stage=this.job.state;this.cache=null;this.publish();
+      try{await this.inventory(true);}catch(_){this.audit('inventory-refresh-failed',{code:'inventory-unavailable'});}
+      return this.status();
+    })();try{return await this.reconciling;}finally{this.reconciling=null;}
   }
   async run(selected,batch,authorize){
     try{for(let index=0;index<selected.length;index++){
       const target=selected[index],item=this.job.items[index];
       if(this.blocked||!authorize()){item.state='skipped';item.code=this.blocked?'operation-unconfirmed':'authentication-required';this.publish();continue;}
-      item.state='uninstalling';this.audit('application-started',{appId:target.id});this.publish();let outcome;
-      try{outcome=await this.operation({action:'uninstall',locator:target.row.locator,fingerprint:target.row.fingerprint,batch});}catch(_){outcome={success:false,code:'operation-failed'};}
-      if(['timed-out','still-running'].includes(outcome.code)){this.blocked=true;item.state='failed';item.code='operation-unconfirmed';}
+      try{target.cleanup=await this.leftovers.prepare(target.row,[...this.rows.values()]);}catch(_){target.cleanup=null;}
+      if(!authorize()){item.state='skipped';item.code='authentication-required';this.publish();continue;}
+      item.state='uninstalling';this.job.stage=target.row.type==='exe'&&!target.row.batchCapable?'waiting-windows':'removing';this.audit('application-started',{appId:target.id});this.publish();let outcome;
+      try{outcome=await this.operation({action:'uninstall',locator:target.row.locator,fingerprint:target.row.fingerprint,ownerSid:target.row.ownerSid,batch});}catch(_){outcome={success:false,code:'operation-failed'};}
+      target.outcome=outcome;item.hresult=/^0x[0-9a-f]{8}$/i.test(outcome.hresult||'')?outcome.hresult:undefined;
+      if(['timed-out','still-running'].includes(outcome.code)){this.blocked=true;item.state='unconfirmed';item.code='operation-unconfirmed';}
       else {
-        try {await this.inventory(true);const remains=[...this.rows.values()].some(row=>row.locator.scope===target.row.locator.scope&&row.locator.key===target.row.locator.key);
+        try {this.job.stage='verifying';this.publish();await this.inventory(true);if(target.row.type==='appx'&&!this.cache.packagesAvailable)throw Error('package-inventory-unavailable');const remains=[...this.rows.values()].some(row=>row.locator.scope===target.row.locator.scope&&row.locator.key===target.row.locator.key);
           item.state=outcome.code==='reboot-required'?'reboot-required':!remains&&['completed','not-installed'].includes(outcome.code)?'completed':'failed';
           item.code=remains&&outcome.code==='completed'?'removal-unconfirmed':outcome.code;
-          if(item.code==='removal-unconfirmed')this.blocked=true;
-        }catch(_){item.state='failed';item.code='verification-unavailable';this.blocked=true;}
+          if(item.code==='removal-unconfirmed'){this.blocked=true;item.state='unconfirmed';}
+          if(item.state==='completed'&&target.cleanup)item.leftoverReceiptId=this.leftovers.confirmed(target.cleanup);
+        }catch(_){if(['user-mismatch','access-denied','removal-denied','package-in-use','package-removal-failed','cancelled','uninstall-failed'].includes(outcome.code)){item.state='failed';item.code=outcome.code;}else{item.state='unconfirmed';item.code='verification-unavailable';this.blocked=true;}}
       }
       // Bounded secret-free audit; no PIN, raw registration command or paths.
-      this.audit(item.state==='reboot-required'?'reboot-required':'application-finished',{appId:target.id,code:item.code});this.publish();
-    }}finally{this.busy=false;this.job.state=this.job.items.every(x=>['completed','reboot-required'].includes(x.state))?'completed':'partial';this.publish();}
+      this.audit(item.state==='reboot-required'?'reboot-required':'application-finished',{appId:target.id,code:item.code,helperCode:outcome.code,hresult:item.hresult});this.publish();
+    }}finally{this.busy=false;this.job.state=this.job.items.some(x=>x.state==='unconfirmed')?'unconfirmed':this.job.items.every(x=>['completed','reboot-required'].includes(x.state))?'completed':this.job.items.every(x=>['failed','skipped'].includes(x.state))?'failed':'partial';this.job.stage=this.job.state;this.publish();}
   }
 }
 module.exports={AppManager,windowsOperation,validRow,publicApp,isOpaqueIdentifier,cleanPublisher};

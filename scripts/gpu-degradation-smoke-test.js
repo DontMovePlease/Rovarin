@@ -359,7 +359,8 @@ async function testCommandTimeouts() {
   const context = { execFile: require('child_process').execFile, monitoringActive: true, monitoringGeneration: 1, hasActiveMonitoringLease: () => true, activeTelemetryJobs: new Map(), terminatingTelemetryJobs: new Map(), diagnosticToolJobs: new Set() };
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('function runTelemetryCommand'), source.indexOf('function sampleNetworkStats')), context);
-  vm.runInContext(source.slice(source.indexOf('function runDiagnosticCommand'), source.indexOf('async function runDiagnosticTelemetryProbe')), context);
+  const diagnosticsSource = fs.readFileSync(path.join(root, 'diagnostics.js'), 'utf8');
+  vm.runInContext(diagnosticsSource.slice(diagnosticsSource.indexOf('function runDiagnosticCommand'), diagnosticsSource.indexOf('async function runDiagnosticTelemetryProbe')), context);
   const diagnostic = await context.runDiagnosticCommand(process.execPath, ['-e', 'setInterval(()=>{},1000)'], 200);
   assert.strictEqual(diagnostic.status, 'failed', 'a genuinely hanging disposable executable times out');
   let callbacks = 0;

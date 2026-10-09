@@ -14,7 +14,7 @@ function isLocalDesktopRequest(req) {
 function installationResult(code, failureCode) {
   const failures = {'package-invalid':'Enhanced installer signature, hash or version verification failed.', 'package-unavailable':'The trusted Enhanced installer is unavailable.', 'launch-failed':'The trusted Enhanced installer could not launch.'};
   if (code === -1 && Object.hasOwn(failures,failureCode)) return {success:false,code:failureCode,error:failures[failureCode]+' Rovarin remains usable.'};
-  return code === 0 ? { success: true, code: 'installed', rebootRequired: false, message:'Enhanced hardware support installer completed. CPU sensor availability is checked separately.' }
+  return code === 0 ? { success: true, code: 'installed', rebootRequired: false, message:failureCode === 'already-installed' ? 'Verified Enhanced hardware support is already installed. CPU sensor availability is checked separately.' : 'Enhanced hardware support installer completed. CPU sensor availability is checked separately.' }
     : [3010, 1641].includes(code) ? { success: true, code: 'reboot-required', rebootRequired: true, message:'Enhanced hardware support was installed. Restart Windows to finish setup.' }
     : code === 1460 ? { success: false, code: 'install-unconfirmed', error: 'Installation result is unconfirmed. Check Windows; restart Windows before retrying.' }
     : [1223, 1602].includes(code) ? { success: false, code: 'cancelled', error: 'Installation was cancelled. Rovarin remains usable.' }

@@ -1,4 +1,4 @@
-#define AppVersion "0.3.0"
+#define AppVersion "0.4.0"
 [Setup]
 AppId={{C51A4180-26D2-4F48-93BD-B40B182B78DA}
 AppName=Rovarin
@@ -57,11 +57,12 @@ Name: "{userstartup}\Rovarin"; Filename: "{app}\app\Rovarin.exe"; Parameters: "s
 [Run]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\app\scripts\install-enhanced.ps1"" -Notify"; Components: enhanced; Flags: runhidden waituntilterminated skipifsilent
 Filename: "{app}\app\Rovarin.exe"; Description: "Launch Rovarin"; Flags: postinstall nowait skipifsilent
+Filename: "{app}\app\Rovarin.exe"; Parameters: "setup"; Description: "Open Setup and PIN Recovery"; Flags: postinstall nowait skipifsilent unchecked
 [InstallDelete]
 Type: files; Name: "{group}\Rovarin Web Dashboard.lnk"
 [Messages]
 FinishedHeadingLabel=Rovarin installed successfully
-FinishedLabel=Rovarin is ready on this PC. Launch it to finish Setup or open your dashboard. Tailscale is needed only to connect from another device.
+FinishedLabel=Rovarin is ready on this PC. Launch it to finish Setup or open your dashboard. Tailscale is needed only to connect from another device. Lost your PIN? Open Windows Start, then Rovarin Setup and PIN Recovery.
 [UninstallDelete]
 Type: files; Name: "{app}\app\uninstall-trust.json"
 Type: dirifempty; Name: "{app}\app"

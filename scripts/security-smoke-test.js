@@ -14,9 +14,9 @@ async function testNativeDesktopSecurity() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rovarin-native-security-'));
   let child, url, captured = '';
   try {
-    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(directory,name));
+    for (const name of ['server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(directory,name));
     fs.mkdirSync(path.join(directory,'scripts'));
-    fs.copyFileSync(path.join(root,'scripts/native-trust.ps1'),path.join(directory,'scripts/native-trust.ps1'));
+    for (const helper of ['native-trust.ps1','dashboard-runtime.ps1']) fs.copyFileSync(path.join(root,'scripts',helper),path.join(directory,'scripts',helper));
     const configFile = path.join(directory,'config.json');
     pins.writeConfig(configFile,{pin:'654321',retained:true});
     const installer = fs.readFileSync(path.join(root,'packaging/Rovarin.iss'),'utf8');
@@ -50,6 +50,18 @@ async function testNativeDesktopSecurity() {
     const cookieOf=response=>response.headers.getSetCookie().find(c=>c.startsWith('pc_monitor_session=')).split(';')[0];
     const login=async pin=>{const r=await call('/api/login',{pin},'',null);assert.strictEqual(r.status,200);return cookieOf(r);};
     const cookie=await login('654321');
+    const policyGet=key=>fetch(url+'/api/apps/removal-security',{headers:{Cookie:cookie,...(key?{'X-PC-Monitor-Desktop':key}:{})}}).then(r=>r.json());
+    assert.strictEqual((await policyGet(null)).requirePhoneRemovalPin,false);
+    assert.strictEqual((await call('/api/apps/removal-security',{requirePhoneRemovalPin:true},cookie,null)).status,200);
+    assert.strictEqual((await policyGet(null)).requirePin,true,'localhost browser remains subject to repeat PIN');
+    assert.strictEqual((await policyGet(credential)).requirePin,false,'verified native request never repeats removal PIN');
+    assert.strictEqual((await call('/api/apps/uninstall',{ids:['a'.repeat(64)],batch:false,confirmation:'uninstall-apps'},cookie,null)).status,401);
+    assert.strictEqual((await call('/api/apps/uninstall',{ids:['a'.repeat(64)],batch:false,confirmation:'uninstall-apps'},cookie,credential)).status,409,'native passes authorization but unknown identity cannot execute');
+    assert.strictEqual((await call('/api/apps/removal-security',{requirePhoneRemovalPin:false},cookie,null)).status,401);
+    assert.strictEqual((await call('/api/apps/removal-security',{requirePhoneRemovalPin:false},cookie,credential)).status,200);
+    assert.strictEqual(pins.readConfig(configFile).requirePhoneRemovalPin,false);
+    assert.strictEqual(pins.readConfig(configFile).pin,'654321');
+
     assert.strictEqual((await fetch(url+'/api/updates')).status,401);
     assert.strictEqual((await fetch(url+'/api/updates',{headers:{Cookie:cookie}})).status,200);
     assert.strictEqual((await call('/api/desktop/updates',{action:'download'},cookie,null)).status,401);
@@ -78,6 +90,7 @@ async function testNativeDesktopSecurity() {
     assert.strictEqual((await fetch(url+'/api/metrics',{headers:{Cookie:nativeCookie}})).status,200);
     assert.strictEqual((await call('/api/desktop/security',{action:'lock'},nativeCookie)).status,200);
     assert.strictEqual((await fetch(url+'/api/metrics',{headers:{Cookie:nativeCookie}})).status,401);
+    assert.strictEqual((await fetch(url+'/api/apps/removal-security',{headers:{Cookie:nativeCookie,'X-PC-Monitor-Desktop':credential}})).status,401,'revoked native session cannot use removal policy');
     assert.strictEqual((await call('/api/desktop/auth')).status,401,'lock persists across native relaunch');
     const afterLock=await login('654321');
     const automatic=await call('/api/desktop/auth');assert.strictEqual(automatic.status,200);const automaticCookie=cookieOf(automatic);
@@ -114,7 +127,7 @@ async function testLocalPinManagement() {
     fs.writeFileSync(file, '{broken');
     assert.throws(() => pins.loadConfig(file)); assert.strictEqual(fs.readFileSync(file, 'utf8'), '{broken');
     pins.writeConfig(file, legacy);
-    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root, name), path.join(directory, name));
+    for (const name of ['server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root, name), path.join(directory, name));
     fs.mkdirSync(path.join(directory,'public'));
     fs.copyFileSync(path.join(root,'public/login.html'),path.join(directory,'public/login.html'));
     let output = '', url;
@@ -429,6 +442,10 @@ async function testSessionsLeasesAndSse() {
   assert.strictEqual(invalidAction.status, 400, 'unknown maintenance actions must never dispatch');
   const arbitraryPath = await request('/api/maintenance/run', { method: 'POST', cookie: firstCookie, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clean_temp', path: 'C:\\' }) });
   assert.strictEqual(arbitraryPath.status, 400, 'client-supplied paths must be rejected');
+  for (const payload of [{action:'dism_check'}, {action:'dism_check',confirmed:false}, {action:'dism_check',confirmed:true,command:'whoami'}, {action:'dism_check',confirmed:true,path:'C:\\Windows'}, {action:'dism_check',confirmed:true,args:['/other']}, {action:'dism_check',confirmed:true,env:{PATH:'bad'}}]) {
+    const response=await request('/api/maintenance/run',{method:'POST',cookie:firstCookie,headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    assert.strictEqual(response.status,400,'privileged actions require explicit confirmation and reject command/path/args/environment injection');
+  }
   const malformedMaintenance = await request('/api/maintenance/run', { method: 'POST', cookie: firstCookie, headers: { 'Content-Type': 'application/json' }, body: '{' });
   assert.strictEqual(malformedMaintenance.status, 400);
   const traversal = await request('/', { cookie: firstCookie, rawPath: '/%2e%2e%2fserver.js' });
@@ -488,11 +505,44 @@ async function testExpirationAndRateLimit() {
   console.log('PASS lease expiration stops monitoring, session expiration is enforced, and repeated failures are throttled');
 }
 
+function testRecoveryPinRefresh() {
+  if(process.platform!=='win32')return;
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'rovarin-recovery-refresh-'));
+  const source=fs.readFileSync(path.join(__dirname,'setup.ps1'),'utf8');
+  assert(source.includes('$form.Add_Activated({ [void](Update-SetupPin) })'));
+  assert(/\$copy\.Add_Click\(\{\s*if \(-not \(Update-SetupPin\)\)/.test(source),'copy revalidates before touching clipboard');
+  const refresh=source.match(/function Update-SetupPin \{[\s\S]*?\r?\n\}/)?.[0];
+  assert(refresh,'canonical refresh function is present');
+  const quote=value=>"'"+value.replace(/'/g,"''")+"'";
+  try {
+    fs.copyFileSync(path.join(__dirname,'..','pin-manager.js'),path.join(directory,'pin-manager.js'));
+    pins.writeConfig(path.join(directory,'config.json'),{pin:'654321',retained:true});
+    const script=String.raw`
+$ErrorActionPreference='Stop'
+$node=${quote(process.execPath)}; $appDir=${quote(directory)}
+$pinField=[pscustomobject]@{Text='stale'}; $copy=[pscustomobject]@{Text='Copy PIN';Enabled=$true}; $pinHint=[pscustomobject]@{Text=''}
+${refresh}
+if(-not (Update-SetupPin) -or $pinField.Text -cne '654 321'){throw 'Initial canonical refresh failed'}
+[IO.File]::WriteAllText((Join-Path $appDir 'config.json'),' {"pin":"123456","retained":true}')
+if(-not (Update-SetupPin) -or $pinField.Text -cne '123 456' -or $script:pin -cne '123456'){throw 'Stale PIN was not replaced'}
+[IO.File]::WriteAllText((Join-Path $appDir 'config.json'),' {"pin":"123456789012","retained":true}')
+if(-not (Update-SetupPin) -or $pinField.Text -cne '1234 5678 9012'){throw 'Legacy PIN refresh failed'}
+[IO.File]::WriteAllText((Join-Path $appDir 'config.json'),' {}')
+if((Update-SetupPin) -or $copy.Enabled -or $pinField.Text -ne '' -or $null -ne $script:pin){throw 'Unsafe config retained stale copy capability'}
+Write-Output 'PASS canonical Recovery refresh replaces cached PIN, supports legacy PIN, and clears/disables stale data on configuration failure'
+`;
+    const fixtureScript=path.join(directory,'refresh-test.ps1');fs.writeFileSync(fixtureScript,script);let result;try { result=require('child_process').execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',fixtureScript],{encoding:'utf8',windowsHide:true,timeout:20000,stdio:['ignore','pipe','pipe']}); } catch(error) {throw new Error('Recovery fixture failed: '+JSON.stringify({code:error.code,status:error.status,signal:error.signal,stderr:String(error.stderr||'').slice(-1200),stdout:String(error.stdout||'').slice(-1200)}));}
+    assert(result.includes('PASS canonical Recovery refresh'));
+    console.log(result.trim());
+  } finally { fs.rmSync(directory,{recursive:true,force:true,maxRetries:10,retryDelay:100}); }
+}
+
 async function main() {
   try {
     await require('./update-smoke-test')();
     testDashboardUpdates();
     testMobileOnboarding();
+    testRecoveryPinRefresh();
     await testLoginInteraction();
     await testLocalPinManagement();
     await testNativeDesktopSecurity();
@@ -795,4 +845,4 @@ function testMobileOnboarding() {
   console.log('PASS one-time phone onboarding, platform steps, native/desktop suppression, standalone detection and Tailscale copy');
 }
 
-(process.argv[2] === '--native-desktop-only' ? testNativeDesktopSecurity() : main()).catch(err => { console.error(err.stack || err.message); console.error(output.slice(-1600)); process.exitCode = 1; });
+(process.argv[2] === '--pin-recovery-only' ? Promise.resolve().then(testRecoveryPinRefresh) : process.argv[2] === '--native-desktop-only' ? testNativeDesktopSecurity() : main()).catch(err => { console.error(err.stack || err.message); console.error(output.slice(-1600)); process.exitCode = 1; });

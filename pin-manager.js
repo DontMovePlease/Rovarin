@@ -5,7 +5,17 @@ const crypto = require('crypto');
 
 const validPin = value => typeof value === 'string' && (value.length === 6 || value.length === 12) && /^(?:\d{6}|\d{12})$/.test(value);
 function dataDirectory(root = __dirname) {
-  return fs.existsSync(path.join(root, 'installation.json')) ? path.join(root, '..', 'data') : root;
+  if (fs.existsSync(path.join(root, 'installation.json'))) return path.join(root, '..', 'data');
+  if (!fs.existsSync(path.join(root, '.rovarin-development-state.json'))) {
+    if (process.env.LOCALAPPDATA && fs.existsSync(developmentConfigFile(root))) throw new Error('Development storage marker missing; saved configuration retained.');
+    return root;
+  }
+  const file = configurationFile(root); readConfig(file);
+  // Preserve the protected per-checkout directory's ACLs and reject redirected ancestors.
+  for (let cursor = path.dirname(file); cursor !== path.dirname(cursor); cursor = path.dirname(cursor)) {
+    if (fs.lstatSync(cursor).isSymbolicLink()) throw new Error('Unsafe data directory.');
+  }
+  return path.dirname(file);
 }
 // Opt-in developer storage keeps sync staging away from the real credential.
 // The marker contains no path or secret; installed-mode storage is unchanged.
@@ -17,7 +27,10 @@ function developmentConfigFile(root = __dirname) {
 function configurationFile(root = __dirname) {
   if (fs.existsSync(path.join(root, 'installation.json'))) return path.join(dataDirectory(root), 'config.json');
   const marker = path.join(root, '.rovarin-development-state.json');
-  if (!fs.existsSync(marker)) return path.join(root, 'config.json');
+  if (!fs.existsSync(marker)) {
+    if (process.env.LOCALAPPDATA && fs.existsSync(developmentConfigFile(root))) throw new Error('Development storage marker missing; saved configuration retained.');
+    return path.join(root, 'config.json');
+  }
   const stat = fs.lstatSync(marker);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 128) throw new Error('Invalid development storage marker.');
   const policy = JSON.parse(fs.readFileSync(marker, 'utf8'));
@@ -56,9 +69,9 @@ function writeConfig(file, value) {
     try { fs.unlinkSync(temp); } catch (_) {}
   }
 }
-function loadConfig(file) {
+function loadConfig(file, { allowCreate = true } = {}) {
   try { return readConfig(file); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; } // Never replace malformed/inaccessible data.
+  catch (error) { if (error.code !== 'ENOENT' || !allowCreate) throw error; } // Never replace malformed/inaccessible or migrated data.
   const value = { pin: generatePin() };
   writeConfig(file, value);
   return value;
@@ -76,7 +89,9 @@ if (require.main === module) {
   // Fixed native-local command. No PIN, path, or configuration fields accepted.
   try {
     if (process.argv.length !== 3) throw new Error('Invalid invocation.');
-    if (process.argv[2] === '--config-path') {
+    if (process.argv[2] === '--data-path') {
+      process.stdout.write(dataDirectory() + '\n');
+    } else if (process.argv[2] === '--config-path') {
       const file = configurationFile(); readConfig(file);
       process.stdout.write(file + '\n');
     } else if (process.argv[2] === '--regenerate') {

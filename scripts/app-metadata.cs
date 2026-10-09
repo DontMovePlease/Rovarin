@@ -68,12 +68,14 @@ public static class RovarinAppMetadata {
         try {
             DirectoryInfo root = new DirectoryInfo(rawDir);
             string normalizedRoot = root.FullName.TrimEnd('\\') + '\\';
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
             long totalBytes = 0;
             int fileCount = 0;
             Queue<DirectoryInfo> queue = new Queue<DirectoryInfo>();
             queue.Enqueue(root);
 
             while (queue.Count > 0) {
+                if (deadline.ElapsedMilliseconds > 100) return -1;
                 DirectoryInfo current = queue.Dequeue();
                 FileInfo[] files;
                 try { files = current.GetFiles(); }

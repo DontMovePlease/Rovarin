@@ -21,9 +21,23 @@ if (Test-Path -LiteralPath $exe) {
 foreach ($file in @('Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','Rovarin.ico','Rovarin.exe.config')) {
     Copy-Item -LiteralPath (Join-Path $payload $file) -Destination (Join-Path $preview $file) -Force
 }
+# Build the existing unsigned Inno companion without installing anything.
+$serviceStage = Join-Path $env:TEMP ('rovarin-preview-service-' + [Guid]::NewGuid().ToString('N'))
+try {
+    & (Join-Path $projectDir 'packaging\build-maintenance-service.ps1') -OutputDirectory $serviceStage -Installer
+    $setup = Join-Path $serviceStage 'RovarinMaintenanceSetup.exe'
+    $maintenanceHash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($maintenanceHash -ne ([IO.File]::ReadAllText($setup+'.sha256')).Trim()) { throw 'Maintenance companion integrity mismatch.' }
+    Copy-Item -LiteralPath $setup,($setup+'.sha256') -Destination $preview -Force
+} finally {
+    if (Test-Path -LiteralPath $serviceStage) { Remove-Item -LiteralPath $serviceStage -Recurse -Force }
+}
 # Compile the canonical shell with development storage/lifecycle paths only.
 # No backend or public/ files are copied: it serves the live source checkout.
 $source = [IO.File]::ReadAllText((Join-Path $projectDir 'packaging\DesktopShell.cs'))
+$hashAnchor = 'internal const string MaintenanceSetupHash = "";'
+if (-not $source.Contains($hashAnchor)) { throw 'Maintenance installer binding anchor changed.' }
+$source = $source.Replace($hashAnchor,('internal const string MaintenanceSetupHash = "'+$maintenanceHash+'";'))
 $patches = @(
     @("AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\')", 'Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", ".."))'),
     @('Path.GetDirectoryName(AppDirectory)', "AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\')"),
@@ -39,10 +53,4 @@ $generated = Join-Path $preview 'DesktopShell.preview.cs'
 [IO.File]::WriteAllText($generated,$source)
 & $compiler /nologo /target:winexe /platform:x64 /optimize+ /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll "/r:$(Join-Path $preview 'Microsoft.Web.WebView2.Core.dll')" "/r:$(Join-Path $preview 'Microsoft.Web.WebView2.WinForms.dll')" "/win32manifest:$(Join-Path $projectDir 'packaging\desktop.manifest')" "/win32icon:$(Join-Path $preview 'Rovarin.ico')" "/out:$exe" (Join-Path $projectDir 'packaging\RovarinLauncher.cs') $generated
 if ($LASTEXITCODE -ne 0) { throw 'Native development desktop compilation failed.' }
-$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $projectDir 'Rovarin.lnk'))
-$shortcut.TargetPath = $exe
-$shortcut.WorkingDirectory = $preview
-$shortcut.IconLocation = $exe+',0'
-$shortcut.Description = 'Open the native Rovarin desktop using this project backend and frontend.'
-$shortcut.Save()
 Start-Process -FilePath $exe -WorkingDirectory $preview -WindowStyle Normal

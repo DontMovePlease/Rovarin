@@ -8,5 +8,6 @@ If fso.FileExists(fso.BuildPath(scriptDir, "installation.json")) Then
     psScript = fso.BuildPath(scriptDir, "scripts\installed-start.ps1")
     WshShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & psScript & """", 0, False
 Else
-    WshShell.Run "cmd /c node server.js > server.log 2>&1", 0, False
+    psScript = fso.BuildPath(scriptDir, "scripts\development-start.ps1")
+    WshShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & psScript & """", 0, False
 End If

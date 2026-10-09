@@ -1,10 +1,24 @@
 function reportClientLog(event, detail = {}) {
   try {
+    const payload = JSON.stringify({
+      event,
+      url: window.location.href,
+      page: typeof currentAppPage !== 'undefined' ? currentAppPage : 'unknown',
+      visibility: typeof document !== 'undefined' ? document.visibilityState : 'unknown',
+      detail
+    });
+    console.log('[Rovarin Client Log]', event, detail);
     fetch('/api/debug/client-log', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event, url: window.location.href, detail })
-    }).catch(() => {});
+      credentials: 'same-origin',
+      keepalive: true,
+      body: payload
+    }).catch(() => {
+      if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+        navigator.sendBeacon('/api/debug/client-log', new Blob([payload], { type: 'application/json' }));
+      }
+    });
   } catch (_) {}
 }
 window.reportClientLog = reportClientLog;
@@ -12,6 +26,22 @@ reportClientLog('APP_PAGE_SCRIPT_EXEC', {
   hasSessionCookie: String(typeof document !== 'undefined' && document.cookie ? document.cookie : '').includes('pc_monitor_session'),
   visibility: typeof document !== 'undefined' ? document.visibilityState : 'unknown'
 });
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    reportClientLog('VISIBILITY_CHANGE', { state: document.visibilityState });
+  });
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('pageshow', (e) => {
+    reportClientLog('PAGE_SHOW', { persisted: e.persisted });
+  });
+  window.addEventListener('pagehide', (e) => {
+    reportClientLog('PAGE_HIDE', { persisted: e.persisted });
+  });
+  window.addEventListener('online', () => { reportClientLog('NETWORK_ONLINE'); });
+  window.addEventListener('offline', () => { reportClientLog('NETWORK_OFFLINE'); });
+}
 
 // State and History Buffer
 const MAX_POINTS = 30;
@@ -289,6 +319,7 @@ function setupInteractiveCharts() {
 
     canvas.addEventListener('pointermove', selectFromPointer);
     canvas.addEventListener('pointerdown', selectFromPointer);
+    canvas.addEventListener('pointercancel', () => clearChartSelection(id));
     canvas.addEventListener('pointerleave', (event) => {
       if (event.pointerType === 'mouse' && !event.buttons) clearChartSelection(id);
     });
@@ -827,13 +858,22 @@ const reconnectBanner = document.getElementById('reconnectBanner');
 let authRedirecting = false;
 
 function redirectToLogin(reason = 'unspecified') {
-  reportClientLog('REDIRECT_TO_LOGIN', { reason, stack: new Error().stack });
+  reportClientLog('REDIRECT_TO_LOGIN', {
+    reason,
+    stack: (new Error().stack || '').slice(0, 500),
+    page: typeof currentAppPage !== 'undefined' ? currentAppPage : 'unknown',
+    leaseId: typeof monitoringLeaseId !== 'undefined' ? monitoringLeaseId : null,
+    profile: typeof appliedMonitoringProfile !== 'undefined' ? appliedMonitoringProfile : null
+  });
   if (authRedirecting) return;
   authRedirecting = true;
+  try { sessionStorage.removeItem('rovarin.cachedApps.v1'); } catch (_) {}
   stopLeaseHeartbeat();
   closeDashboardConnections();
   if (typeof cleanupLoginViewportState === 'function') cleanupLoginViewportState();
-  window.location.replace('/');
+  setTimeout(() => {
+    window.location.replace('/');
+  }, 50);
 }
 window.redirectToLogin = redirectToLogin;
 
@@ -873,6 +913,7 @@ function connectStream() {
   };
 
   source.onerror = () => {
+    reportClientLog('SSE_ERROR', { readyState: source.readyState });
     if (eventSource !== source) return;
     source.close();
     eventSource = null;
@@ -1028,8 +1069,10 @@ function updatePageHistoryControls() {
   if (back) back.disabled = appPageHistoryIndex === 0;
   if (forward) forward.disabled = appPageHistoryIndex === appPageHistory.length - 1;
 }
+const pageScrollPositions = new Map();
 function showAppPage(pageId, recordHistory = true) {
   const nextPage = ['processesPage', 'appsPage', 'maintenancePage', 'diagnosticsPage'].includes(pageId) ? pageId : 'dashboardPage';
+  reportClientLog('PAGE_SWITCH', { from: currentAppPage, to: nextPage });
   if (recordHistory && appPageHistory[appPageHistoryIndex] !== nextPage) {
     appPageHistory.splice(appPageHistoryIndex + 1);
     appPageHistory.push(nextPage);
@@ -1037,13 +1080,13 @@ function showAppPage(pageId, recordHistory = true) {
     appPageHistoryIndex = appPageHistory.length - 1;
   }
   updatePageHistoryControls();
+  if (currentAppPage) {
+    pageScrollPositions.set(currentAppPage, window.scrollY || document.documentElement.scrollTop || 0);
+  }
   currentAppPage = nextPage;
   const sectionTitle = { dashboardPage: 'Dashboard', processesPage: 'Processes', appsPage: 'Applications', maintenancePage: 'Maintenance', diagnosticsPage: 'Settings' }[nextPage];
   document.getElementById('appSectionTitle').textContent = sectionTitle;
   document.title = 'Rovarin · ' + sectionTitle;
-  // Content scrolls below the chrome; reset container and window scroll positions.
-  document.querySelector('.dashboard-container')?.scrollTo(0, 0);
-  if (typeof window.scrollTo === 'function') window.scrollTo(0, 0);
   document.querySelectorAll('.app-page').forEach(page => {
     const active = page.id === nextPage;
     page.hidden = !active;
@@ -1059,6 +1102,12 @@ function showAppPage(pageId, recordHistory = true) {
   settingsButton.classList.toggle('is-active', nextPage === 'diagnosticsPage');
   if (nextPage === 'diagnosticsPage') settingsButton.setAttribute('aria-current', 'page');
   else settingsButton.removeAttribute('aria-current');
+
+  const restoredY = pageScrollPositions.get(nextPage) || 0;
+  if (typeof window.scrollTo === 'function') window.scrollTo(0, restoredY);
+  const container = document.querySelector('.dashboard-container');
+  if (container && container.scrollTop !== undefined) container.scrollTop = restoredY;
+
   if (nextPage === 'processesPage' && !monitoringLeaseId) startDashboardSession();
   setMonitoringProfile(nextPage === 'processesPage' ? 'processes' : 'dashboard');
   window.dispatchEvent(new CustomEvent('pc-monitor-pagechange', { detail: { page: nextPage } }));
@@ -1091,62 +1140,146 @@ window.addEventListener('pageshow', () => {
 
 function syncPhoneSurface() {
   // Keep navigation outside the scrolling content on every presentation.
-  phonePageSurface.insertBefore(phoneMenu, phoneScrollPane);
+  phonePageSurface.insertBefore(phoneMenu.closest('.phone-header'), phoneScrollPane);
+  const backdrop = document.getElementById('sidebarBackdrop');
+  // Fixed overlays must not inherit the scrolling page's transformed bounds.
+  if (isPhoneSurface()) document.body.insertBefore(backdrop, phonePageSurface);
+  else phonePageSurface.insertBefore(backdrop, phoneMenu.closest('.phone-header'));
 }
 syncPhoneSurface();
+let phoneDrawerSwipe = null, phoneDrawerFrame = null;
+let suppressedPhoneDrawerCardClick = null;
+function removePhoneDrawerTouchListeners() {
+  document.removeEventListener('touchmove', handlePhoneDrawerTouchMove);
+  document.removeEventListener('touchend', handlePhoneDrawerTouchEnd);
+  document.removeEventListener('touchcancel', handlePhoneDrawerTouchCancel);
+}
 function finishPhoneDrawerDrag() {
+  removePhoneDrawerTouchListeners();
+  if (phoneDrawerFrame !== null) cancelAnimationFrame(phoneDrawerFrame);
+  phoneDrawerFrame = null; phoneDrawerSwipe = null;
   document.body.classList.remove('phone-drawer-dragging');
+  document.documentElement.classList.toggle('phone-navigation-locked',
+    isPhoneSurface() && document.body.classList.contains('sidebar-expanded'));
   document.body.style.removeProperty('--phone-drawer-offset');
   document.body.style.removeProperty('--phone-drawer-progress');
 }
-let phoneDrawerSwipe = null;
-document.addEventListener('touchstart', event => {
-  phoneDrawerSwipe = null;
+function paintPhoneDrawer() {
+  phoneDrawerFrame = null;
+  if (!phoneDrawerSwipe?.horizontal) return;
+  document.body.style.setProperty('--phone-drawer-offset', phoneDrawerSwipe.offset + 'px');
+  document.body.style.setProperty('--phone-drawer-progress', String(phoneDrawerSwipe.offset / phoneDrawerSwipe.width));
+}
+function handlePhoneDrawerTouchMove(event) {
+  const swipe = phoneDrawerSwipe;
+  if (!swipe || event.touches.length !== 1 || event.touches[0].identifier !== swipe.id) { finishPhoneDrawerDrag(); return; }
+  const point = event.touches[0];
+  let dx = point.clientX - swipe.x, dy = point.clientY - swipe.y;
+  if (window.getSelection()?.toString()) { finishPhoneDrawerDrag(); return; }
+  if (!swipe.horizontal) {
+    // Keep observing while yielding to native vertical scrolling. Use the
+    // latest vertical anchor, not total travel, so a subsequent horizontal
+    // turn can claim the same touch without waiting for scrolling to finish.
+    dx = point.clientX - swipe.intentX;
+    dy = point.clientY - swipe.intentY;
+    if (Math.abs(dy) >= 8 && Math.abs(dy) >= Math.abs(dx)) {
+      swipe.intentX = point.clientX; swipe.intentY = point.clientY;
+      swipe.lastX = point.clientX; swipe.lastTime = performance.now();
+      return;
+    }
+    if (!(swipe.open ? dx < 0 : dx > 0) || Math.abs(dx) < 12 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    swipe.x = swipe.intentX; swipe.y = swipe.intentY;
+    swipe.horizontal = true;
+    // A gesture-scoped use of the existing drawer scroll lock stops competing
+    // scrolling where the browser permits it; never adjust scroll positions.
+    document.documentElement.classList.add('phone-navigation-locked');
+    if (swipe.card) suppressedPhoneDrawerCardClick = { card: swipe.card, time: performance.now() };
+    swipe.offset = Math.max(0, Math.min(swipe.width, swipe.baseOffset + dx));
+    paintPhoneDrawer();
+    document.body.classList.add('phone-drawer-dragging');
+  }
+  if (event.cancelable) event.preventDefault();
+  swipe.offset = Math.max(0, Math.min(swipe.width, swipe.baseOffset + dx));
+  const now = performance.now();
+  swipe.velocity = (point.clientX - swipe.lastX) / Math.max(16, now - swipe.lastTime);
+  swipe.lastX = point.clientX;
+  swipe.lastTime = now;
+  if (phoneDrawerFrame === null) phoneDrawerFrame = requestAnimationFrame(paintPhoneDrawer);
+}
+function handlePhoneDrawerTouchEnd(event) {
+  const swipe = phoneDrawerSwipe;
+  if (!swipe?.horizontal || event.touches.length || event.changedTouches.length !== 1 || event.changedTouches[0].identifier !== swipe.id) { finishPhoneDrawerDrag(); return; }
+  if (event.cancelable) event.preventDefault();
+  const point = event.changedTouches[0], now = performance.now();
+  if (swipe.card) suppressedPhoneDrawerCardClick = { card: swipe.card, time: now };
+  const velocity = now - swipe.lastTime <= 100 ? swipe.velocity : 0;
+  const offset = Math.max(0, Math.min(swipe.width, swipe.baseOffset + point.clientX - swipe.x));
+  // Signed recent velocity supports flicks and reversal; slower swipes settle by distance.
+  setSidebarOpen(Math.abs(velocity) >= 0.4 ? velocity > 0 : (swipe.open ? offset > swipe.width * 0.7 : offset >= swipe.width * 0.3));
+}
+function handlePhoneDrawerTouchCancel() { finishPhoneDrawerDrag(); }
+function phoneGestureExcluded(target) {
+  if (target.closest('#sidebarBackdrop')) return false;
+  if (target.closest('[role="dialog"], dialog, .maint-modal, .cpu-detail-panel, [contenteditable], [data-no-sidebar-swipe]')) return true;
+  const control = target.closest('input, textarea, select, button, a, canvas, video, summary, [role="slider"], [role="button"]');
+  // Large Maintenance action cards are also content surfaces. Only these
+  // buttons support swipe arbitration; ordinary buttons stay untouched.
+  if (control && !control.matches('button.maint-action-card')) return true;
+  if (window.getSelection()?.toString()) return true;
+  for (let node = target; node && node !== document.body; node = node.parentElement) {
+    if (node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX)) return true;
+  }
+  return false;
+}
+function handlePhoneDrawerTouchStart(event) {
+  suppressedPhoneDrawerCardClick = null;
   finishPhoneDrawerDrag();
   if (!isPhoneSurface() || event.touches.length !== 1) return;
-  const target = event.target instanceof Element ? event.target : null;
-  const open = document.body.classList.contains('sidebar-expanded');
-  if (!target || (target.closest('input, textarea, select, button, a, canvas, video, [role="slider"], .processes-table') && !target.closest('#sidebarBackdrop') && !(open && target.closest('#appSidebar')))) return;
-  if (!target.closest(open ? '.phone-page-surface, #appSidebar' : '.dashboard-container')) return;
+  const target = event.target instanceof Element ? event.target : null, open = document.body.classList.contains('sidebar-expanded');
+  if (!target || phoneGestureExcluded(target) || !target.closest('.phone-page-surface, #appSidebar, #sidebarBackdrop')) return;
   const point = event.touches[0];
-  phoneDrawerSwipe = { x: point.clientX, y: point.clientY, open, horizontal: false, width: document.getElementById('appSidebar').getBoundingClientRect().width, time: performance.now() };
-}, { passive: true });
-document.addEventListener('touchmove', event => {
-  if (!phoneDrawerSwipe) return;
-  if (event.touches.length !== 1) { phoneDrawerSwipe = null; finishPhoneDrawerDrag(); return; }
-  const swipe = phoneDrawerSwipe;
-  const point = event.touches[0];
-  const dx = point.clientX - swipe.x;
-  const dy = point.clientY - swipe.y;
-  if (!swipe.horizontal && Math.abs(dy) > 12 && Math.abs(dy) >= Math.abs(dx)) { phoneDrawerSwipe = null; return; }
-  if (!swipe.horizontal && (swipe.open ? dx < -12 : dx > 12) && Math.abs(dx) > Math.abs(dy) * 1.4) swipe.horizontal = true;
-  if (!swipe.horizontal) return;
-  if (event.cancelable) event.preventDefault();
-  const offset = Math.max(0, Math.min(swipe.width, (swipe.open ? swipe.width : 0) + dx));
-  document.body.classList.add('phone-drawer-dragging');
-  document.body.style.setProperty('--phone-drawer-offset', offset + 'px');
-  document.body.style.setProperty('--phone-drawer-progress', String(offset / swipe.width));
-}, { passive: false });
-document.addEventListener('touchend', event => {
-  const swipe = phoneDrawerSwipe;
-  phoneDrawerSwipe = null;
-  if (!swipe || !swipe.horizontal) return;
-  if (event.touches.length || event.changedTouches.length !== 1) { finishPhoneDrawerDrag(); return; }
-  const point = event.changedTouches[0];
-  const dx = point.clientX - swipe.x;
-  const intentional = (swipe.open ? dx < 0 : dx > 0) && Math.abs(dx) > Math.abs(point.clientY - swipe.y) * 1.4;
-  const committed = intentional && (Math.abs(dx) > swipe.width * .3 || (Math.abs(dx) > 28 && Math.abs(dx) / Math.max(16, performance.now() - swipe.time) > .5));
-  if (event.cancelable) event.preventDefault();
-  setSidebarOpen(committed ? !swipe.open : swipe.open);
-}, { passive: false });
-document.addEventListener('touchcancel', () => { phoneDrawerSwipe = null; finishPhoneDrawerDrag(); }, { passive: true });
+  // Preserve system edge navigation; the rest of the content is a drag surface.
+  if (point.clientX < 16 || point.clientX > innerWidth - 16) return;
+  const width = document.getElementById('appSidebar').getBoundingClientRect().width;
+  const baseOffset = new DOMMatrixReadOnly(getComputedStyle(phonePageSurface).transform).m41;
+  phoneDrawerSwipe = { x: point.clientX, y: point.clientY, intentX: point.clientX, intentY: point.clientY,
+    card: target.closest('button.maint-action-card'), id: point.identifier, open, horizontal: false,
+    width, baseOffset, offset: baseOffset, lastX: point.clientX, lastTime: performance.now(), velocity: 0 };
+  document.addEventListener('touchmove', handlePhoneDrawerTouchMove, { passive: false });
+  document.addEventListener('touchend', handlePhoneDrawerTouchEnd, { passive: false });
+  document.addEventListener('touchcancel', handlePhoneDrawerTouchCancel, { passive: true });
+}
+document.addEventListener('touchstart', handlePhoneDrawerTouchStart, { passive: true });
+document.addEventListener('click', event => {
+  const suppressed = suppressedPhoneDrawerCardClick;
+  if (!suppressed || event.detail === 0 || performance.now() - suppressed.time > 700) return;
+  if (event.target instanceof Element && event.target.closest('button.maint-action-card') === suppressed.card) {
+    suppressedPhoneDrawerCardClick = null;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+}, { capture: true });
+function preventPhoneBackgroundScroll(event) {
+  if (isPhoneSurface() && !event.target.closest('#appSidebar') && event.cancelable) event.preventDefault();
+}
+window.addEventListener('pagehide', () => { finishPhoneDrawerDrag(); document.removeEventListener('touchmove', preventPhoneBackgroundScroll); });
+window.addEventListener('pageshow', () => setSidebarOpen(document.body.classList.contains('sidebar-expanded')));
+document.addEventListener('visibilitychange', () => { if (document.hidden) finishPhoneDrawerDrag(); });
+window.addEventListener('orientationchange', () => setSidebarOpen(false));
 function setSidebarOpen(open) {
   finishPhoneDrawerDrag();
   document.body.classList.toggle('sidebar-expanded', open);
+  document.documentElement.classList.toggle('phone-navigation-locked', open && isPhoneSurface());
+  document.removeEventListener('touchmove', preventPhoneBackgroundScroll);
+  if (open && isPhoneSurface()) document.addEventListener('touchmove', preventPhoneBackgroundScroll, { passive: false });
   document.getElementById('sidebarToggle').setAttribute('aria-expanded', String(open));
   document.getElementById('sidebarToggle').setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
   document.querySelectorAll('.app-page').forEach(page => { page.inert = open && isPhoneSurface(); });
-  document.getElementById('appSidebar').inert = !open && matchMedia('(max-width: 699px)').matches;
+  const sidebar = document.getElementById('appSidebar');
+  if (!open && isPhoneSurface() && sidebar.contains(document.activeElement)) {
+    document.getElementById('sidebarToggle').focus({ preventScroll: true });
+  }
+  sidebar.inert = !open && matchMedia('(max-width: 699px)').matches;
   // Keep the mobile backdrop mounted so its closing fade can finish. CSS
   // disables its hit testing immediately; desktop never needs an overlay.
   document.getElementById('sidebarBackdrop').hidden = !matchMedia('(max-width: 699px)').matches;
@@ -1154,6 +1287,51 @@ function setSidebarOpen(open) {
 }
 document.getElementById('sidebarToggle')?.addEventListener('click', () => setSidebarOpen(!document.body.classList.contains('sidebar-expanded')));
 document.getElementById('sidebarBackdrop')?.addEventListener('click', () => setSidebarOpen(false));
+// Hover expansion is transient and shares the sidebar/content width transition.
+const desktopSidebar = document.getElementById('appSidebar');
+const desktopSidebarHover = matchMedia('(hover: hover) and (pointer: fine) and (min-width: 700px)');
+let sidebarPointerInside = false;
+let sidebarHoverTimer = null;
+function desktopSidebarHoverEnabled() {
+  return document.documentElement.classList.contains('native-shell') && desktopSidebarHover.matches;
+}
+function setDesktopSidebarHover(open) {
+  clearTimeout(sidebarHoverTimer);
+  sidebarHoverTimer = null;
+  document.body.classList.toggle('desktop-sidebar-hover', open && desktopSidebarHoverEnabled());
+}
+function scheduleDesktopSidebarHover() {
+  clearTimeout(sidebarHoverTimer);
+  if (!desktopSidebarHoverEnabled()) { setDesktopSidebarHover(false); return; }
+  const focused = desktopSidebar.contains(document.activeElement) && document.activeElement.matches(':focus-visible');
+  if (focused) { setDesktopSidebarHover(true); return; }
+  const open = sidebarPointerInside;
+  sidebarHoverTimer = setTimeout(() => setDesktopSidebarHover(open), open ? 100 : 180);
+}
+desktopSidebar.addEventListener('pointerenter', event => {
+  if (event.pointerType !== 'mouse') return;
+  sidebarPointerInside = true;
+  scheduleDesktopSidebarHover();
+});
+desktopSidebar.addEventListener('pointerleave', () => {
+  sidebarPointerInside = false;
+  scheduleDesktopSidebarHover();
+});
+desktopSidebar.addEventListener('focusin', scheduleDesktopSidebarHover);
+desktopSidebar.addEventListener('focusout', event => {
+  if (!desktopSidebar.contains(event.relatedTarget)) {
+    clearTimeout(sidebarHoverTimer);
+    sidebarHoverTimer = setTimeout(() => setDesktopSidebarHover(sidebarPointerInside), 180);
+  }
+});
+desktopSidebarHover.addEventListener('change', () => {
+  sidebarPointerInside = false;
+  setDesktopSidebarHover(false);
+});
+window.addEventListener('blur', () => {
+  sidebarPointerInside = false;
+  setDesktopSidebarHover(false);
+});
 document.addEventListener('keydown', event => { if (event.key === 'Escape') setSidebarOpen(false); });
 matchMedia('(max-width: 699px)').addEventListener('change', event => {
   syncPhoneSurface();
@@ -1211,28 +1389,156 @@ function maybeShowMobileOnboarding() {
   } catch (_) { return false; }
 }
 // MOBILE-ONBOARDING:END
+window.RovarinRemovalSecurity={requirePin:true,native:false,requirePhoneRemovalPin:false,
+  apply(value){Object.assign(this,value);const toggle=document.getElementById('phoneRemovalPinPreference');toggle.checked=this.requirePhoneRemovalPin;toggle.disabled=false;
+    for(const [fields,input] of [['appsRemovalPinFields','appsConfirmPin'],['leftoverRemovalPinFields','appLeftoversPin']]){const field=document.getElementById(fields),pin=document.getElementById(input);field.hidden=!this.requirePin;pin.required=this.requirePin;pin.disabled=!this.requirePin;if(!this.requirePin)pin.value='';}
+  },
+  async refresh(){const response=await fetch('/api/apps/removal-security',{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw Error('Removal security unavailable.');this.apply(await response.json());return this;}
+};
+const removalSetting=document.getElementById('phoneRemovalPinPreference'),removalApproval=document.getElementById('phoneRemovalPinApproval'),removalSettingPin=document.getElementById('phoneRemovalSettingPin'),removalFeedback=document.getElementById('phoneRemovalPinFeedback');
+async function saveRemovalPreference(){
+  removalSetting.disabled=true;removalFeedback.textContent='Saving…';
+  try{const body={requirePhoneRemovalPin:removalSetting.checked};if(!removalApproval.hidden)body.pin=removalSettingPin.value;
+    const response=await fetch('/api/apps/removal-security',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const value=await response.json();if(!response.ok)throw Error(value.error||'Preference could not be saved.');
+    window.RovarinRemovalSecurity.apply(value);removalApproval.hidden=true;removalSettingPin.value='';removalFeedback.textContent='Preference saved.';
+  }catch(error){removalFeedback.textContent=error.message;}finally{removalSetting.disabled=false;}
+}
+removalSetting.addEventListener('change',()=>{if(!removalSetting.checked&&window.RovarinRemovalSecurity.requirePhoneRemovalPin&&!window.RovarinRemovalSecurity.native){removalApproval.hidden=false;removalSettingPin.focus();}else{removalApproval.hidden=true;saveRemovalPreference();}});
+document.getElementById('phoneRemovalSettingSave').addEventListener('click',saveRemovalPreference);
+window.RovarinRemovalSecurity.refresh().catch(()=>{removalFeedback.textContent='Removal security unavailable. Try reopening Settings.';});
 const nativeSecurity = !!window.chrome?.webview;
 document.getElementById('nativeSecurityControls').hidden = !nativeSecurity;
 function showSecuritySettings(security) {
+  if(security)window.RovarinRemovalSecurity.refresh().catch(()=>{removalFeedback.textContent='Removal security unavailable.';});
+  else{removalSettingPin.value='';removalApproval.hidden=true;removalSetting.checked=window.RovarinRemovalSecurity.requirePhoneRemovalPin;}
   document.getElementById('updatesSettingsPanel').hidden = true;
   document.getElementById('updatesSettingsTab').setAttribute('aria-selected', 'false');
   document.getElementById('securitySettingsPanel').hidden = !security;
   document.getElementById('generalSettingsPanel').hidden = security;
   document.getElementById('securitySettingsTab').setAttribute('aria-selected', String(security));
   document.getElementById('generalSettingsTab').setAttribute('aria-selected', String(!security));
+  const remoteMaint = document.getElementById('remoteMaintenanceStatusSection');
+  if (remoteMaint) remoteMaint.hidden = !!nativeSecurity;
+  if (!nativeSecurity && security) refreshRemoteMaintenanceStatus();
 }
 document.getElementById('securitySettingsTab').addEventListener('click', () => {
   showSecuritySettings(true);
-  if (nativeSecurity) window.chrome.webview.postMessage('security-status');
+  if (nativeSecurity) {
+    window.chrome.webview.postMessage('security-status');
+    window.chrome.webview.postMessage('startup-status');
+    refreshNativeMaintenanceSetting();
+  } else {
+    refreshRemoteMaintenanceStatus();
+  }
 });
 document.getElementById('generalSettingsTab').addEventListener('click', () => showSecuritySettings(false));
 document.getElementById('desktopPinPreference').addEventListener('click', event => { event.preventDefault(); if (nativeSecurity) window.chrome.webview.postMessage('security-preference'); });
+document.getElementById('startWithWindows').addEventListener('change', event => {
+  if (!nativeSecurity) return;
+  event.target.disabled = true;
+  document.getElementById('windowsStartupFeedback').textContent = 'Updating Windows startup…';
+  window.chrome.webview.postMessage(event.target.checked ? 'startup-enable' : 'startup-disable');
+});
+const adminMaintenanceToggle = document.getElementById('adminMaintenanceToggle');
+let verifiedMaintenanceEnabled = false;
+let maintenanceSettingPending = false;
+function setMaintenanceToggleAvailable(available) {
+  adminMaintenanceToggle.disabled = !available;
+  document.getElementById('adminMaintenanceLabel').setAttribute('aria-disabled', String(!available));
+}
+function refreshNativeMaintenanceSetting() {
+  if (!nativeSecurity || maintenanceSettingPending) return;
+  maintenanceSettingPending = true;
+  setMaintenanceToggleAvailable(false);
+  document.getElementById('adminMaintenanceFeedback').textContent = 'Checking administrator maintenance…';
+  try { window.chrome.webview.postMessage('maintenance-status'); }
+  catch (_) {
+    maintenanceSettingPending = false;
+    document.getElementById('adminMaintenanceFeedback').textContent = 'The desktop connection failed. Reopen Settings to retry.';
+  }
+}
+if (adminMaintenanceToggle) {
+  adminMaintenanceToggle.addEventListener('change', event => {
+    const enable = event.target.checked;
+    // A checked box means verified authorization, never merely a UAC request.
+    event.target.checked = verifiedMaintenanceEnabled;
+    if (!nativeSecurity || maintenanceSettingPending) return;
+    maintenanceSettingPending = true;
+    setMaintenanceToggleAvailable(false);
+    document.getElementById('adminMaintenanceLabel').setAttribute('aria-busy', 'true');
+    document.getElementById('adminMaintenanceFeedback').textContent = enable ? 'Approve Windows administrator access on this PC…' : 'Disabling administrator maintenance…';
+    try {
+      window.chrome.webview.postMessage(enable ? 'maintenance-enable' : 'maintenance-disable');
+    } catch (_) {
+      maintenanceSettingPending = false;
+      document.getElementById('adminMaintenanceLabel').removeAttribute('aria-busy');
+      document.getElementById('adminMaintenanceFeedback').textContent = 'The desktop connection failed. Reopen Settings to check administrator maintenance.';
+    }
+  });
+}
+if (nativeSecurity) window.chrome.webview.addEventListener('message', event => {
+  if (event.data?.kind !== 'startup-state') return;
+  const toggle = document.getElementById('startWithWindows');
+  toggle.checked = event.data.enabled === true; toggle.disabled = event.data.available !== true;
+  document.getElementById('windowsStartupFeedback').textContent = event.data.available === true ? (toggle.checked ? 'Rovarin starts quietly when you sign into Windows.' : 'Windows startup is off.') : 'Windows startup could not be safely confirmed. Reopen Settings to retry.';
+});
+if (nativeSecurity) window.chrome.webview.addEventListener('message', event => {
+  if (event.data?.kind !== 'maintenance-state') return;
+  const status = event.data.status || {};
+  const feedback = document.getElementById('adminMaintenanceFeedback');
+  if (!adminMaintenanceToggle || !feedback) return;
+  maintenanceSettingPending = false;
+  document.getElementById('adminMaintenanceLabel').removeAttribute('aria-busy');
+  if (status.state === 'enabled' && status.enabled === true) verifiedMaintenanceEnabled = true;
+  else if (['disabled', 'not-installed', 'uac-cancelled'].includes(status.state) && status.enabled === false) verifiedMaintenanceEnabled = false;
+  adminMaintenanceToggle.checked = verifiedMaintenanceEnabled;
+  setMaintenanceToggleAvailable(['enabled', 'disabled', 'uac-cancelled'].includes(status.state) || (status.state === 'not-installed' && status.canSetup === true));
+  const messages = {
+    enabled: 'Administrator maintenance is enabled.',
+    disabled: 'Administrator maintenance is off. Turn it on to approve Windows administrator access once on this PC.',
+    'uac-cancelled': 'Administrator approval was cancelled. No authorization change was confirmed.',
+    'not-installed': 'Administrator maintenance is off. Enable it to install the protected component and approve Windows administrator access on this PC.',
+    unauthorized: 'This Windows account is not authorized to manage administrator maintenance.',
+    'owner-conflict': 'Administrator maintenance belongs to another Windows account. Manage it from that account.',
+    'unsafe-deployment': 'The maintenance installation failed its security checks. Repair the component before enabling it.',
+    'provisioning-incomplete': 'Windows setup did not finish. Complete or cancel it on this PC, then reopen Settings.',
+    'revocation-unconfirmed': 'Disabling access was not confirmed. Reopen Settings to check its actual state.',
+    busy: 'Another maintenance setup request is still running. Reopen Settings when it finishes.',
+    unavailable: 'Administrator maintenance status could not be confirmed. Reopen Settings to retry.'
+  };
+  feedback.textContent = status.error || messages[status.state] || 'Administrator maintenance status could not be confirmed. Reopen Settings to retry.';
+});
+
 document.getElementById('generateDesktopPin').addEventListener('click', () => { if (nativeSecurity) window.chrome.webview.postMessage('security-rotate'); });
 if (nativeSecurity) window.chrome.webview.addEventListener('message', event => {
   if (event.data?.kind !== 'security-state' || typeof event.data.requireDesktopPin !== 'boolean') return;
   document.getElementById('desktopPinPreference').checked = event.data.requireDesktopPin;
   document.getElementById('desktopPinPreference').disabled = false;
 });
+function refreshRemoteMaintenanceStatus() {
+  const statusEl = document.getElementById('remoteMaintenanceStatus');
+  if (!statusEl) return;
+  fetch('/api/maintenance/status', { credentials: 'same-origin' })
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (!data || !data.service) {
+        statusEl.textContent = 'Status unavailable.';
+        return;
+      }
+      if (data.service.enabled) {
+        statusEl.textContent = 'Enabled — Authorized maintenance actions can run from your phone.';
+      } else if (data.service.state === 'disabled') {
+        statusEl.textContent = 'Disabled — Turn on "Enable administrator maintenance" in the Rovarin desktop app on your PC.';
+      } else if (data.service.state === 'not-installed') {
+        statusEl.textContent = 'Not installed on this PC.';
+      } else {
+        statusEl.textContent = 'Unavailable on this PC.';
+      }
+    })
+    .catch(() => {
+      statusEl.textContent = 'Could not load status.';
+    });
+}
 const updateElement = id => document.getElementById(id);
 updateElement('nativeUpdateControls').hidden = !nativeSecurity;
 updateElement('remoteUpdateHint').hidden = nativeSecurity;
@@ -1307,14 +1613,14 @@ async function releaseMonitoringLease() {
   closeDashboardConnections();
   const leaseId = monitoringLeaseId;
   monitoringLeaseId = null;
-  desiredMonitoringProfile = 'dashboard';
+  desiredMonitoringProfile = currentAppPage === 'processesPage' ? 'processes' : 'dashboard';
   appliedMonitoringProfile = null;
   profileRequestPending = false;
   if (!leaseId || window.pcMonitorUninstalling) return;
   const body = JSON.stringify({ action: 'release', leaseId });
   try {
     if (navigator.sendBeacon) {
-      const queued = navigator.sendBeacon('/api/monitoring/lease', new Blob([body], { type: 'text/plain;charset=UTF-8' }));
+      const queued = navigator.sendBeacon('/api/monitoring/lease', body);
       if (queued) return;
     }
     await fetch('/api/monitoring/lease', {
@@ -1344,13 +1650,21 @@ async function startDashboardSession() {
     await fetchInitialMetrics();
     connectStream();
     startLeaseHeartbeat();
-    maybeShowMobileOnboarding();
-    if (desiredMonitoringProfile !== appliedMonitoringProfile) {
-      const profileApplied = await setMonitoringProfile(desiredMonitoringProfile);
-      if (cpuDetailActive) {
-        cpuDetailProfileReady = profileApplied;
-        updateCpuDetailSampleState();
+    const runDeferredStartup = () => {
+      maybeShowMobileOnboarding();
+      if (desiredMonitoringProfile !== appliedMonitoringProfile) {
+        setMonitoringProfile(desiredMonitoringProfile).then(profileApplied => {
+          if (cpuDetailActive) {
+            cpuDetailProfileReady = profileApplied;
+            updateCpuDetailSampleState();
+          }
+        });
       }
+    };
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(runDeferredStartup, { timeout: 1000 });
+    } else {
+      setTimeout(runDeferredStartup, 100);
     }
   } finally {
     dashboardSessionStarting = false;
@@ -1433,6 +1747,7 @@ window.addEventListener('resize', () => {
 // Initialize on page load
 setupInteractiveCharts();
 document.getElementById('logoutButton')?.addEventListener('click', async () => {
+  try { sessionStorage.removeItem('rovarin.cachedApps.v1'); } catch (_) {}
   if (nativeSecurity) { window.chrome.webview.postMessage('security-lock'); return; }
   try {
     const response = await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });

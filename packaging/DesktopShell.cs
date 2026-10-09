@@ -20,9 +20,40 @@ using Microsoft.Web.WebView2.WinForms;
 // telemetry collector, or client-supplied command/path bridge lives here.
 internal static class DesktopShell
 {
+    // Bound by the local build to its companion installer. This is integrity,
+    // not publisher authentication: the alpha installer still requires explicit UAC.
+    internal const string MaintenanceSetupHash = "";
+    internal static string MaintenanceSetupPath { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "RovarinMaintenanceSetup.exe"); } }
+    internal static FileStream OpenMaintenanceSetup() {
+        if (MaintenanceSetupHash.Length != 64) throw new IOException("Maintenance setup was not bundled by this build.");
+        AssertPlain(MaintenanceSetupPath);
+        var info = new FileInfo(MaintenanceSetupPath);
+        if (!info.Exists || (info.Attributes & FileAttributes.ReparsePoint) != 0 || info.Length < 1 || info.Length > 32 * 1024 * 1024) throw new IOException("Maintenance setup is missing or unsafe.");
+        var file = new FileStream(MaintenanceSetupPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        try {
+            using (var sha = SHA256.Create()) {
+                string hash = BitConverter.ToString(sha.ComputeHash(file)).Replace("-", "").ToLowerInvariant();
+                if (hash != MaintenanceSetupHash) throw new IOException("Maintenance setup integrity failed.");
+            }
+            return file;
+        } catch { file.Dispose(); throw; }
+    }
     internal static readonly string AppDirectory = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
     internal static readonly string RootDirectory = Path.GetDirectoryName(AppDirectory);
-    internal static readonly string DataDirectory = Path.Combine(RootDirectory, "data");
+    internal static readonly string DataDirectory = ResolveDataDirectory();
+    private static string ResolveDataDirectory() {
+        string marker = Path.Combine(AppDirectory, ".rovarin-development-state.json");
+        if (new FileInfo(Path.Combine(AppDirectory, "installation.json")).Exists || !File.Exists(marker)) return Path.Combine(RootDirectory, "data");
+        AssertPlain(marker);
+        var policy = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(marker));
+        if (new FileInfo(marker).Length > 128 || policy.Count != 1 || Convert.ToInt32(policy["schema"]) != 1) throw new IOException("Invalid development storage policy.");
+        string identity;
+        using (var sha = SHA256.Create()) identity = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(Path.GetFullPath(AppDirectory).ToLowerInvariant()))).Replace("-", "").ToLowerInvariant();
+        string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RovarinDevelopment", identity);
+        AssertPlain(directory);
+        if (!File.Exists(Path.Combine(directory, "config.json"))) throw new IOException("Migrated development configuration missing.");
+        return directory;
+    }
     internal static readonly string ProfileDirectory = Path.Combine(RootDirectory, "desktop-profile");
     internal static readonly string Identity = BuildIdentity();
     internal static string BuildIdentity()
@@ -206,11 +237,14 @@ internal sealed class DesktopWindow : Form
             int foreground = ColorTranslator.ToWin32(Color.FromArgb(148,163,184));
             // Windows 11's compositor supplies antialiased corners/shadow. A
             // custom pixel region disables those effects; use it only as fallback.
-            lockUsesDwmCorners = loginPresentation && Environment.OSVersion.Version.Build >= 22000 &&
+            bool usesDwmCorners = Environment.OSVersion.Version.Build >= 22000 &&
                 DwmSetWindowAttribute(Handle, 33, ref rounded, 4) == 0;
-            int policy = lockUsesDwmCorners ? 2 : disabled;
-            int border = lockUsesDwmCorners ? unchecked((int)0xFFFFFFFE) : background;
-            var margins = new FrameMargins { Left = lockUsesDwmCorners ? 1 : 0, Right = lockUsesDwmCorners ? 1 : 0, Top = lockUsesDwmCorners ? 1 : 0, Bottom = lockUsesDwmCorners ? 1 : 0 };
+            lockUsesDwmCorners = loginPresentation && usesDwmCorners;
+            // Enable compositor rounding/shadow for the normal desktop too.
+            // Windows owns square edges while maximized; resize semantics stay intact.
+            int policy = usesDwmCorners ? 2 : disabled;
+            int border = usesDwmCorners ? unchecked((int)0xFFFFFFFE) : background;
+            var margins = new FrameMargins { Left = usesDwmCorners ? 1 : 0, Right = usesDwmCorners ? 1 : 0, Top = usesDwmCorners ? 1 : 0, Bottom = usesDwmCorners ? 1 : 0 };
             DwmSetWindowAttribute(Handle, 2, ref policy, 4);
             DwmExtendFrameIntoClientArea(Handle, ref margins);
             DwmSetWindowAttribute(Handle, 34, ref border, 4); // suppress the system border in lock mode
@@ -268,11 +302,17 @@ internal sealed class DesktopWindow : Form
         exiting = true;
         // A stalled WebView must not leave the native X permanently waiting.
         // Normal release is attempted; the existing lease TTL covers a dead view.
-        try { if (view != null && initialized) await Task.WhenAny(ReleaseForExitAsync(), Task.Delay(750)); }
+        try { if (view != null && initialized) await Task.WhenAny(ReleaseForExitAsync(), Task.Delay(2000)); }
         finally { if (!IsDisposed) Close(); }
     }
     private async Task ReleaseForExitAsync() {
-        try { await SetClientVisibilityAsync(false); } catch { }
+        try {
+            if (view != null && !view.IsDisposed && view.CoreWebView2 != null) {
+                await view.CoreWebView2.ExecuteScriptAsync("if(typeof releaseMonitoringLease==='function')releaseMonitoringLease();window.dispatchEvent(new CustomEvent('pc-monitor-desktop-visibility',{detail:{visible:false}}));");
+                await Task.Delay(250);
+            }
+            await SetClientVisibilityAsync(false);
+        } catch { }
     }
     private void ApplyLoginPresentation(bool login) {
         if (loginPresentation == login || exiting || IsDisposed) return;
@@ -398,6 +438,28 @@ internal sealed class DesktopWindow : Form
             }
         }
     }
+    private bool startupBusy;
+    private async void StartupActionAsync(string message) {
+        if (startupBusy || busy || exiting || loginPresentation || view == null) return;
+        startupBusy = true;
+        try {
+            // Revalidate the existing authenticated native context before touching Windows.
+            await NativeRequestAsync("/api/desktop/security", new { action = "status" });
+            string action = message == "startup-enable" ? "Enable" : message == "startup-disable" ? "Disable" : "Status";
+            var start = DesktopShell.Script("native-startup.ps1");
+            start.Arguments += " -Action " + action; // fixed enum, never a frontend command/path
+            using (var child = Process.Start(start)) {
+                var output = child.StandardOutput.ReadToEndAsync(); var errors = child.StandardError.ReadToEndAsync();
+                if (!await Task.Run(() => child.WaitForExit(10000))) { child.Kill(); throw new IOException("Startup helper timed out."); }
+                string text = await output; await errors;
+                if (child.ExitCode != 0 || text.Length > 1024) throw new IOException("Startup state unavailable.");
+                var state = json.Deserialize<Dictionary<string, object>>(text);
+                view.CoreWebView2.PostWebMessageAsJson(json.Serialize(new { kind = "startup-state", available = Convert.ToBoolean(state["available"]), enabled = Convert.ToBoolean(state["enabled"]) }));
+            }
+        } catch {
+            if (!exiting && view != null && !view.IsDisposed) view.CoreWebView2.PostWebMessageAsJson(json.Serialize(new { kind = "startup-state", available = false, enabled = false }));
+        } finally { startupBusy = false; }
+    }
     private bool updateBusy;
     private string pendingUpdateAction;
     private System.Windows.Forms.Timer updateTimer;
@@ -479,6 +541,73 @@ internal sealed class DesktopWindow : Form
         } catch { MessageBox.Show(this, "Sign in with your Rovarin PIN, then try again. No security change was confirmed.", "Security", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         finally { securityBusy = false; }
     }
+    private bool maintenanceBusy;
+    private Process maintenanceSetupProcess;
+    private async Task<Dictionary<string, object>> InstallMaintenanceAsync() {
+        // Only the fixed, build-bound Inno bootstrap is elevated. The service image
+        // is never run from a writable preview/temp directory by this shell.
+        using (var verified = DesktopShell.OpenMaintenanceSetup()) {
+            string owner = WindowsIdentity.GetCurrent().User.Value;
+            if (!System.Text.RegularExpressions.Regex.IsMatch(owner, @"^S-1-5-21-\d+-\d+-\d+-\d+$")) throw new IOException("Unsupported enrollment owner.");
+            try {
+                maintenanceSetupProcess = await Task.Run(() => Process.Start(new ProcessStartInfo {
+                    FileName = DesktopShell.MaintenanceSetupPath, Arguments = "/OWNER=" + owner + " /NORESTART",
+                    WorkingDirectory = Path.GetDirectoryName(DesktopShell.MaintenanceSetupPath), UseShellExecute = true, Verb = "runas"
+                }));
+            } catch (System.ComponentModel.Win32Exception error) {
+                if (error.NativeErrorCode != 1223) throw;
+                return new Dictionary<string, object> { { "state", "uac-cancelled" }, { "enabled", false } };
+            }
+            if (maintenanceSetupProcess == null || !await Task.Run(() => maintenanceSetupProcess.WaitForExit(600000)))
+                return new Dictionary<string, object> { { "state", "provisioning-incomplete" }, { "enabled", false } };
+            int code = maintenanceSetupProcess.ExitCode;
+            maintenanceSetupProcess.Dispose(); maintenanceSetupProcess = null;
+            var actual = await NativeRequestAsync("/api/desktop/maintenance", new { action = "status" });
+            if (Convert.ToString(actual["state"]) == "enabled" && Convert.ToBoolean(actual["enabled"])) return actual;
+            if (code == 2 || code == 5) return new Dictionary<string, object> { { "state", "uac-cancelled" }, { "enabled", false } };
+            if (code != 0) return new Dictionary<string, object> { { "state", "setup-failed" }, { "enabled", false }, { "error", "Windows setup could not install administrator maintenance. Access was not enabled. Reopen Settings to check and retry." } };
+            return actual; // Completion alone is never proof of owner enrollment.
+        }
+    }
+    private async void MaintenanceActionAsync(string message) {
+        if (maintenanceBusy || busy || exiting || loginPresentation || view == null) return;
+        maintenanceBusy = true;
+        try {
+            await NativeRequestAsync("/api/desktop/security", new { action = "status" });
+            string action = message == "maintenance-enable" ? "enable" : message == "maintenance-disable" ? "disable" : "status";
+            Dictionary<string, object> result;
+            if (maintenanceSetupProcess != null && !maintenanceSetupProcess.HasExited) {
+                result = new Dictionary<string, object> { { "state", "provisioning-incomplete" }, { "enabled", false } };
+            } else {
+                if (maintenanceSetupProcess != null) { maintenanceSetupProcess.Dispose(); maintenanceSetupProcess = null; }
+                result = await NativeRequestAsync("/api/desktop/maintenance", new { action = action });
+                if (action == "enable" && Convert.ToString(result["state"]) == "not-installed") result = await InstallMaintenanceAsync();
+            }
+            // Availability is native-only and always revalidated before execution.
+            if (Convert.ToString(result["state"]) == "not-installed" || Convert.ToString(result["state"]) == "uac-cancelled") {
+                try { using (var verified = DesktopShell.OpenMaintenanceSetup()) result["canSetup"] = true; }
+                catch (IOException) { result["canSetup"] = false; if (Convert.ToString(result["state"]) == "not-installed") result["error"] = "This Rovarin build is missing a verified maintenance installer. Repair or rebuild Rovarin to enable setup."; }
+            }
+            if (!exiting && view != null && !view.IsDisposed) {
+                view.CoreWebView2.PostWebMessageAsJson(json.Serialize(new { kind = "maintenance-state", status = result }));
+            }
+        } catch (Exception error) {
+            if (!exiting && view != null && !view.IsDisposed) {
+                // Fixed messages only: no raw exception, credential or filesystem data.
+                var webError = error as WebException;
+                var response = webError == null ? null : webError.Response as HttpWebResponse;
+                string detail = error is IOException ? "Maintenance setup failed its local safety checks. Repair or rebuild Rovarin; access was not enabled." :
+                    response != null && response.StatusCode == HttpStatusCode.Conflict ? "Another system operation is active. Finish it, then reopen Settings." :
+                    response != null && (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden) ? "Sign into the native Rovarin app again to manage administrator maintenance." :
+                    "The desktop could not confirm maintenance status. Reopen Settings to retry.";
+                if (response != null) response.Close();
+                var err = new Dictionary<string, object> { { "state", "unavailable" }, { "enabled", false }, { "error", detail } };
+                view.CoreWebView2.PostWebMessageAsJson(json.Serialize(new { kind = "maintenance-state", status = err }));
+            }
+        } finally {
+            maintenanceBusy = false;
+        }
+    }
     private async Task StartAsync(bool restart) {
         if (busy || exiting) return;
         busy = true; loading = true;
@@ -512,6 +641,14 @@ internal sealed class DesktopWindow : Form
             var environment = await CoreWebView2Environment.CreateAsync(null, DesktopShell.ProfileDirectory);
             await view.EnsureCoreWebView2Async(environment);
             var core = view.CoreWebView2;
+            // Native proof stays in C#: scoped to same-origin removal requests, never frontend JavaScript.
+            core.AddWebResourceRequestedFilter(origin + "/api/apps/*", CoreWebView2WebResourceContext.All);
+            core.WebResourceRequested += delegate(object sender, CoreWebView2WebResourceRequestedEventArgs args) {
+                Uri target;
+                if (!Uri.TryCreate(args.Request.Uri, UriKind.Absolute, out target) || target.GetLeftPart(UriPartial.Authority) != origin) return;
+                if (target.AbsolutePath != "/api/apps/removal-security" && target.AbsolutePath != "/api/apps/uninstall" && target.AbsolutePath != "/api/apps/leftovers/delete") return;
+                if (!String.IsNullOrEmpty(desktopCredential) && desktopCredential.Length == 44) args.Request.Headers.SetHeader("X-PC-Monitor-Desktop", desktopCredential);
+            };
             core.Settings.AreDevToolsEnabled = false;
             core.Settings.AreDefaultContextMenusEnabled = false;
             core.Settings.AreBrowserAcceleratorKeysEnabled = false;
@@ -531,7 +668,9 @@ internal sealed class DesktopWindow : Form
                     if (loginPresentation && message == "lock-window-minimize") { WindowState = FormWindowState.Minimized; return; }
                     if (loginPresentation && message == "lock-window-exit") { ExitShell(); return; }
                     if (message == "updates-status" || message == "updates-check" || message == "updates-automatic" || message == "updates-preference" || message == "updates-install" || message == "updates-notes") { UpdateActionAsync(message); return; }
+                    if (message == "startup-status" || message == "startup-enable" || message == "startup-disable") { StartupActionAsync(message); return; }
                     if (message == "security-preference" || message == "security-rotate" || message == "security-status" || message == "security-lock") { SecurityActionAsync(message); return; }
+                    if (message == "maintenance-status" || message == "maintenance-enable" || message == "maintenance-disable") { MaintenanceActionAsync(message); return; }
                     if (addressRequest != null) addressRequest.TrySetResult(message);
                 } catch { }
             };

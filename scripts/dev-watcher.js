@@ -5,15 +5,16 @@ const path = require('path');
 const { spawn, execFile } = require('child_process');
 
 const WATCHED_SERVER_FILES = new Set([
-  'server.js',
+  'server.js', 'diagnostics.js', 'maintenance-service.js',
   'server-lifecycle.js',
   'pin-manager.js',
-  'process-termination.js', 'app-manager.js',
+  'process-termination.js', 'app-manager.js', 'leftover-manager.js',
+  'scripts/app-leftovers.ps1', 'scripts/app-leftovers.cs',
   'scripts/terminate-process.ps1', 'scripts/process-tree.ps1', 'scripts/process-tree.cs', 'scripts/app-manager.ps1', 'scripts/app-uninstall.cs', 'scripts/app-metadata.cs', 'scripts/process-display.ps1', 'scripts/application-display.ps1',
   'enhanced-support.js',
   'uninstall-manager.js', 'update-manager.js', 'scripts/installed-update.ps1',
   'maintenance.js',
-  'scripts/empty-recycle-bin.ps1',
+  'scripts/empty-recycle-bin.ps1', 'scripts/maintenance-elevated.cs',
   'temperature-manager.js',
   'cpu-temperature-provider.js',
   'scripts/cpu-temperature-provider.ps1',
@@ -64,7 +65,8 @@ async function terminateDashboardProcess(pid) {
 async function inspectExistingDashboard(projectDir) {
   if (process.platform !== 'win32') return { state: 'unsafe', reason: 'the managed listener handoff is supported on Windows only' };
 
-  const pidFile = path.join(projectDir, 'server.pid');
+  const dataDir = require('../pin-manager').dataDirectory(projectDir);
+  const pidFile = path.join(dataDir, 'server.pid');
   let pid = null;
   let port = 7331;
   try {
@@ -75,7 +77,7 @@ async function inspectExistingDashboard(projectDir) {
   }
 
   try {
-    const state = JSON.parse(fs.readFileSync(path.join(projectDir, 'server-state.json'), 'utf8'));
+    const state = JSON.parse(fs.readFileSync(path.join(dataDir, 'server-state.json'), 'utf8'));
     if (!Number.isSafeInteger(state.pid) || state.pid < 1 || (state.status === 'listening' && (!Number.isInteger(state.actualPort) || state.actualPort < 1 || state.actualPort > 65535))) return { state: 'unsafe', reason: 'runtime ownership/port metadata is invalid' };
     if (pid !== null && pid !== state.pid) return { state: 'unsafe', reason: 'PID and runtime metadata disagree' };
     pid = state.pid;
@@ -84,7 +86,7 @@ async function inspectExistingDashboard(projectDir) {
   } catch (error) { if (error.code !== 'ENOENT') return { state: 'unsafe', reason: 'runtime metadata could not be read' }; }
   if (pid === null) {
     try {
-      const owner = JSON.parse(fs.readFileSync(path.join(projectDir, 'server.instance.json'), 'utf8'));
+      const owner = JSON.parse(fs.readFileSync(path.join(dataDir, 'server.instance.json'), 'utf8'));
       if (!Number.isSafeInteger(owner.pid) || owner.pid < 1) return { state: 'unsafe', reason: 'instance owner is invalid' };
       pid = owner.pid;
     } catch (error) { if (error.code !== 'ENOENT') return { state: 'unsafe', reason: 'instance ownership could not be read' }; }
@@ -254,9 +256,30 @@ function createDevWatcher({
     }, debounceMs);
   }
 
+  const mtimeCache = new Map();
+  function getFileMtime(relativeName) {
+    try {
+      return fs.statSync(path.join(projectDir, relativeName)).mtimeMs;
+    } catch (_) {
+      return null;
+    }
+  }
+  for (const file of WATCHED_SERVER_FILES) {
+    const m = getFileMtime(file);
+    if (m !== null) mtimeCache.set(file, m);
+  }
+
   function onFileChange(_eventType, filename) {
     const name = filename == null ? '' : filename.toString();
-    if (WATCHED_SERVER_FILES.has(name)) scheduleRestart();
+    if (!WATCHED_SERVER_FILES.has(name)) return;
+    const currentMtime = getFileMtime(name);
+    if (currentMtime !== null && mtimeCache.has(name) && mtimeCache.get(name) === currentMtime) {
+      return;
+    }
+    if (currentMtime !== null) {
+      mtimeCache.set(name, currentMtime);
+    }
+    scheduleRestart();
   }
 
   for (const directory of new Set(Array.from(WATCHED_SERVER_FILES, file => path.dirname(path.join(projectDir, file))))) {

@@ -2,11 +2,47 @@ $ErrorActionPreference = 'Stop'
 $env:PSModulePath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
 . (Join-Path $PSScriptRoot 'application-display.ps1')
+. (Join-Path $PSScriptRoot 'startup-tasks.ps1')
 # Only the fixed server-owned operation and locally re-resolved registration are accepted.
 Add-Type -TypeDefinition (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'app-uninstall.cs') -Raw)
 Add-Type -TypeDefinition (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'app-metadata.cs') -Raw) -ReferencedAssemblies System.Drawing
 $global:cachedSizes = @{}
 $global:calculatedSizes = @{}
+$global:sizeBudget = [Diagnostics.Stopwatch]::StartNew()
+$global:packageStartup = New-Object Collections.Generic.List[object]
+# Private, bounded evidence for Store removals. No PINs, sessions, command
+# lines or raw Windows messages are retained. The client cannot choose a log path.
+$script:appxDiagnosticStream = $null
+function Start-AppxDiagnostic($request) {
+    if ($request.action -ne 'uninstall' -or $request.locator.scope -ne 'appx') { return }
+    $directory = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Rovarin\Diagnostics'
+    for ($cursor=$directory; $cursor; $cursor=[IO.Path]::GetDirectoryName($cursor)) {
+        if ([IO.Directory]::Exists($cursor) -and (([IO.File]::GetAttributes($cursor) -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { throw 'Unsafe diagnostics ancestor' }
+    }
+    [IO.Directory]::CreateDirectory($directory) | Out-Null
+    if (-not [RovarinAppMetadata]::IsSafeDirectory($directory)) { throw 'Unsafe diagnostics directory' }
+    # At most 64 closed operation logs (32 KiB each). Never follow a redirected
+    # file or delete another writer's active, non-delete-shared log.
+    $old=@(Get-ChildItem -LiteralPath $directory -Filter 'appx-uninstall-*.jsonl' -File |
+        Where-Object {$_.Name -cmatch '^appx-uninstall-[a-f0-9]{32}\.jsonl$' -and ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0} |
+        Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 63)
+    foreach ($log in $old) {
+        try { [IO.File]::Delete($log.FullName) }
+        catch [IO.IOException] { } # Another owned helper may still hold it open.
+    }
+    # CreateNew and a held, non-write-shared stream prevent redirected log-file writes.
+    $file = Join-Path $directory ('appx-uninstall-'+[Guid]::NewGuid().ToString('N')+'.jsonl')
+    $script:appxDiagnosticStream = [IO.File]::Open($file,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read)
+    Write-AppxDiagnostic 'request' @{package=[string]$request.locator.key;ownerSid=[string]$request.ownerSid;account=[Security.Principal.WindowsIdentity]::GetCurrent().Name;executionSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;pid=$PID}
+}
+function Write-AppxDiagnostic([string]$stage,$details) {
+    if (-not $script:appxDiagnosticStream) { return }
+    if ($script:appxDiagnosticStream.Length -ge 32768) { throw 'Diagnostics bound exceeded' }
+    $line=@{time=[DateTime]::UtcNow.ToString('o');stage=$stage;details=$details} | ConvertTo-Json -Depth 5 -Compress
+    $bytes=[Text.Encoding]::UTF8.GetBytes($line+"`n")
+    $script:appxDiagnosticStream.Write($bytes,0,$bytes.Length)
+    $script:appxDiagnosticStream.Flush()
+}
 function Get-DirectorySizeKB($dir) {
     if (-not $dir -or -not [RovarinAppMetadata]::IsSafeDirectory($dir)) { return $null }
     $norm = $dir.ToLowerInvariant().TrimEnd('\')
@@ -19,6 +55,8 @@ function Get-DirectorySizeKB($dir) {
                 return [double]$cached.sizeKB
             }
         }
+        # Unknown is preferable to blocking inventory or publishing a partial size.
+        if ($global:sizeBudget.ElapsedMilliseconds -gt 1500) { return $null }
         $bytes = [RovarinAppMetadata]::CalculateDirectorySize($dir, 50000)
         if ($bytes -gt 0) {
             $kb = [Math]::Round($bytes / 1024)
@@ -221,11 +259,33 @@ function Registry-Row($scope,$keyName) {
         $fingerprint=Fingerprint ($scope+'|'+$keyName+'|'+$name+'|'+$version+'|'+$uninstall+'|'+$quiet)
         $target = Resolve-LaunchTarget @{ name = $name; version = $version; installLocation = $location }
         $launchCapable = ($null -ne $target)
-        @{locator=@{scope=$scope;key=$keyName};fingerprint=$fingerprint;name=$name.Substring(0,[Math]::Min(200,$name.Length));version=$version;publisher=$publisher;installLocation=$location;sizeKB=$numericSize;sizeEstimated=$sizeEstimated;icon=$icon;description=$description;installDate=$date;type=$type;batchCapable=$batch;elevationLikely=($scope -ne 'user');product=$product;handler=$handler;protected=$protected;launchCapable=$launchCapable}
+        $cleanupVerified=$false;$cleanupAliases=@()
+        if($target -and $target.exe -and $location -and $target.exe.StartsWith($location.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)) {
+            try {$meta=[Diagnostics.FileVersionInfo]::GetVersionInfo($target.exe);$n=($name -replace '[\s._()-]','').ToLowerInvariant();$pn=($meta.ProductName -replace '[\s._()-]','').ToLowerInvariant();$pc=($publisher -replace '[\s._()-]','').ToLowerInvariant();$mc=($meta.CompanyName -replace '[\s._()-]','').ToLowerInvariant();if($n -and $pn -eq $n -and $pc -and $pc -eq $mc){$cleanupVerified=$true;$cleanupAliases=@($meta.ProductName,[IO.Path]::GetFileNameWithoutExtension($target.exe))}}catch{}
+        }
+
+        @{locator=@{scope=$scope;key=$keyName};fingerprint=$fingerprint;name=$name.Substring(0,[Math]::Min(200,$name.Length));version=$version;publisher=$publisher;installLocation=$location;sizeKB=$numericSize;sizeEstimated=$sizeEstimated;icon=$icon;description=$description;installDate=$date;type=$type;batchCapable=$batch;elevationLikely=($scope -ne 'user');product=$product;handler=$handler;protected=$protected;launchCapable=$launchCapable;cleanupVerified=$cleanupVerified;cleanupAliases=$cleanupAliases}
     }finally{if($null -ne $key){$key.Dispose()};$root.Dispose()}
 }
-function Package-Row($package) {
+function Collect-PackageStartup($package,$manifest) {
+            foreach ($extension in $manifest.SelectNodes("//*[local-name()='Extension' and @Category='windows.startupTask']")) {
+                foreach ($task in $extension.SelectNodes(".//*[local-name()='StartupTask']")) {
+                    $taskId=[string]$task.TaskId
+                    if (-not $taskId) { continue }
+                    $key=[string]$package.PackageFamilyName+'|'+$taskId
+                    # Manifest defaults do not prove current user/policy state. Keep unknown/read-only.
+                    $global:packageStartup.Add(@{locator=@{source='packaged-startup';key=$key};fingerprint=(Fingerprint $key);name=$taskId;displayName=(Get-RovarinPackageDisplayName $package $manifest);publisher=(Get-RovarinCleanPublisher ([string]$package.Publisher));command='';source='packaged-startup';scope='user';enabled=$null;readOnly=$true;icon=$null;method='Packaged app startup'})
+                }
+            }
+}
+function Package-Row($package, [bool]$identityOnly=$false) {
+    $safe= -not ($package.IsFramework -or $package.IsResourcePackage -or $package.NonRemovable -or $package.Name -match '^(Microsoft\.Windows|Microsoft\.AAD|Microsoft\.SecHealth|windows\.immersivecontrolpanel|MicrosoftWindows\.|Rovarin)')
+    $ownerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    # Uninstall authorization does not need icons, resource strings or directory-size traversal.
+    if($identityOnly){return @{fingerprint=(Fingerprint $package.PackageFullName);protected=(-not $safe);type='appx';batchCapable=$safe;ownerSid=$ownerSid}}
+
     $manifest=$null;try{$manifest=Get-AppxPackageManifest -Package $package.PackageFullName -ErrorAction Stop}catch{}
+    if($manifest){Collect-PackageStartup $package $manifest}
     $description=Get-RovarinPackageDescription $package $manifest
     $publisher=[string]$manifest.Package.Properties.PublisherDisplayName;if(-not $publisher -or $publisher -match '^ms-resource:'){$publisher=[string]$package.Publisher}
     $publisher=Get-RovarinCleanPublisher $publisher
@@ -252,7 +312,7 @@ function Package-Row($package) {
         }
     }
     $launchCapable = -not ($package.IsFramework -or $package.IsResourcePackage)
-    @{locator=@{scope='appx';key=$package.PackageFullName};fingerprint=(Fingerprint $package.PackageFullName);name=(Get-RovarinPackageDisplayName $package $manifest);description=$description;systemComponent=$systemComponent;version=[string]$package.Version;publisher=$publisher;installLocation='';sizeKB=$numericSize;sizeEstimated=$sizeEstimated;icon=$icon;installDate='';type='appx';batchCapable=$safe;elevationLikely=$false;protected=(-not $safe);launchCapable=$launchCapable}
+    @{locator=@{scope='appx';key=$package.PackageFullName};cleanupPackageFamily=[string]$package.PackageFamilyName;ownerSid=$ownerSid;fingerprint=(Fingerprint $package.PackageFullName);name=(Get-RovarinPackageDisplayName $package $manifest);description=$description;systemComponent=$systemComponent;version=[string]$package.Version;publisher=$publisher;installLocation='';sizeKB=$numericSize;sizeEstimated=$sizeEstimated;icon=$icon;installDate='';type='appx';batchCapable=$safe;elevationLikely=$false;protected=(-not $safe);launchCapable=$launchCapable}
 }
 
 function Launch-App($request) {
@@ -301,7 +361,11 @@ function Is-StartupApproved($type, $name, $hivePrefix) {
     try {
         $p = Get-ItemProperty -LiteralPath "${hivePrefix}\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\$type" -Name $name -ErrorAction Stop
         $val = $p.$name
-        if ($val -is [byte[]] -and $val.Length -ge 1) { return (($val[0] -band 1) -eq 0) }
+        if ($val -is [byte[]] -and $val.Length -ge 1) {
+            if ($val[0] -in @(2,6)) { return $true }
+            if ($val[0] -in @(3,7)) { return $false }
+            return $null
+        }
     } catch {}
     return $true
 }
@@ -318,6 +382,7 @@ function Set-StartupApproved($type, $name, $enabled) {
     }
 }
 function Startup-Inventory {
+    $warnings = New-Object Collections.Generic.List[string]
     $items = New-Object Collections.Generic.List[object]
     $sh = New-Object -ComObject WScript.Shell
     try {
@@ -343,13 +408,30 @@ function Startup-Inventory {
             $key.Dispose()
         }
     } catch {}
+    # Some user software registers in the 32-bit view. Shared identical values dedupe,
+    # while differing registrations remain distinct, read-only identities.
+    try {
+        $base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser,[Microsoft.Win32.RegistryView]::Registry32)
+        $key=$base.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run')
+        if ($key) {
+            foreach ($name in $key.GetValueNames()) {
+                $cmd=[string]$key.GetValue($name)
+                if (-not $cmd -or @($items | Where-Object {$_.source -eq 'registry-user' -and $_.name -ceq $name -and $_.command -ceq $cmd}).Count) { continue }
+                $exe=[RovarinAppMetadata]::ExtractExecutablePath($cmd); $desc=$null; $comp=$null
+                if ($exe) { [RovarinAppMetadata]::GetExecutableInfo($exe,[ref]$desc,[ref]$comp) | Out-Null }
+                $items.Add(@{locator=@{source='registry-user32';key=$name};fingerprint=(Fingerprint ("registry-user32|$name|$cmd"));name=$name;displayName=$(if($desc){$desc}else{$name});publisher=[string]$comp;command=$cmd;source='registry-user32';scope='user';enabled=(Is-StartupApproved 'Run32' $name 'HKCU:');readOnly=$true;icon=$null})
+            }
+            $key.Dispose()
+        }
+        $base.Dispose()
+    } catch { $warnings.Add('user-run32-unavailable') }
     foreach ($view in @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)) {
         try {
             $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, $view)
             $key = $base.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run')
             if ($key) {
                 foreach ($name in $key.GetValueNames()) {
-                    if (@($items | Where-Object { $_.locator.source -eq 'registry-machine' -and $_.name -ieq $name }).Count -gt 0) { continue }
+                    $source = if ($view -eq [Microsoft.Win32.RegistryView]::Registry32) { 'registry-machine32' } else { 'registry-machine' }
                     $cmd = [string]$key.GetValue($name)
                     if (-not $cmd) { continue }
                     $exe = [RovarinAppMetadata]::ExtractExecutablePath($cmd)
@@ -357,12 +439,13 @@ function Startup-Inventory {
                     $desc = $null; $comp = $null
                     if ($exe) { [RovarinAppMetadata]::GetExecutableInfo($exe, [ref]$desc, [ref]$comp) | Out-Null }
                     $dispName = if ($desc) { $desc } else { $name }
-                    $enabled = Is-StartupApproved 'Run' $name 'HKLM:'
-                    $fp = Fingerprint ("registry-machine|$name|$cmd")
+                    $approvedType = if ($view -eq [Microsoft.Win32.RegistryView]::Registry32) { 'Run32' } else { 'Run' }
+                    $enabled = Is-StartupApproved $approvedType $name 'HKLM:'
+                    $fp = Fingerprint ("$source|$name|$cmd")
                     $items.Add(@{
-                        locator = @{ source = 'registry-machine'; key = $name }
+                        locator = @{ source = $source; key = $name }
                         fingerprint = $fp; name = $name; displayName = $dispName
-                        publisher = [string]$comp; command = $cmd; source = 'registry-machine'
+                        publisher = [string]$comp; command = $cmd; source = $source
                         scope = 'machine'; enabled = $enabled; readOnly = $true; icon = $icon
                     })
                 }
@@ -374,8 +457,8 @@ function Startup-Inventory {
     try {
         $userStartup = [Environment]::GetFolderPath('Startup')
         if ($userStartup -and (Test-Path -LiteralPath $userStartup)) {
-            Get-ChildItem -LiteralPath $userStartup -Filter '*.lnk' -ErrorAction SilentlyContinue | ForEach-Object {
-                $file = $_; $lnkPath = $file.FullName; $targetExe = $null
+            Get-ChildItem -LiteralPath $userStartup -File -ErrorAction SilentlyContinue | ForEach-Object {
+                $file = $_; if ($file.Name -ieq 'desktop.ini') { return }; $lnkPath = $file.FullName; $targetExe = $null
                 try { $sc = $sh.CreateShortcut($lnkPath); $targetExe = $sc.TargetPath } catch {}
                 $icon = [RovarinAppMetadata]::ExtractIconBase64($lnkPath)
                 if (-not $icon -and $targetExe) { $icon = [RovarinAppMetadata]::ExtractIconBase64($targetExe) }
@@ -388,7 +471,7 @@ function Startup-Inventory {
                     locator = @{ source = 'folder-user'; key = $file.Name }
                     fingerprint = $fp; name = $file.BaseName; displayName = $dispName
                     publisher = [string]$comp; command = [string]$targetExe; source = 'folder-user'
-                    scope = 'user'; enabled = $enabled; readOnly = $false; icon = $icon
+                    scope = 'user'; enabled = $enabled; readOnly = ($file.Extension -ine '.lnk'); icon = $icon
                 })
             }
         }
@@ -396,8 +479,8 @@ function Startup-Inventory {
     try {
         $commonStartup = [Environment]::GetFolderPath('CommonStartup')
         if ($commonStartup -and (Test-Path -LiteralPath $commonStartup)) {
-            Get-ChildItem -LiteralPath $commonStartup -Filter '*.lnk' -ErrorAction SilentlyContinue | ForEach-Object {
-                $file = $_; $lnkPath = $file.FullName; $targetExe = $null
+            Get-ChildItem -LiteralPath $commonStartup -File -ErrorAction SilentlyContinue | ForEach-Object {
+                $file = $_; if ($file.Name -ieq 'desktop.ini') { return }; $lnkPath = $file.FullName; $targetExe = $null
                 try { $sc = $sh.CreateShortcut($lnkPath); $targetExe = $sc.TargetPath } catch {}
                 $icon = [RovarinAppMetadata]::ExtractIconBase64($lnkPath)
                 if (-not $icon -and $targetExe) { $icon = [RovarinAppMetadata]::ExtractIconBase64($targetExe) }
@@ -415,9 +498,107 @@ function Startup-Inventory {
             }
         }
     } catch {}
-    @{ success = $true; code = 'startup-inventory'; items = @($items.ToArray()) }
+    # Optional providers are read-only and fail independently from normal Run/folder entries.
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $scheduler = New-Object -ComObject Schedule.Service
+        $scheduler.Connect()
+        $folders = New-Object 'Collections.Generic.Queue[object]'
+        $folders.Enqueue($scheduler.GetFolder('\'))
+        $visited = 0
+        while ($folders.Count -gt 0) {
+            if ($watch.ElapsedMilliseconds -gt 3000 -or $visited -ge 2000) { $warnings.Add('scheduled-tasks-incomplete'); break }
+            $folder = $folders.Dequeue()
+            try { $tasks = $folder.GetTasks(1) } catch { $warnings.Add('scheduled-tasks-incomplete'); continue }
+            foreach ($task in $tasks) {
+                try {
+                $visited++
+                if ($watch.ElapsedMilliseconds -gt 3000 -or $visited -gt 2000) { break }
+                $definition = $task.Definition
+                $startupTriggers = @($definition.Triggers | Where-Object { $_.Type -in @(8,9) })
+                $actions = @($definition.Actions | Where-Object { $_.Type -eq 0 })
+                if (-not $startupTriggers.Count -or -not $actions.Count) { continue }
+                $taskKey = [string]$task.Path
+                $fp = Fingerprint ($taskKey+'|'+[string]$task.Xml)
+                $exe = [Environment]::ExpandEnvironmentVariables([string]$actions[0].Path)
+                $desc=$null; $comp=$null
+                if ([IO.Path]::IsPathRooted($exe)) { [RovarinAppMetadata]::GetExecutableInfo($exe,[ref]$desc,[ref]$comp) | Out-Null }
+                $policy=Get-StartupTaskPolicy $task
+                $items.Add(@{ locator=@{source='scheduled-task';key=$taskKey}; fingerprint=$fp; name=[string]$task.Name; displayName=([string]$task.Name); publisher=[string]$comp; command=$exe; source='scheduled-task'; scope=$(if($policy.manageable){'user'}else{'machine'}); enabled=[bool]$task.Enabled; readOnly=(-not $policy.manageable); taskManageable=$policy.manageable; canRestore=$policy.canRestore; blockedReason=$policy.reason; icon=$null; method= $(if (@($startupTriggers | Where-Object {$_.Type -eq 9}).Count) {'Scheduled task at sign-in'} else {'Scheduled task at boot'}) })
+                } catch { $warnings.Add('scheduled-tasks-incomplete') }
+            }
+            try { $children = $folder.GetFolders(0) } catch { $warnings.Add('scheduled-tasks-incomplete'); continue }
+            foreach ($sub in $children) {
+                # Windows servicing/system tasks are not consumer startup apps.
+                if (-not ([string]$sub.Path).StartsWith('\Microsoft',[StringComparison]::OrdinalIgnoreCase)) { $folders.Enqueue($sub) }
+            }
+        }
+    } catch { $warnings.Add('scheduled-tasks-unavailable') }
+    if ($null -ne $request.packageStartup) {
+        foreach ($entry in $request.packageStartup) { $items.Add($entry) }
+    } else {
+        try {
+            $watch.Restart()
+            foreach ($package in Get-AppxPackage -ErrorAction Stop) {
+                if ($watch.ElapsedMilliseconds -gt 4000) { $warnings.Add('packaged-startup-incomplete'); break }
+                if ($package.IsFramework -or $package.IsResourcePackage) { continue }
+                $manifest = Get-AppxPackageManifest -Package $package.PackageFullName -ErrorAction SilentlyContinue
+                if ($manifest) { Collect-PackageStartup $package $manifest }
+            }
+            foreach ($entry in $global:packageStartup) { $items.Add($entry) }
+        } catch { $warnings.Add('packaged-startup-unavailable') }
+    }
+    # App-associated services are a distinct, read-only source, not startup toggles.
+    # Match the locally registered installation directory, never a vendor-specific name.
+    if ($request.appLocations) {
+        try {
+            $watch.Restart()
+            $locations=@($request.appLocations | Where-Object { [string]$_.location -and [RovarinAppMetadata]::IsSafeDirectory([string]$_.location) })
+            $services=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Services')
+            try {
+                foreach ($serviceName in $services.GetSubKeyNames()) {
+                    if ($watch.ElapsedMilliseconds -gt 1500) { $warnings.Add('app-services-incomplete'); break }
+                    $key=$services.OpenSubKey($serviceName)
+                    if (-not $key) { continue }
+                    try {
+                        $type=$key.GetValue('Type',0)
+                        if (($type -band 0x30) -eq 0) { continue } # Exclude drivers.
+                        $image=[Environment]::ExpandEnvironmentVariables([string]$key.GetValue('ImagePath',''))
+                        $exe=[RovarinAppMetadata]::ExtractExecutablePath($image)
+                        if (-not $exe) { continue }
+                        $app=$locations | Where-Object {
+                            $location=[string]$_.location
+                            $location.Length -gt 3 -and $exe.StartsWith($location.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)
+                        } | Sort-Object { ([string]$_.location).Length } -Descending | Select-Object -First 1
+                        $serviceDisplay=[string]$key.GetValue('DisplayName',$serviceName)
+                        if (-not $app) {
+                            # Exact Windows display-name association is presentation only. Keep the
+                            # service's own name visible when its path differs from the installed app.
+                            $app=$request.appLocations | Where-Object {
+                                $serviceDisplay -ieq ([string]$_.name+' Service') -or $serviceDisplay -ieq [string]$_.name
+                            } | Select-Object -First 1
+                        }
+                        if (-not $app) { continue }
+                        $mode=$key.GetValue('Start',3)
+                        $enabled=if($mode -eq 2){$true}elseif($mode -eq 4){$false}else{$null}
+                        $method=if($mode -eq 2){'Automatic background service'}elseif($mode -eq 4){'Disabled background service'}else{'Manual / trigger-start service'}
+                        $runningState='Unknown'
+                        try { Add-Type -AssemblyName System.ServiceProcess; $controller=New-Object System.ServiceProcess.ServiceController($serviceName); try {$runningState=[string]$controller.Status}finally{$controller.Dispose()} } catch {}
+                        $items.Add(@{locator=@{source='app-service';key=$serviceName};fingerprint=(Fingerprint ($serviceName+'|'+$image+'|'+$mode));name=$serviceName;displayName=$serviceDisplay;publisher='';command=$exe;source='app-service';scope='machine';serviceState=$runningState;startupMode=$(switch($mode){2 {'Automatic'} 3 {'Manual'} 4 {'Disabled'} default {'Unknown'}});enabled=$enabled;readOnly=$true;icon=$null;method=$method})
+                    } finally { $key.Dispose() }
+                }
+            } finally { if($services){$services.Dispose()} }
+        } catch { $warnings.Add('app-services-unavailable') }
+    }
+    foreach ($item in $items) {
+        $exe = if ([IO.File]::Exists([string]$item.command)) { [string]$item.command } else { [RovarinAppMetadata]::ExtractExecutablePath([string]$item.command) }
+        $label = if ($exe) { [IO.Path]::GetFileName($exe) } else { '' }
+        if ($item -is [Collections.IDictionary]) { $item.executable = $label } else { $item | Add-Member -NotePropertyName executable -NotePropertyValue $label -Force }
+    }
+    @{ success = $true; code = 'startup-inventory'; items = @($items.ToArray()); warnings = @($warnings.ToArray() | Select-Object -Unique) }
 }
 function Startup-Toggle($request) {
+    if ($request.locator.source -eq 'scheduled-task') { return (Set-StartupTask $request) }
     if ($request.locator.source -notin @('registry-user', 'folder-user')) {
         return @{ success = $false; code = 'unsupported'; error = 'Only user-scoped startup entries can be toggled without administrator privileges.' }
     }
@@ -447,6 +628,7 @@ function Startup-Toggle($request) {
 }
 function Inventory {
     Ensure-LaunchData
+    $global:sizeBudget.Restart()
     $rows=New-Object Collections.Generic.List[object]
     foreach($scope in @('user','machine64','machine32')){
         $hive=if($scope -eq 'user'){[Microsoft.Win32.RegistryHive]::CurrentUser}else{[Microsoft.Win32.RegistryHive]::LocalMachine}
@@ -456,27 +638,39 @@ function Inventory {
     }
     $packagesAvailable=$null -ne (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue)
     if($packagesAvailable){try{foreach($package in Get-AppxPackage -ErrorAction Stop){if($rows.Count -ge 2048){throw 'Inventory bound exceeded'};$rows.Add((Package-Row $package))}}catch{$packagesAvailable=$false}}
-    @{success=$true;code='inventory';apps=@($rows.ToArray());packagesAvailable=$packagesAvailable;calculatedSizes=$global:calculatedSizes}
+    @{success=$true;code='inventory';apps=@($rows.ToArray());packagesAvailable=$packagesAvailable;packageStartup=@($global:packageStartup.ToArray());calculatedSizes=$global:calculatedSizes}
 }
 try {
     $text=[Console]::In.ReadToEnd();if($text.Length -gt 262144){throw 'Invalid input'};$request=$text | ConvertFrom-Json
+    Start-AppxDiagnostic $request
     $global:cachedSizes = if ($request.cachedSizes) { $request.cachedSizes } else { @{} }
     $global:calculatedSizes = @{}
     if($request.action -eq 'inventory'){Inventory | ConvertTo-Json -Depth 8 -Compress;exit}
     if($request.action -eq 'startup-inventory'){Startup-Inventory | ConvertTo-Json -Depth 6 -Compress;exit}
     if($request.action -eq 'startup-toggle'){Startup-Toggle $request | ConvertTo-Json -Compress;exit}
     if($request.action -eq 'launch'){Launch-App $request | ConvertTo-Json -Compress;exit}
+    if($request.action -eq 'verify-uninstall'){
+        if($request.locator.scope -ne 'appx' -or $request.locator.key -match '[\\/\r\n]' -or $request.locator.key.Length -gt 300 -or $request.ownerSid -cne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value){throw 'Invalid verification identity'}
+        $registered=@(Get-AppxPackage -ErrorAction Stop | Where-Object {$_.PackageFullName -ceq $request.locator.key -or ($request.packageFamily -and $_.PackageFamilyName -ceq $request.packageFamily)})
+        @{success=$true;code='inspected';installed=($registered.Count -gt 0)} | ConvertTo-Json -Compress;exit
+    }
     if($request.action -ne 'uninstall' -or $request.locator.scope -notin @('user','machine64','machine32','appx') -or $request.locator.key -match '[\\/\r\n]' -or $request.locator.key.Length -gt 300){throw 'Invalid operation'}
     if($request.locator.scope -eq 'appx'){
-        $package=Get-AppxPackage | Where-Object {$_.PackageFullName -ceq $request.locator.key} | Select-Object -First 1
+        if($request.ownerSid -cne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value){@{success=$false;code='user-mismatch'} | ConvertTo-Json -Compress;exit}
+        $package=Get-AppxPackage -ErrorAction Stop | Where-Object {$_.PackageFullName -ceq $request.locator.key} | Select-Object -First 1
         if($null -eq $package){@{success=$false;code='not-installed'} | ConvertTo-Json -Compress;exit}
-        $row=Package-Row $package
+        $row=Package-Row $package $true
     }else{$row=Registry-Row $request.locator.scope $request.locator.key}
     if($null -eq $row){@{success=$false;code='not-installed'} | ConvertTo-Json -Compress;exit}
     if($row.fingerprint -cne $request.fingerprint){@{success=$false;code='inventory-changed'} | ConvertTo-Json -Compress;exit}
     if($row.protected -or $row.type -eq 'manual' -or ($request.batch -eq $true -and -not $row.batchCapable)){@{success=$false;code='unsupported'} | ConvertTo-Json -Compress;exit}
     if($row.type -eq 'appx'){
+        Write-AppxDiagnostic 'removal-started' @{package=$package.PackageFullName;family=$package.PackageFamilyName;command='Remove-AppxPackage -Package <exact PackageFullName> -ErrorAction Stop'}
         Remove-AppxPackage -Package $package.PackageFullName -ErrorAction Stop
+        Write-AppxDiagnostic 'removal-returned' @{success=$true}
+        $remaining=@(Get-AppxPackage -ErrorAction Stop | Where-Object {$_.PackageFamilyName -ceq $package.PackageFamilyName})
+        Write-AppxDiagnostic 'registration-verified' @{remaining=$remaining.Count;family=$package.PackageFamilyName}
+        if($remaining.Count){@{success=$false;code='removal-unconfirmed'} | ConvertTo-Json -Compress;exit}
         @{success=$true;code='completed'} | ConvertTo-Json -Compress;exit
     }
     $stream=$null;$process=$null
@@ -495,6 +689,17 @@ try {
         @{success=($code -in @('completed','reboot-required'));code=$code;exitCode=$exitCode} | ConvertTo-Json -Compress
     }finally{if($stream){$stream.Dispose()};if($process){$process.Dispose()}}
 }catch{
+    $errorRecord=$_
+    Write-AppxDiagnostic 'error' @{exceptionType=$errorRecord.Exception.GetType().FullName;errorId=$errorRecord.FullyQualifiedErrorId;category=[string]$errorRecord.CategoryInfo.Category;hresults=@([regex]::Matches([string]$errorRecord.Exception.Message,'0x[0-9A-Fa-f]{8}') | ForEach-Object {$_.Value.ToUpperInvariant()} | Select-Object -Unique);activityIds=@([regex]::Matches([string]$errorRecord.Exception.Message,'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}') | ForEach-Object {$_.Value} | Select-Object -Unique)}
     $code=if($_.Exception.NativeErrorCode -eq 1223){'cancelled'}elseif($_.Exception -is [UnauthorizedAccessException]){'access-denied'}else{'operation-failed'}
-    @{success=$false;code=$code} | ConvertTo-Json -Compress
+    $hresult=$null
+    $match=[regex]::Match([string]$_.Exception.Message,'0x[0-9A-Fa-f]{8}')
+    if($match.Success){$hresult=$match.Value.ToUpperInvariant()}
+    if($request.locator.scope -eq 'appx'){
+        $code=switch($hresult){'0X80070005'{'access-denied'}'0X80073CFA'{'removal-denied'}'0X80073D02'{'package-in-use'}'0X80073CF1'{'not-installed'}default{'package-removal-failed'}}
+    }
+    # Return only a fixed result code/HRESULT, never raw Windows messages or user paths.
+    @{success=$false;code=$code;hresult=$hresult} | ConvertTo-Json -Compress
+}finally{
+    if($script:appxDiagnosticStream){Write-AppxDiagnostic 'helper-finished' @{pid=$PID};$script:appxDiagnosticStream.Dispose()}
 }

@@ -19,15 +19,36 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     if(options.currentSource){
       // Local shell QA without rebuilding or touching the installer payload.
       fs.cpSync(path.join(root,'public'),path.join(app,'public'),{recursive:true});
-      for (const name of ['server.js','pin-manager.js','update-manager.js','app-manager.js','process-termination.js','process-stats.js']) fs.copyFileSync(path.join(root,name),path.join(app,name));
+      for (const name of ['server.js','diagnostics.js','pin-manager.js','update-manager.js','app-manager.js','leftover-manager.js','process-termination.js','process-stats.js','maintenance.js','maintenance-service.js']) fs.copyFileSync(path.join(root,name),path.join(app,name));
       for(const name of ['terminate-process.ps1','app-manager.ps1','app-uninstall.cs','app-metadata.cs','process-tree.ps1','process-tree.cs','process-display.ps1','application-display.ps1'])fs.copyFileSync(path.join(root,'scripts',name),path.join(app,'scripts',name));
       fs.copyFileSync(path.join(root,'scripts/native-trust.ps1'),path.join(app,'scripts/native-trust.ps1'));
-      execFileSync(compiler,['/nologo','/target:winexe','/platform:x64','/optimize+','/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll',`/r:${path.join(app,'Microsoft.Web.WebView2.Core.dll')}`,`/r:${path.join(app,'Microsoft.Web.WebView2.WinForms.dll')}`,`/win32manifest:${path.join(root,'packaging/desktop.manifest')}`,`/win32icon:${path.join(app,'Rovarin.ico')}`,`/out:${path.join(app,'Rovarin.exe')}`,path.join(root,'packaging/RovarinLauncher.cs'),path.join(root,'packaging/DesktopShell.cs')],{windowsHide:true,timeout:15000});
+      let shell=path.join(root,'packaging/DesktopShell.cs');
+      if(options.maintenanceSettingsOnly){
+        // Unelevated disposable setup surrogate: exercise native process launch and
+        // build-bound integrity without registering/elevating anything on the host.
+        const fixtureSource=path.join(temp,'maintenance-bootstrap.cs');
+        fs.writeFileSync(fixtureSource,`using System;using System.IO;using System.Security.Principal;using System.Threading;using System.Web.Script.Serialization;class Fixture{static int Main(string[] args){if(args.Length!=2||args[0]!="/OWNER="+WindowsIdentity.GetCurrent().User.Value||args[1]!="/NORESTART")return 9;var dir=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","data");File.AppendAllText(Path.Combine(dir,"maintenance-bootstrap-calls.txt"),"validated-owner\\n");Thread.Sleep(650);var j=new JavaScriptSerializer();var f=Path.Combine(dir,"maintenance-fixture.json");var s=j.Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(f));if((string)s["outcome"]=="uac-cancelled")return 2;if((string)s["outcome"]!="approved")return 3;s["state"]="enabled";File.WriteAllText(f,j.Serialize(s));return 0;}}`);
+        const setup=path.join(app,'RovarinMaintenanceSetup.exe');
+        execFileSync(compiler,['/nologo','/target:exe','/platform:x64','/r:System.Web.Extensions.dll','/out:'+setup,fixtureSource],{windowsHide:true,timeout:15000});
+        const digest=require('crypto').createHash('sha256').update(fs.readFileSync(setup)).digest('hex');
+        const original=fs.readFileSync(shell,'utf8');
+        assert(original.includes('Verb = "runas"') && original.includes('FileShare.Read'));
+        shell=path.join(temp,'DesktopShell.fixture.cs');
+        fs.writeFileSync(shell,original.replace('internal const string MaintenanceSetupHash = "";',`internal const string MaintenanceSetupHash = "${digest}";`).replace('Verb = "runas"','Verb = "open"'));
+      }
+      execFileSync(compiler,['/nologo','/target:winexe','/platform:x64','/optimize+','/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll',`/r:${path.join(app,'Microsoft.Web.WebView2.Core.dll')}`,`/r:${path.join(app,'Microsoft.Web.WebView2.WinForms.dll')}`,`/win32manifest:${path.join(root,'packaging/desktop.manifest')}`,`/win32icon:${path.join(app,'Rovarin.ico')}`,`/out:${path.join(app,'Rovarin.exe')}`,path.join(root,'packaging/RovarinLauncher.cs'),shell],{windowsHide:true,timeout:15000});
     }
     // PORT=0 intentionally skips runtime ownership records in this project.
     // A native lifecycle test must use a real, isolated published port instead.
     const port=await new Promise((resolve,reject)=>{const listener=require('net').createServer();listener.once('error',reject);listener.listen(0,'127.0.0.1',()=>{const port=listener.address().port;listener.close(error=>error?reject(error):resolve(port))})});
-    child=launch(path.join(temp,'runtime/node.exe'),['"'+path.join(app,'server.js')+'"'],{cwd:app,windowsVerbatimArguments:true,env:{...process.env,PORT:String(port),NODE_OPTIONS:'',NODE_PATH:'',PC_MONITOR_PIN:''}});
+    let preload='';
+    if(options.maintenanceSettingsOnly){
+      const stateFile=path.join(data,'maintenance-fixture.json'),callsFile=path.join(data,'maintenance-calls.jsonl');
+      fs.writeFileSync(stateFile,JSON.stringify({state:'not-installed',outcome:'approved'}));fs.writeFileSync(callsFile,'');
+      preload=path.join(temp,'maintenance-settings-preload.cjs');
+      fs.writeFileSync(preload,`const fs=require('fs');const adapterModule=require(${JSON.stringify(path.join(app,'maintenance-service'))});const state=${JSON.stringify(stateFile)},calls=${JSON.stringify(callsFile)};const read=()=>JSON.parse(fs.readFileSync(state,'utf8'));const record=action=>fs.appendFileSync(calls,JSON.stringify({action})+'\\n');adapterModule.createLocalLifecycleClient=()=>({status:async()=>{record('status');const s=read();return {state:s.state,enabled:s.state==='enabled'};},provision:async()=>{record('enable');await new Promise(r=>setTimeout(r,650));const s=read();if(s.state==='not-installed')return {state:'not-installed',enabled:false};if(s.outcome!=='approved')return {state:s.outcome,enabled:false};s.state='enabled';fs.writeFileSync(state,JSON.stringify(s));return {state:'enabled',enabled:true};},revoke:async()=>{record('disable');const s=read();s.state='disabled';fs.writeFileSync(state,JSON.stringify(s));return {state:'disabled',enabled:false};}});`);
+    }
+    child=launch(path.join(temp,'runtime/node.exe'),['"'+path.join(app,'server.js')+'"'],{cwd:app,windowsVerbatimArguments:true,env:{...process.env,PORT:String(port),NODE_OPTIONS:preload?'--require '+JSON.stringify(preload.replaceAll('\\','/')):'',NODE_PATH:'',PC_MONITOR_PIN:''}});
     let output='';child.stdout.on('data',x=>output+=x);child.stderr.on('data',x=>output+=x);
     for(let i=0;i<150;i++){const match=output.match(/Localhost access: http:\/\/127\.0\.0\.1:(\d+)/);if(match){base=`http://127.0.0.1:${match[1]}`;break}await pause(100)}
     assert(base,'Native fixture backend failed');
@@ -36,7 +57,8 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     assert(!remoteLogin.includes('id="lock-window-minimize"')&&!remoteLogin.includes('id="lock-window-exit"')&&!remoteLogin.includes('class="lock-window-controls"'),'Web/mobile login must not contain native window controls');
     execFileSync(compiler,['/nologo','/target:exe','/platform:x64',`/win32manifest:${path.join(root,'packaging/desktop.manifest')}`,'/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll',`/r:${path.join(app,'Microsoft.Web.WebView2.Core.dll')}`,`/r:${path.join(app,'Microsoft.Web.WebView2.WinForms.dll')}`,`/out:${path.join(app,'NativeDesktopTest.exe')}`,path.join(root,'scripts/native-desktop-test.cs')],{windowsHide:true,timeout:15000});
     fs.copyFileSync(path.join(app,'Rovarin.exe.config'),path.join(app,'NativeDesktopTest.exe.config'));
-    console.log(await wait(launch(path.join(app,'NativeDesktopTest.exe'),[],{cwd:app})));
+    console.log(await wait(launch(path.join(app,'NativeDesktopTest.exe'),[],{cwd:app,env:{...process.env,ROVARIN_NATIVE_MAINTENANCE_ONLY:options.maintenanceSettingsOnly?'1':''}})));
+    if(options.maintenanceSettingsOnly){fs.copyFileSync(path.join(app,'native-maintenance-settings.png'),path.join(root,'packaging/cache/native-maintenance-settings.png'));return;}
     for(const file of ['native-lock.png','login-mobile.png','login-keyboard.png','processes-polish.png']) fs.copyFileSync(path.join(app,file),path.join(root,'packaging/cache',file));
     fs.copyFileSync(path.join(app,'native-dashboard.png'),path.join(root,'packaging/cache/native-dashboard.png'));
     fs.copyFileSync(path.join(app,'native-mobile.png'),path.join(root,'packaging/cache/native-mobile.png'));

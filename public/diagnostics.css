@@ -39,7 +39,7 @@
 #diagnosticsReport { display: block; width: 100%; min-height: 240px; padding: 12px; border: 1px solid var(--glass-rim); border-radius: var(--radius-md); color: var(--text-primary); background: var(--bg-primary); font: 12px var(--font-mono); }
 @media (max-width: 380px) { .page-nav { gap: 2px; max-width: 100%; } .page-nav-button { padding-inline: 10px; font-size: 12px; } }
 @media (prefers-reduced-motion: reduce) { .diagnostics-toolbar button { transition: none; } }
-.temperature-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.temperature-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 12px 0 16px; }
 .temperature-settings label { font-weight: 600; }
 .temperature-settings select, .temperature-settings button { min-height: 44px; max-width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--glass-rim); background: var(--bg-subtle); color: var(--text-primary); font: inherit; }
 .temperature-settings button { cursor: pointer; }

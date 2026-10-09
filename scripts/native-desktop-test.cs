@@ -28,6 +28,7 @@ internal static class NativeDesktopTest
         var limit = DateTime.UtcNow.AddSeconds(seconds);
         while (DateTime.UtcNow < limit) { if (await Condition(script)) return; await Task.Delay(100); }
         if(label.StartsWith("Native installed-app")) Console.Error.WriteLine(await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({rows:document.querySelectorAll('.apps-row').length,status:document.getElementById('appsStatus')?.textContent,width:document.documentElement.scrollWidth,viewport:innerWidth})"));
+        if(label.Contains("component"))Console.Error.WriteLine(await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({feedback:document.getElementById('adminMaintenanceFeedback')?.textContent,native:!!window.chrome?.webview,controlsHidden:document.getElementById('nativeSecurityControls')?.hidden})"));
         throw new Exception(label + "; pending=" + window.GetField("visibilityPending",flags).GetValue(form) + "; loading=" + window.GetField("loading",flags).GetValue(form) + "; visible=" + form.Visible + "; doc=" + await View.CoreWebView2.ExecuteScriptAsync("document.visibilityState"));
     }
     static async Task<int> Leases() {
@@ -44,6 +45,110 @@ internal static class NativeDesktopTest
             await Task.Delay(200);
         }
         throw new Exception((active ? "Lease did not recover" : "Hidden window retained lease") + "; count=" + await Leases() + "; state=" + await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({lease:window.monitoringLeaseId,visible:dashboardClientVisible(),profile:desiredMonitoringProfile})"));
+    }
+    static void MaintenanceFixture(string state, string outcome) {
+        File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","data","maintenance-fixture.json"),new JavaScriptSerializer().Serialize(new {state=state,outcome=outcome}));
+    }
+    static async Task MaintenanceSettings(string pin, JavaScriptSerializer json) {
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('pinInput').value="+json.Serialize(pin)+";document.getElementById('unlockBtn').click()");
+        await Wait("document.readyState==='complete' && typeof showSecuritySettings==='function' && !!document.getElementById('securitySettingsTab')", "Native fixture login failed");
+        var ready=DateTime.UtcNow.AddSeconds(5);while((bool)window.GetField("loginPresentation",flags).GetValue(form) && DateTime.UtcNow<ready)await Task.Delay(100);
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('nativeSettingsButton').click();document.getElementById('securitySettingsTab').click()");
+        await Wait("!document.getElementById('adminMaintenanceToggle').disabled && document.getElementById('adminMaintenanceFeedback').textContent.includes('install the protected')", "Bundled missing component cannot be installed");
+        string setup=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"RovarinMaintenanceSetup.exe");
+        byte[] original=File.ReadAllBytes(setup);
+        File.AppendAllText(setup,"changed");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('securitySettingsTab').click()");
+        await Wait("document.getElementById('adminMaintenanceToggle').disabled && document.getElementById('adminMaintenanceFeedback').textContent.includes('verified maintenance installer')", "Modified companion accepted");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('adminMaintenanceLabel').click()");
+        Check(!File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","data","maintenance-bootstrap-calls.txt")),"Tampered setup executed");
+        File.WriteAllBytes(setup,original);
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('securitySettingsTab').click()");
+        await Wait("!document.getElementById('adminMaintenanceToggle').disabled", "Valid setup status missing");
+        File.AppendAllText(setup,"changed-after-status");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('adminMaintenanceLabel').click()");
+        await Wait("document.getElementById('adminMaintenanceFeedback').textContent.includes('safety checks') && !document.getElementById('adminMaintenanceToggle').checked", "Setup not revalidated at execution");
+        Check(!File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","data","maintenance-bootstrap-calls.txt")),"Stale validated setup executed");
+        File.WriteAllBytes(setup,original);
+        File.Move(setup,setup+".saved");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('securitySettingsTab').click()");
+        await Wait("document.getElementById('adminMaintenanceToggle').disabled && document.getElementById('adminMaintenanceFeedback').textContent.includes('verified maintenance installer')", "Absent companion falsely available");
+        File.Move(setup+".saved",setup);
+        MaintenanceFixture("not-installed","uac-cancelled");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('securitySettingsTab').click()");
+        await Wait("!document.getElementById('adminMaintenanceToggle').disabled", "Missing-component setup retry unavailable");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('adminMaintenanceLabel').click()");
+        await Wait("document.getElementById('adminMaintenanceFeedback').textContent.includes('cancelled') && !document.getElementById('adminMaintenanceToggle').checked && !document.getElementById('adminMaintenanceToggle').disabled", "Cancelled bootstrap did not stay off");
+        MaintenanceFixture("not-installed","approved");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('adminMaintenanceToggle').click()");
+        await Wait("document.getElementById('adminMaintenanceToggle').disabled && !document.getElementById('adminMaintenanceToggle').checked", "Setup checked before verification");
+        await Wait("document.getElementById('adminMaintenanceToggle').checked && !document.getElementById('adminMaintenanceToggle').disabled", "Bootstrap enrollment not verified");
+        Check(File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","data","maintenance-bootstrap-calls.txt")).Split(new[]{'\n'},StringSplitOptions.RemoveEmptyEntries).Length==2,"Unexpected duplicate setup launch");
+        MaintenanceFixture("disabled","approved");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('securitySettingsTab').click()");
+        await Wait("!document.getElementById('adminMaintenanceToggle').disabled", "Installed disabled service cannot be enabled");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('adminMaintenanceLabel').click()");
+        await Wait("document.getElementById('adminMaintenanceToggle').disabled && !document.getElementById('adminMaintenanceToggle').checked && document.getElementById('adminMaintenanceFeedback').textContent.includes('Approve Windows')", "Pending UAC was optimistically enabled");
+        await Wait("document.getElementById('adminMaintenanceToggle').checked && !document.getElementById('adminMaintenanceToggle').disabled", "Verified native enable response missing");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('generalSettingsTab').click();document.getElementById('securitySettingsTab').click()");
+        await Wait("document.getElementById('adminMaintenanceToggle').checked && !document.getElementById('adminMaintenanceToggle').disabled", "Reopened Settings lost verified state");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('adminMaintenanceToggle').click()");
+        await Wait("!document.getElementById('adminMaintenanceToggle').checked && !document.getElementById('adminMaintenanceToggle').disabled", "Native revocation result missing");
+        MaintenanceFixture("disabled","uac-cancelled");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('adminMaintenanceLabel').click()");
+        await Wait("document.getElementById('adminMaintenanceFeedback').textContent.includes('cancelled') && !document.getElementById('adminMaintenanceToggle').checked && !document.getElementById('adminMaintenanceToggle').disabled", "Cancelled UAC changed verified state or prevented retry");
+        MaintenanceFixture("disabled","owner-conflict");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('adminMaintenanceToggle').click()");
+        await Wait("document.getElementById('adminMaintenanceFeedback').textContent.includes('another Windows account') && !document.getElementById('adminMaintenanceToggle').checked", "Enrollment failure reason hidden");
+        MaintenanceFixture("disabled","approved");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('generalSettingsTab').click();document.getElementById('securitySettingsTab').click()");
+        await Wait("!document.getElementById('adminMaintenanceToggle').disabled && !document.getElementById('adminMaintenanceToggle').checked", "Settings reopening did not refresh actual status");
+        using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-maintenance-settings.png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+        Console.WriteLine("PASS real WinForms/WebView2 bridge + authenticated native API: checkbox/label, pending verification, approved/cancelled/owner-conflict fixtures, revocation, reopen, missing-component native bootstrap, SID binding, tamper refusal and cancellation. Unelevated fixtures; no host enrollment or real UAC.");
+    }
+    static async Task MaintenanceProvisionVm(string pin, JavaScriptSerializer json) {
+        string data=Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","data"));
+        if(await Condition("!!document.getElementById('pinInput')"))
+            await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('pinInput').value="+json.Serialize(pin)+";document.getElementById('unlockBtn').click()");
+        await Wait("document.readyState==='complete' && typeof showSecuritySettings==='function'", "VM native login failed",30);
+        var ready=DateTime.UtcNow.AddSeconds(5);while((bool)window.GetField("loginPresentation",flags).GetValue(form) && DateTime.UtcNow<ready)await Task.Delay(100);
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('nativeSettingsButton').click();document.getElementById('securitySettingsTab').click()");
+        await Wait("!document.getElementById('adminMaintenanceToggle').disabled && !document.getElementById('adminMaintenanceToggle').checked", "VM missing component setup unavailable",30);
+        File.WriteAllText(Path.Combine(data,"vm-phase.txt"),"cancel-uac");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('adminMaintenanceLabel').click()");
+        await Task.Delay(1500);
+        File.WriteAllText(Path.Combine(data,"vm-enable-diagnostic.json"),json.Deserialize<string>(await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({feedback:document.getElementById('adminMaintenanceFeedback').textContent,disabled:document.getElementById('adminMaintenanceToggle').disabled,checked:document.getElementById('adminMaintenanceToggle').checked})")));
+        await Wait("document.getElementById('adminMaintenanceFeedback').textContent.includes('cancelled') && !document.getElementById('adminMaintenanceToggle').checked && !document.getElementById('adminMaintenanceToggle').disabled", "VM cancellation not verified",180);
+        Check(!File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"RovarinMaintenance","RovarinMaintenanceService.exe")),"Cancelled setup deployed service");
+        File.WriteAllText(Path.Combine(data,"vm-phase.txt"),"cancel-pass-awaiting-approval");
+        var next=DateTime.UtcNow.AddSeconds(240);
+        while(!File.Exists(Path.Combine(data,"approve-next")) && DateTime.UtcNow<next) await Task.Delay(300);
+        Check(File.Exists(Path.Combine(data,"approve-next")),"Approval phase not released");
+        File.WriteAllText(Path.Combine(data,"vm-phase.txt"),"approve-uac-and-finish");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('adminMaintenanceToggle').click()");
+        await Wait("document.getElementById('adminMaintenanceToggle').checked && !document.getElementById('adminMaintenanceToggle').disabled", "VM actual enrollment not verified",240);
+        string image=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"RovarinMaintenance","RovarinMaintenanceService.exe");
+        bool denied=false;try{using(var f=File.Open(image,FileMode.Open,FileAccess.Write,FileShare.Read)){}}catch(UnauthorizedAccessException){denied=true;}
+        Check(denied,"VM ordinary user can replace protected service");
+        File.WriteAllText(Path.Combine(data,"vm-phase.txt"),"enrollment-pass-running-clear-dns");
+        await View.CoreWebView2.ExecuteScriptAsync("window.__qaDnsStart=null;void fetch('/api/maintenance/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'clear_dns',confirmed:true,pin:"+json.Serialize(pin)+"})}).then(r=>r.json()).then(x=>window.__qaDnsStart=x)");
+        await Wait("window.__qaDnsStart?.success===true", "Clear DNS request rejected",20);
+        var dnsLimit=DateTime.UtcNow.AddSeconds(45);bool dnsDone=false;
+        while(DateTime.UtcNow<dnsLimit){
+            await View.CoreWebView2.ExecuteScriptAsync("void fetch('/api/maintenance/status').then(r=>r.json()).then(x=>window.__qaDns=x)");
+            await Task.Delay(500);
+            if(await Condition("window.__qaDns?.currentTask?.id==='clear_dns' && !window.__qaDns.isRunning")){dnsDone=true;break;}
+        }
+        Check(dnsDone,"Clear DNS did not complete");
+        Check(await Condition("window.__qaDns.currentTask.result?.success===true && window.__qaDns.currentTask.logs.some(x=>JSON.stringify(x).includes('authorized Rovarin maintenance service'))"),"Clear DNS service result failed or fallback was used");
+        File.WriteAllText(Path.Combine(data,"vm-clear-dns-result.json"),await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({success:window.__qaDns.currentTask.result.success,code:window.__qaDns.currentTask.result.code,status:window.__qaDns.currentTask.status,serviceUsed:true})"));
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('generalSettingsTab').click();document.getElementById('securitySettingsTab').click()");
+        await Wait("document.getElementById('adminMaintenanceToggle').checked && !document.getElementById('adminMaintenanceToggle').disabled", "VM reopened Settings lost enrollment",30);
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('adminMaintenanceToggle').click()");
+        await Wait("!document.getElementById('adminMaintenanceToggle').checked && !document.getElementById('adminMaintenanceToggle').disabled", "VM revocation not verified",30);
+        using(var screenshot=File.Create(Path.Combine(data,"vm-maintenance-settings.png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,screenshot);
+        File.WriteAllText(Path.Combine(data,"vm-phase.txt"),"PASS: native bootstrap; actual UAC cancellation; approved installer; owner enrollment; protected write denied; verified checkbox; Clear DNS via service; reopen; revocation");
+        Console.WriteLine("PASS actual VM native maintenance bootstrap, cancellation, enrollment, protected write refusal and revocation");
     }
     [STAThread] static int Main() {
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
@@ -64,7 +169,17 @@ internal static class NativeDesktopTest
                 await Wait("location.origin==="+json.Serialize(origin)+" && document.readyState==='complete'", "Login document not ready");
                 Check(View.CoreWebView2.Source.StartsWith(origin),"Wrong dashboard origin");
                 await View.CoreWebView2.ExecuteScriptAsync("window.__qaAuth=null;void fetch('/api/metrics').then(r=>window.__qaAuth=r.status)");
-                await Wait("window.__qaAuth===401", "Native shell bypassed authentication");
+                if(Environment.GetEnvironmentVariable("ROVARIN_NATIVE_MAINTENANCE_VM")=="1")
+                    await Wait("window.__qaAuth===401 || window.__qaAuth===200", "VM authentication status unavailable");
+                else await Wait("window.__qaAuth===401", "Native shell bypassed authentication");
+                if (Environment.GetEnvironmentVariable("ROVARIN_NATIVE_MAINTENANCE_VM") == "1") {
+                    using (var bios=Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\BIOS"))
+                        Check(bios!=null && String.Equals(Convert.ToString(bios.GetValue("SystemProductName")),"VirtualBox",StringComparison.OrdinalIgnoreCase),"Physical host refused: VM-only provisioning test");
+                    await MaintenanceProvisionVm(pin,json);result=0;Invoke("ExitShell");return;
+                }
+                if (Environment.GetEnvironmentVariable("ROVARIN_NATIVE_MAINTENANCE_ONLY")=="1") {
+                    await MaintenanceSettings(pin,json); result=0; Invoke("ExitShell"); return;
+                }
                 await Task.Delay(200);
                 Check(form.Width==360 && form.Height>=320 && form.Height<480,"PIN window not sized around the shared card");
                 Check(form.FormBorderStyle==FormBorderStyle.None && !form.ControlBox && form.ClientSize==form.Size,"Lock window has an outer native frame");
@@ -196,6 +311,7 @@ internal static class NativeDesktopTest
                 await Wait("document.getElementById('installUpdate').hidden && document.getElementById('updateLater').hidden && document.getElementById('updateStatus').textContent.includes('when ready')", "Later did not dismiss the update offer");
                 Console.WriteLine("PASS native Updates current version, authenticated bridge, persistent auto preference and Later (no installer executed)");
                 await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('securitySettingsTab').click()");
+                await Wait("document.getElementById('startWithWindows') && !document.getElementById('startWithWindows').disabled", "Authenticated native Windows startup status unavailable");
                 await Wait("!document.getElementById('securitySettingsPanel').hidden && !document.getElementById('nativeSecurityControls').hidden && !document.getElementById('desktopPinPreference').disabled && document.getElementById('desktopPinPreference').checked", "Native Security did not load authenticated default preference");
                 await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('generalSettingsTab').click()");
                 // Fixture only: exercise actual native credential -> HttpOnly cookie
@@ -316,19 +432,25 @@ internal static class NativeDesktopTest
                     await Wait("cpuDetailDialog.open && (()=>{const r=cpuDetailDialog.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight})()", "Phone detail dialog must fit at "+width);
                     await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('closeCpuDetailButton').click()");
                     await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('[data-page=dashboardPage]').click();scrollTo(0,200)");
-                    await Wait("(window.scrollY===200 || document.documentElement.scrollTop===200) && document.querySelector('.native-app-bar').getBoundingClientRect().bottom<0 && document.documentElement.scrollWidth<=innerWidth", "In-page menu must scroll away without resizing the viewport at "+width);
+                    await Wait("(window.scrollY===200 || document.documentElement.scrollTop===200) && Math.abs(document.querySelector('.phone-header').getBoundingClientRect().top)<1 && document.querySelector('.native-app-bar').getBoundingClientRect().top>=47 && document.documentElement.scrollWidth<=innerWidth", "Sticky phone header must remain visible without resizing the viewport at "+width);
                     await Task.Delay(350);
-                    await Wait("(window.scrollY===200 || document.documentElement.scrollTop===200) && document.querySelector('.native-app-bar').getBoundingClientRect().bottom<0 && !document.body.classList.contains('sidebar-expanded')", "Stopped scrolling must not restore menu or bounce the page at "+width);
+                    await Wait("(window.scrollY===200 || document.documentElement.scrollTop===200) && Math.abs(document.querySelector('.phone-header').getBoundingClientRect().top)<1 && document.querySelector('.native-app-bar').getBoundingClientRect().top>=47 && !document.body.classList.contains('sidebar-expanded')", "Stopped scrolling must retain sticky header without bouncing the page at "+width);
                     await View.CoreWebView2.ExecuteScriptAsync("scrollTo(0,0)");
                 }
                 await View.CoreWebView2.ExecuteScriptAsync("window.testPhoneSwipe=(target,x1,y1,x2,y2)=>{const fire=(type,x,y)=>{const t=new Touch({identifier:1,target,clientX:x,clientY:y});target.dispatchEvent(new TouchEvent(type,{bubbles:true,cancelable:true,touches:type==='touchend'?[]:[t],changedTouches:[t]}));};fire('touchstart',x1,y1);fire('touchmove',x2,y2);fire('touchend',x2,y2);}");
-                await View.CoreWebView2.ExecuteScriptAsync("testPhoneSwipe(document.querySelector('.dashboard-container'),100,240,108,340)");
+                await View.CoreWebView2.ExecuteScriptAsync("testPhoneSwipe(document.querySelector('.dashboard-container'),20,240,28,340)");
                 await Wait("!document.body.classList.contains('sidebar-expanded')", "Vertical scrolling must not push the drawer open");
-                await View.CoreWebView2.ExecuteScriptAsync("testPhoneSwipe(document.querySelector('canvas'),100,240,220,244)");
+                await View.CoreWebView2.ExecuteScriptAsync("testPhoneSwipe(document.querySelector('canvas'),20,240,140,244)");
                 await Wait("!document.body.classList.contains('sidebar-expanded')", "Graph gestures must not trigger the drawer");
                 await View.CoreWebView2.ExecuteScriptAsync("testPhoneSwipe(document.querySelector('.dashboard-container'),100,240,240,244)");
-                await Wait("document.body.classList.contains('sidebar-expanded') && document.querySelector('.phone-page-surface').getBoundingClientRect().left>=document.getElementById('appSidebar').getBoundingClientRect().width-1", "Anywhere right swipe must push the dashboard aside");
+                await Wait("document.body.classList.contains('sidebar-expanded')", "Deliberate middle-of-page horizontal swipe must open the drawer");
+                await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('sidebarBackdrop').click()");
+                await Wait("!document.body.classList.contains('sidebar-expanded')", "Outside tap closes the center-swipe drawer");
+                await View.CoreWebView2.ExecuteScriptAsync("testPhoneSwipe(document.querySelector('.dashboard-container'),20,240,160,244)");
+                await Wait("document.body.classList.contains('sidebar-expanded') && document.querySelector('.phone-page-surface').getBoundingClientRect().left>=document.getElementById('appSidebar').getBoundingClientRect().width-1", "Left-edge right swipe must push the dashboard aside");
                 await View.CoreWebView2.ExecuteScriptAsync("testPhoneSwipe(document.querySelector('#appSidebar [data-page=dashboardPage]'),200,240,60,244)");
+                await Wait("document.body.classList.contains('sidebar-expanded')", "Navigation buttons must keep normal input rather than becoming drag surfaces");
+                await View.CoreWebView2.ExecuteScriptAsync("testPhoneSwipe(document.getElementById('sidebarBackdrop'),330,240,180,244)");
                 await Wait("!document.body.classList.contains('sidebar-expanded') && Math.abs(document.querySelector('.phone-page-surface').getBoundingClientRect().left)<1 && !document.getElementById('dashboardPage').inert", "Reverse swipe must smoothly return the page");
                 await View.CoreWebView2.ExecuteScriptAsync("delete window.testPhoneSwipe;document.body.style.setProperty('--app-safe-top','0px')");
                 await Wait("document.getElementById('sidebarToggle').getBoundingClientRect().top===14", "Zero safe inset must not clip circular menu");

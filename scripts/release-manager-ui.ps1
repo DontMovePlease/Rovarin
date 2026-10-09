@@ -1,4 +1,4 @@
-param([switch]$UiSmoke)
+param([switch]$UiSmoke,[switch]$DownloadsSmoke)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 Add-Type -ReferencedAssemblies System.dll,System.Windows.Forms -TypeDefinition @'
@@ -70,7 +70,57 @@ $helpData=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'release-manager-hel
 $helpPanel=New-Object HelpScrollPanel;$helpPanel.Dock='Fill';$helpPanel.Padding=New-Object Windows.Forms.Padding(20,26,22,22)
 $help=New-Object Windows.Forms.Label;$help.AutoSize=$true;$help.Location=New-Object Drawing.Point(20,26);$help.Font=New-Object Drawing.Font('Segoe UI',11);$help.ForeColor=$form.ForeColor
 $help.Add_MouseEnter({$helpPanel.Focus()|Out-Null})
-$helpPanel.Controls.Add($help);$outer.Controls.Add($helpPanel,1,0)
+$helpPanel.Controls.Add($help)
+$right=New-Object Windows.Forms.TableLayoutPanel;$right.Dock='Fill';$right.ColumnCount=1;$right.RowCount=2
+$right.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent,50)))|Out-Null
+$right.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent,50)))|Out-Null
+$outer.Controls.Add($right,1,0);$right.Controls.Add($helpPanel,0,0)
+$downloadPanel=New-Object Windows.Forms.TableLayoutPanel;$downloadPanel.Dock='Fill';$downloadPanel.Padding=New-Object Windows.Forms.Padding(20,8,22,20);$downloadPanel.RowCount=3
+$downloadPanel.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute,32)))|Out-Null
+$downloadPanel.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent,100)))|Out-Null
+$downloadPanel.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute,42)))|Out-Null
+$right.Controls.Add($downloadPanel,0,1)
+$downloadHeading=New-Object Windows.Forms.Label;$downloadHeading.Text='Installer Downloads';$downloadHeading.Dock='Fill';$downloadHeading.Font=New-Object Drawing.Font('Segoe UI',13,[Drawing.FontStyle]::Bold);$downloadPanel.Controls.Add($downloadHeading,0,0)
+$downloadText=New-Object Windows.Forms.TextBox;$downloadText.Multiline=$true;$downloadText.ReadOnly=$true;$downloadText.ScrollBars='Vertical';$downloadText.BorderStyle='None';$downloadText.Dock='Fill';$downloadText.BackColor=$form.BackColor;$downloadText.ForeColor=$form.ForeColor;$downloadText.Text='Loading GitHub downloads...';$downloadText.AccessibleName='GitHub installer download statistics';$downloadPanel.Controls.Add($downloadText,0,1)
+$downloadRefresh=New-Object Windows.Forms.Button;$downloadRefresh.Text='Refresh';$downloadRefresh.Dock='Fill';$downloadRefresh.FlatStyle='Flat';$downloadRefresh.ForeColor=$form.ForeColor;$downloadRefresh.BackColor=[Drawing.Color]::FromArgb(37,51,70);$downloadPanel.Controls.Add($downloadRefresh,0,2)
+$script:downloadWorker=$null;$script:downloadResult=$null
+function Show-Downloads($value){
+ $stats=$value.stats
+ if($null -eq $stats){$downloadText.Text='Downloads unavailable'+"
+
+"+$value.error;return}
+ $lines=@();if($value.state -eq 'stale'){$lines+='Cached — refresh failed';$lines+=$value.error;$lines+=''}
+ if($null -eq $stats.latest){$lines+='No published releases yet.'}
+ else{$lines+='Latest: '+$stats.latest.version;$count=if($null -eq $stats.latest.downloads){'Installer asset unavailable'}else{([long]$stats.latest.downloads).ToString('N0')};$lines+='Installer Downloads: '+$count}
+ $lines+='';$lines+='All-time installer downloads: '+([long]$stats.total).ToString('N0')
+ if($stats.missingInstallers -gt 0){$lines+='Excludes '+$stats.missingInstallers+' releases with no installer asset.'}
+ $lines+='';$lines+='Published releases:'
+ foreach($item in $stats.versions){$count=if($null -eq $item.downloads){'No installer asset'}else{([long]$item.downloads).ToString('N0')};$lines+=$item.version+'    '+$count}
+ $lines+='';$lines+='Last updated: '+([DateTimeOffset]::Parse($stats.refreshedAt).ToLocalTime().ToString('g'))
+ $lines+='';$lines+='GitHub-recorded downloads, including repeat and updater downloads. Not unique people or installations.'
+ $downloadText.Text=$lines -join "
+"
+}
+$downloadTimer=New-Object Windows.Forms.Timer;$downloadTimer.Interval=150
+function Start-Downloads{
+ if($script:downloadWorker){return};$downloadRefresh.Enabled=$false;$script:downloadResult=$null
+ $script:downloadWorker=New-Object ReleaseWorker
+ try{$script:downloadWorker.Start($node,(Join-Path $PSScriptRoot 'release-manager.js'),$root,(@{mode='Downloads'}|ConvertTo-Json -Compress));$downloadTimer.Start()}
+ catch{$script:downloadWorker=$null;$downloadRefresh.Enabled=$true;$downloadText.Text='Could not load GitHub downloads. Try Refresh.'}
+}
+$downloadTimer.Add_Tick({
+ if(-not $script:downloadWorker){return};$finished=$script:downloadWorker.Finished;$line=$null
+ if($finished){$script:downloadWorker.Dispose()}
+ while($script:downloadWorker.Lines.TryDequeue([ref]$line)){try{$v=$line|ConvertFrom-Json;if($v.type -eq 'result'){$script:downloadResult=$v.result}}catch{}}
+ if($finished){$script:downloadWorker=$null;$downloadTimer.Stop();$downloadRefresh.Enabled=$true
+  if($script:downloadResult){Show-Downloads $script:downloadResult}else{$downloadText.Text='Could not load GitHub downloads. Try Refresh.'}
+  if($DownloadsSmoke){
+   if(-not $script:downloadSmokeRefreshed){$script:downloadSmokeRefreshed=$true;$downloadRefresh.PerformClick()}
+   else{[IO.File]::WriteAllText((Join-Path $root 'packaging/cache/release-downloads-ui-result.json'),(@{visible=$form.Visible;automaticRefresh=$true;manualRefresh=$true;state=$script:downloadResult.state;stats=$script:downloadResult.stats}|ConvertTo-Json -Depth 8));$bitmap=New-Object Drawing.Bitmap($form.Width,$form.Height);$form.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle(0,0,$form.Width,$form.Height)));$bitmap.Save((Join-Path $root 'packaging/cache/release-downloads-ui.png'));$bitmap.Dispose();$form.Close()}
+  }
+ }
+})
+$downloadRefresh.Add_Click({Start-Downloads})
 $helpPanel.Add_ClientSizeChanged({$help.MaximumSize=New-Object Drawing.Size([Math]::Max(100,$helpPanel.ClientSize.Width-64),0)})
 function Show-Help($name=''){
  if($script:helpName -ceq $name){return};$script:helpName=$name
@@ -252,6 +302,6 @@ $timer.Add_Tick({
         else{Log ($_|Out-String);Show-FriendlyError $_.Exception.Message}
     }
 })
-$form.Add_FormClosing({param($sender,$event) if($script:worker){$event.Cancel=$true;[Windows.Forms.MessageBox]::Show('Wait for the operation to finish. Closing during a build or upload could leave unfinished work.','Operation running') | Out-Null}})
-$form.Add_Shown({$timer.Start();Start-Request @{mode='Status'} ${function:Show-Status}})
-try {$form.ShowDialog() | Out-Null;if($script:smokeFailure){throw $script:smokeFailure}} finally {$timer.Stop();$timer.Dispose();$form.Dispose()}
+$form.Add_FormClosing({param($sender,$event) if($script:worker -or $script:downloadWorker){$event.Cancel=$true;[Windows.Forms.MessageBox]::Show('Wait for the operation to finish. Closing during a build or upload could leave unfinished work.','Operation running') | Out-Null}})
+$form.Add_Shown({Start-Downloads;if(-not $DownloadsSmoke){$timer.Start();Start-Request @{mode='Status'} ${function:Show-Status}}})
+try {$form.ShowDialog() | Out-Null;if($script:smokeFailure){throw $script:smokeFailure}} finally {$downloadTimer.Stop();$downloadTimer.Dispose();$timer.Stop();$timer.Dispose();$form.Dispose()}

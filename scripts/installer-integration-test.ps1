@@ -1,8 +1,17 @@
 $ErrorActionPreference = 'Stop'
 $env:PSModulePath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules'
 $repo = Split-Path -Parent $PSScriptRoot
-$testDir = [IO.Path]::GetFullPath((Join-Path $repo 'packaging\test-install'))
-if ($testDir -ne [IO.Path]::GetFullPath((Join-Path $repo 'packaging\test-install'))) { throw 'Unsafe test directory.' }
+# Installed fixtures belong in unsynced temporary storage, just like normal installs.
+# Drive created a second config hardlink in the old checkout fixture, correctly
+# triggering the product's single-link credential guard during cold relaunch.
+$fixtureHash=[Security.Cryptography.SHA256]::Create()
+try { $fixtureId=([BitConverter]::ToString($fixtureHash.ComputeHash([Text.Encoding]::UTF8.GetBytes([IO.Path]::GetFullPath($repo).ToLowerInvariant())))).Replace('-','').Substring(0,16).ToLowerInvariant() } finally { $fixtureHash.Dispose() }
+$fixtureParent=[IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+$testRoot=[IO.Path]::GetFullPath((Join-Path $fixtureParent ('RovarinInstallerQA-'+$fixtureId)))
+if(-not $testRoot.StartsWith($fixtureParent,[StringComparison]::OrdinalIgnoreCase)){throw 'Unsafe test root.'}
+for($ancestor=$testRoot;$ancestor;$ancestor=Split-Path -Parent $ancestor){if((Test-Path -LiteralPath $ancestor) -and ((Get-Item -LiteralPath $ancestor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Redirecting fixture root.'}}
+if(Test-Path -LiteralPath $testRoot){throw 'Existing isolated test root requires inspection before rerunning.'}
+$testDir = [IO.Path]::GetFullPath((Join-Path $testRoot 'current'))
 $registration = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{C51A4180-26D2-4F48-93BD-B40B182B78DA}_is1'
 # The real installer is tested only when it cannot replace an existing installed
 # product's registration. The development repository is not an installed product.
@@ -15,7 +24,7 @@ foreach ($folder in @([Environment]::GetFolderPath('Desktop'),[Environment]::Get
     if (Test-Path -LiteralPath (Join-Path $folder 'PC Monitor.lnk')) { throw 'An existing legacy shortcut requires a clean VM.' }
 }
 if (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'PC Monitor')) { throw 'An existing legacy Start menu folder requires a clean VM.' }
-$legacyDir = Join-Path $repo 'packaging\test-install-legacy'
+$legacyDir = Join-Path $testRoot 'legacy'
 if (Test-Path -LiteralPath $legacyDir) { throw 'Legacy isolated fixture already exists; inspect it before rerunning.' }
 if (Test-Path -LiteralPath $testDir) { throw 'Isolated test directory already exists; inspect it before rerunning.' }
 $exe = Join-Path $repo 'dist\RovarinSetup.exe'
@@ -145,17 +154,22 @@ function Uninstall-TestCopy([bool]$Full) {
             }
         }
         if ($p) { $p.Dispose() }
+        # A previous run's log and the Inno launcher's exit are not removal evidence.
+        # Only the fixed fixture's files disappearing proves this attempt completed.
+        if (Test-Path -LiteralPath $uninstallLog) {
+            if ((Get-Item -LiteralPath $uninstallLog -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Redirecting fixture log.' }
+            Remove-Item -LiteralPath $uninstallLog -Force -ErrorAction Stop
+        }
         $p = Start-Process -FilePath $registeredCommand.Trim('"') -ArgumentList $uninstallArgs -WindowStyle Hidden -PassThru
-        $limit = (Get-Date).AddSeconds(45)
+        $limit = (Get-Date).AddSeconds(90)
         while ((Get-Date) -lt $limit) {
-            $activeUnins = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*unins*.tmp' })
-            if ($activeUnins.Count -eq 0 -and (-not (Test-Path -LiteralPath (Join-Path $testDir 'unins000.exe')) -or (Test-Path -LiteralPath $uninstallLog))) {
-                Start-Sleep -Milliseconds 500
-                break
-            }
+            $p.Refresh()
+            if (-not (Test-Path -LiteralPath (Join-Path $testDir 'unins000.exe')) -and $p.HasExited) { break }
             Start-Sleep -Milliseconds 250
         }
-        $uninstalled = (-not (Test-Path -LiteralPath (Join-Path $testDir 'unins000.exe'))) -or ($p.ExitCode -eq 0) -or ((Test-Path -LiteralPath $uninstallLog) -and ((Get-Content -LiteralPath $uninstallLog -Raw -ErrorAction SilentlyContinue) -match 'Uninstallation process succeeded'))
+        $uninstalled = -not (Test-Path -LiteralPath (Join-Path $testDir 'unins000.exe'))
+        # A still-running owned launcher must never overlap a retry.
+        if (-not $uninstalled -and -not $p.HasExited) { throw 'Owned uninstaller exceeded bounded completion; fixture retained.' }
         if ($uninstalled) { break }
         Start-Sleep -Seconds 2
     }
@@ -318,6 +332,7 @@ function Start-Process {
         Get-ChildItem -LiteralPath $dataDir -Filter 'qa-desktop.json.*' | Remove-Item -Force
     }
 }
+New-Item -ItemType Directory -Path $testRoot -ErrorAction Stop | Out-Null
 try {
     # Upgrade the protected previously published artifact before testing a true
     # clean install. This catches version/registration and old-shortcut changes.
@@ -399,7 +414,7 @@ try {
         Assert-Test (-not (Get-Process -Id $runtime.pid -ErrorAction SilentlyContinue)) 'Upgrade did not stop its previous owned server.'
         $nextVersion=(Get-ItemProperty -LiteralPath $registration).DisplayVersion
         Uninstall-TestCopy $true
-        Assert-Test ([IO.Path]::GetFullPath($testDir) -eq [IO.Path]::GetFullPath((Join-Path $repo 'packaging\test-install'))) 'Unsafe upgrade fixture cleanup.'
+        Assert-Test ([IO.Path]::GetFullPath($testDir) -eq [IO.Path]::GetFullPath((Join-Path $testRoot 'current'))) 'Unsafe upgrade fixture cleanup.'
         if(Test-Path -LiteralPath $testDir){Remove-Item -LiteralPath $testDir -Recurse -Force}
         Write-Output "PASS previous-published $previousVersion -> $nextVersion upgrade, stable HKCU registration, owned shutdown, application shortcut migration, PIN/preferences preservation and registered normal full uninstall"
     }
@@ -607,9 +622,17 @@ try {
     Write-Output 'PASS remote full removal erases secrets/settings, fresh reinstall generates new PIN/defaults, normal full removal shares the same cleanup; PawnIO/Tailscale never uninstalled'
 } catch {
     Write-Output ("Integration failure: " + $_.Exception.Message)
+    $configDiagnostic=Join-Path $dataDir 'config.json'
+    if(Test-Path -LiteralPath $configDiagnostic){
+        & node.exe -e "const fs=require('fs');const s=fs.lstatSync(process.argv[1]);console.log(JSON.stringify({fixtureConfig:true,regularFile:s.isFile(),redirected:s.isSymbolicLink(),links:s.nlink,bytes:s.size}));" $configDiagnostic
+    }
     foreach($name in @('server-state.json','server.instance.json','server-error.log')) {
         $diagnostic=Join-Path $dataDir $name
-        if(Test-Path -LiteralPath $diagnostic){Write-Output ("Fixture diagnostic: " + $name);Get-Content -LiteralPath $diagnostic -Tail 5 | Write-Output}
+        if(Test-Path -LiteralPath $diagnostic){
+            Write-Output ("Fixture diagnostic: " + $name)
+            if($name -eq 'server.instance.json') { $record=Get-Content -LiteralPath $diagnostic -Raw | ConvertFrom-Json; @{pid=$record.pid;tokenPresent=[bool]$record.token}|ConvertTo-Json -Compress|Write-Output }
+            else { Get-Content -LiteralPath $diagnostic -Tail 5 | Write-Output }
+        }
     }
     throw
 } finally {
@@ -622,12 +645,17 @@ try {
         if ($configBytes) { Assert-Test (Test-Path -LiteralPath (Join-Path $dataDir 'config.json')) 'Uninstall removed user configuration.' }
         Assert-Test (-not (Test-Path -LiteralPath $registration)) 'Uninstall registration remained.'
         # Only fixture files in the previously checked fixed test directory.
-        if ([IO.Path]::GetFullPath($testDir) -ne [IO.Path]::GetFullPath((Join-Path $repo 'packaging\test-install'))) { throw 'Unsafe test cleanup.' }
+        if ([IO.Path]::GetFullPath($testDir) -ne [IO.Path]::GetFullPath((Join-Path $testRoot 'current'))) { throw 'Unsafe test cleanup.' }
         Write-Output 'PASS isolated normal uninstall stops only its owned runtime, removes registration/shortcuts, retains user data; test fixture cleaned'
     }
     if (Test-Path -LiteralPath $testDir) {
         Assert-Test (-not (Test-Path -LiteralPath (Join-Path $appDir 'server.js'))) 'Cannot remove a live fixture.'
-        Assert-Test ([IO.Path]::GetFullPath($testDir) -eq [IO.Path]::GetFullPath((Join-Path $repo 'packaging\test-install'))) 'Unsafe fixture cleanup.'
+        Assert-Test ([IO.Path]::GetFullPath($testDir) -eq [IO.Path]::GetFullPath((Join-Path $testRoot 'current'))) 'Unsafe fixture cleanup.'
         Remove-Item -LiteralPath $testDir -Recurse -Force
+    }
+    if(Test-Path -LiteralPath $testRoot){
+        Assert-Test ($testRoot -eq [IO.Path]::GetFullPath((Join-Path $fixtureParent ('RovarinInstallerQA-'+$fixtureId)))) 'Unsafe fixture parent cleanup.'
+        Assert-Test (@(Get-ChildItem -LiteralPath $testRoot -Force).Count -eq 0) 'Unexpected fixture files retained for inspection.'
+        Remove-Item -LiteralPath $testRoot -Force -ErrorAction Stop
     }
 }

@@ -7,8 +7,8 @@ using System.Reflection;
 [assembly: AssemblyProduct("Rovarin")]
 [assembly: AssemblyDescription("Rovarin — Your PC in your pocket.")]
 [assembly: AssemblyCompany("Rovarin")]
-[assembly: AssemblyVersion("0.3.0.0")]
-[assembly: AssemblyFileVersion("0.3.0.0")]
+[assembly: AssemblyVersion("0.4.0.0")]
+[assembly: AssemblyFileVersion("0.4.0.0")]
 
 // Fixed Windows GUI entry point: no console, arbitrary commands or paths.
 internal static class RovarinLauncher

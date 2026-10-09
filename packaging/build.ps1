@@ -1,4 +1,4 @@
-param([switch]$PayloadOnly)
+param([switch]$PayloadOnly,[switch]$MaintenanceFoundation)
 $ErrorActionPreference = 'Stop'
 # npm may inherit PowerShell 7's module path; use Windows PowerShell's own
 # built-in modules for the Windows-only packaging toolchain.
@@ -29,9 +29,9 @@ if (Test-Path -LiteralPath $payload) { Remove-Item -LiteralPath $payload -Recurs
 $app = Join-Path $payload 'app'
 $runtime = Join-Path $payload 'runtime'
 New-Item -ItemType Directory -Force -Path $app,$runtime,(Join-Path $app 'scripts'),(Join-Path $app 'public'),(Join-Path $app 'vendor\PawnIO\2.2.0') | Out-Null
-$rootFiles = @('server.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','enhanced-support.js','uninstall-manager.js','update-manager.js','process-stats.js','maintenance.js','temperature-manager.js','cpu-temperature-provider.js','package.json','run_hidden.vbs','LICENSE')
+$rootFiles = @('server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js','update-manager.js','process-stats.js','maintenance.js','temperature-manager.js','cpu-temperature-provider.js','package.json','run_hidden.vbs','LICENSE')
 foreach ($name in $rootFiles) { Copy-Item -LiteralPath (Join-Path $repo $name) -Destination $app }
-$scripts = @('start.ps1','stop.ps1','desktop.ps1','desktop-host.ps1','native-trust.ps1','dashboard-runtime.ps1','installed-start.ps1','installed-desktop.ps1','setup.ps1','phone-qr.js','empty-recycle-bin.ps1','install-enhanced.ps1','installed-uninstall.ps1','installed-update.ps1','rebrand-migration.ps1','cpu-temperature-provider.ps1','terminate-process.ps1','process-tree.ps1','process-tree.cs','app-manager.ps1','app-uninstall.cs','app-metadata.cs','process-display.ps1','application-display.ps1')
+$scripts = @('start.ps1','stop.ps1','desktop.ps1','desktop-host.ps1','native-trust.ps1','native-startup.ps1','dashboard-runtime.ps1','installed-start.ps1','installed-desktop.ps1','setup.ps1','phone-qr.js','empty-recycle-bin.ps1','maintenance-elevated.cs','install-enhanced.ps1','installed-uninstall.ps1','installed-update.ps1','rebrand-migration.ps1','cpu-temperature-provider.ps1','terminate-process.ps1','process-tree.ps1','process-tree.cs','app-manager.ps1','app-leftovers.ps1','app-leftovers.cs','startup-tasks.ps1','app-uninstall.cs','app-metadata.cs','process-display.ps1','application-display.ps1')
 foreach ($name in $scripts) { Copy-Item -LiteralPath (Join-Path $repo "scripts\$name") -Destination (Join-Path $app 'scripts') }
 Copy-Item -LiteralPath (Join-Path $repo 'public') -Destination $app -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $repo 'vendor\LibreHardwareMonitor') -Destination (Join-Path $app 'vendor') -Recurse -Force
@@ -57,7 +57,31 @@ foreach ($name in @('Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.Wi
     if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') { throw 'WebView2 binary signature invalid.' }
 }
 & (Join-Path $PSScriptRoot 'create-icon.ps1') -Output (Join-Path $app 'Rovarin.ico')
-& $launcherCompiler /nologo /target:winexe /platform:x64 /optimize+ /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll "/r:$(Join-Path $app 'Microsoft.Web.WebView2.Core.dll')" "/r:$(Join-Path $app 'Microsoft.Web.WebView2.WinForms.dll')" "/win32manifest:$(Join-Path $PSScriptRoot 'desktop.manifest')" "/win32icon:$(Join-Path $app 'Rovarin.ico')" "/out:$(Join-Path $app 'Rovarin.exe')" (Join-Path $PSScriptRoot 'RovarinLauncher.cs') (Join-Path $PSScriptRoot 'DesktopShell.cs')
+$compiler = Join-Path $cache 'inno\ISCC.exe'
+if (-not (Test-Path -LiteralPath $compiler)) {
+    $inno = Verified-Binary 'inno-setup.exe' 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe' '0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f' 'Pyrsys B.V.'
+    $destination = Join-Path $cache 'inno'
+    $process = Start-Process -FilePath $inno -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/DIR=`"$destination`"",'/TASKS=' -WindowStyle Hidden -PassThru -Wait
+    if ($process.ExitCode -ne 0) { throw 'Inno Setup installation failed.' }
+}
+if ((Get-AuthenticodeSignature -LiteralPath $compiler).Status -ne 'Valid') { throw 'Compiler signature invalid.' }
+# Bundled by default. Normal setup/server remain per-user; no automatic activation.
+$serviceStage = Join-Path $env:TEMP ('rovarin-service-package-' + [Guid]::NewGuid().ToString('N'))
+try {
+    & (Join-Path $PSScriptRoot 'build-maintenance-service.ps1') -OutputDirectory $serviceStage -Installer
+    $setup = Join-Path $serviceStage 'RovarinMaintenanceSetup.exe'
+    if ((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant() -ne ([IO.File]::ReadAllText($setup+'.sha256')).Trim()) { throw 'Companion package integrity mismatch.' }
+    Copy-Item -LiteralPath $setup,($setup+'.sha256') -Destination $app
+    $maintenanceHash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+} finally {
+    if (Test-Path -LiteralPath $serviceStage) { Remove-Item -LiteralPath $serviceStage -Recurse -Force }
+}
+$shellSource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'DesktopShell.cs'))
+$hashAnchor = 'internal const string MaintenanceSetupHash = "";'
+if (-not $shellSource.Contains($hashAnchor)) { throw 'Maintenance installer binding anchor changed.' }
+$boundShell = Join-Path $cache 'DesktopShell.bound.cs'
+[IO.File]::WriteAllText($boundShell,$shellSource.Replace($hashAnchor,('internal const string MaintenanceSetupHash = "'+$maintenanceHash+'";')))
+& $launcherCompiler /nologo /target:winexe /platform:x64 /optimize+ /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll "/r:$(Join-Path $app 'Microsoft.Web.WebView2.Core.dll')" "/r:$(Join-Path $app 'Microsoft.Web.WebView2.WinForms.dll')" "/win32manifest:$(Join-Path $PSScriptRoot 'desktop.manifest')" "/win32icon:$(Join-Path $app 'Rovarin.ico')" "/out:$(Join-Path $app 'Rovarin.exe')" (Join-Path $PSScriptRoot 'RovarinLauncher.cs') $boundShell
 if ($LASTEXITCODE -ne 0) { throw 'Rovarin launcher compilation failed.' }
 [IO.File]::WriteAllText((Join-Path $app 'Rovarin.exe.config'), '<configuration><startup><supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.8" /></startup></configuration>')
 [IO.File]::WriteAllText((Join-Path $app 'installation.json'), '{"schema":1,"channel":"windows-x64","data":"../data"}')
@@ -90,14 +114,6 @@ Get-ChildItem -LiteralPath $payload -File -Recurse | Sort-Object FullName | ForE
 }
 [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'payload-manifest.json'), ($manifest | ConvertTo-Json -Depth 5))
 if ($PayloadOnly) { Write-Output 'Verified install payload built.'; return }
-$compiler = Join-Path $cache 'inno\ISCC.exe'
-if (-not (Test-Path -LiteralPath $compiler)) {
-    $inno = Verified-Binary 'inno-setup.exe' 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe' '0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f' 'Pyrsys B.V.'
-    $destination = Join-Path $cache 'inno'
-    $process = Start-Process -FilePath $inno -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/DIR=`"$destination`"",'/TASKS=' -WindowStyle Hidden -PassThru -Wait
-    if ($process.ExitCode -ne 0) { throw 'Inno Setup installation failed.' }
-}
-if ((Get-AuthenticodeSignature -LiteralPath $compiler).Status -ne 'Valid') { throw 'Compiler signature invalid.' }
 $tempOut = Join-Path $env:TEMP ('rovarin-build-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($tempOut) | Out-Null
 try {

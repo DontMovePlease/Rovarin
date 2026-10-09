@@ -11,8 +11,10 @@ const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const split = text => text.split('\0').filter(Boolean);
 const lines = text => text.trim().split(/\r?\n/).filter(Boolean);
 const PRIVATE = /(^|\/)(?:AGENTS\.md|PROJECT_STATUS\.md|THE-PLAN\.md|SECURITY\.md|CONTRIBUTING\.md|config\.json(?:\..*)?|temperature-settings\.json(?:\..*)?|desktop-trust\.bin|installation\.json|onboarding-complete\.json|server[^/]*\.(?:json|pid|log|lock)|uninstall-trust\.json)$|(?:^|\/)(?:dist|publish(?:-[^/]*)?|node_modules|pet-output|data|desktop-profile|\.git|\.codex|\.agents)(?:\/|$)|^packaging\/(?:cache|payload|test-install)(?:\/|$)|^packaging\/payload-manifest\.json$|\.(?:log|pid|lock|lnk|tmp|state)$/i;
+// Exact local VM/session tooling exclusions; never part of public source.
+const PRIVATE_TOOLS = new Set(["scripts/check-maint-status.ps1", "scripts/diagnose-service.ps1", "scripts/execute-crash-recovery-interactive.ps1", "scripts/execute-interrupted-install-interactive.ps1", "scripts/guest-install-rovarin.ps1", "scripts/guest-step-check.ps1", "scripts/guest-test-e2e-api.ps1", "scripts/guest-test-network-reset.ps1", "scripts/install-maintenance-interactive.ps1", "scripts/maintenance-release-vm-validation.ps1", "scripts/run-guest-cmd.ps1", "scripts/test-clean-install.ps1", "scripts/test-crash-recovery.ps1", "scripts/test-elevation.ps1", "scripts/test-mid-provisioning-interruption.ps1", "scripts/test-privileged-operations.ps1", "scripts/test-sfc-scan.ps1", "scripts/test-upgrade-scenario.ps1", "scripts/update-guest-service.ps1", "scripts/upload-maint-fixtures.ps1", "scripts/vm-control.ps1"]);
 function permitted(file) {
-  if (!file || file.includes('\\') || file.includes(':') || file.split('/').some(p => !p || p === '.' || p === '..') || PRIVATE.test(file)) return false;
+  if (!file || file.includes('\\') || file.includes(':') || file.split('/').some(p => !p || p === '.' || p === '..') || PRIVATE.test(file) || PRIVATE_TOOLS.has(file)) return false;
   if (/\.md$/i.test(file)) return file === 'README.md' || file === 'vendor/LibreHardwareMonitor/0.9.6/README.md';
   return /^[^/]+\.(?:js|bat|vbs)$/.test(file) || ['.gitignore','LICENSE','package.json'].includes(file) ||
     /^scripts\/[a-z0-9_-]+\.(?:js|ps1|cs|json)$/.test(file) || /^public\/[a-z0-9-]+\.(?:html|css|js)$/.test(file) ||
@@ -358,8 +360,25 @@ class Manager {
     const metadataKeys = ['version','builtAt','verifiedAt','sha256','payloadManifestSha256','signing','suites'];
     if (Object.keys(receipt).sort().join('|') !== metadataKeys.sort().join('|') || receipt.signing !== 'unsigned' || !Number.isFinite(Date.parse(receipt.builtAt)) || !Number.isFinite(Date.parse(receipt.verifiedAt))) throw new Error('Unexpected release metadata. Only the existing secret-free schema may be uploaded.');
     this.scan('README.md',Buffer.from(JSON.stringify(receipt)),this.secrets());
+    this.verifyBuildSource();
     if (receipt.version !== version || build.version !== version || receipt.sha256 !== actual || build.sha256 !== actual || build.payloadManifestSha256 !== receipt.payloadManifestSha256 || hash(fs.readFileSync(plain(this.root,'dist/RovarinSetup.exe'))) !== actual || fs.readFileSync(assets[1],'utf8').trim() !== `${actual}  RovarinSetup.exe` || receipt.payloadManifestSha256 !== hash(fs.readFileSync(plain(this.root,'packaging/payload-manifest.json'))) || !Array.isArray(receipt.suites) || receipt.suites.join('|') !== [...SUITES,'installer-integration'].join('|')) throw new Error('Version, checksum or verified build metadata mismatch. Release aborted.');
     return {assets,sha256:actual};
+  }
+  verifyBuildSource() {
+    const {digest} = require('./release-verify');
+    const build = JSON.parse(fs.readFileSync(plain(this.root,'dist/build.json'),'utf8'));
+    const manifest = JSON.parse(fs.readFileSync(plain(this.root,'packaging/payload-manifest.json'),'utf8'));
+    const inputs = ['packaging/build.ps1','packaging/Rovarin.iss','packaging/RovarinLauncher.cs','packaging/DesktopShell.cs','packaging/desktop.manifest','packaging/create-icon.ps1'];
+    if (!Array.isArray(build.inputs) || build.inputs.length !== inputs.length || new Set(build.inputs.map(i=>i.path)).size !== inputs.length || build.inputs.some(i=>!inputs.includes(i.path) || digest(plain(this.root,i.path)) !== i.sha256)) throw new Error('Installer source changed; rebuild and verify before publication.');
+    if (!Array.isArray(manifest.files) || !manifest.files.length) throw new Error('Invalid payload manifest.');
+    for (const entry of manifest.files) {
+      if (typeof entry.path !== 'string' || entry.path.split('/').some(p=>!p || p==='.' || p==='..') || entry.path.includes('\\') || entry.path.includes(':')) throw new Error('Invalid payload path.');
+      if (digest(plain(this.root,'packaging/payload/'+entry.path)) !== entry.sha256) throw new Error('Payload changed; rebuild and verify before publication.');
+      if (!entry.path.startsWith('app/')) continue;
+      const relative=entry.path.slice(4), source=['desktop.vbs','startup.vbs','startup-disable.vbs'].includes(relative)?'packaging/'+relative:relative;
+      const full=plain(this.root,source,true);
+      if (fs.existsSync(full) && digest(full)!==entry.sha256) throw new Error('Source differs from verified payload: '+source);
+    }
   }
   async operate(action,options) {
     if (options.confirm !== true) throw new Error('Explicit confirmation is required. Use DryRun to preview safely.');
@@ -372,6 +391,12 @@ class Manager {
     const confirmedSource = await this.source();
     if (confirmedSource.fingerprint !== plan.fingerprint) throw new Error('Source changed while checking GitHub. Review a new plan first.');
     if (action === 'Save') return this.commitAndPush(confirmedSource,(options.message || 'Save Rovarin source').slice(0,300));
+    if (options.verifiedSha256) {
+      if (!/^[a-f0-9]{64}$/.test(options.verifiedSha256) || plan.version !== this.version().version) throw new Error('Invalid verified candidate request.');
+      const candidate = this.verifyAssets(plan.version);
+      if (candidate.sha256 !== options.verifiedSha256) throw new Error('Verified candidate checksum changed. Nothing will be published.');
+      this.note('Resuming the exact previously verified installer; existing receipt and current build-source checks passed.');
+    } else {
     this.note('Updating package.json and installer AppVersion. A failed build keeps this editable version locally; it never creates a GitHub release.');
     this.synchronize(plan.version);
     const source = await this.source();
@@ -382,7 +407,11 @@ class Manager {
     this.note('Running the existing complete release gate. No tag/release/upload occurs before it passes.');
     await this.run(process.execPath,['scripts/release-verify.js'],this.root,45*60*1000);
     if ((await this.source()).fingerprint !== source.fingerprint) throw new Error('Source changed during build/verification. Nothing was pushed or tagged.');
+    }
+    const source = options.verifiedSha256 ? confirmedSource : await this.source();
+    if ((await this.source()).fingerprint !== source.fingerprint) throw new Error('Source changed before final publication review.');
     const verified = this.verifyAssets(plan.version);
+    if (options.verifiedSha256 && verified.sha256 !== options.verifiedSha256) throw new Error('Candidate changed before publication.');
     const summary = {version:plan.version,tag:plan.tag,branch:plan.branch,repository:TARGET,
       prerelease:plan.prerelease,changes:await this.differences(source),
       installer:verified.assets[0],sha256:verified.sha256};
@@ -403,7 +432,14 @@ class Manager {
     if (options.note) args.push('--notes',String(options.note).slice(0,3000));
     await this.run('gh',args,this.root);
     await this.run('gh',['release','upload',plan.tag,...verified.assets,'--repo','DontMovePlease/Rovarin'],this.root,180000);
-    const inspect = async () => JSON.parse(await this.run('gh',['api',`repos/DontMovePlease/Rovarin/releases/tags/${plan.tag}`],this.root));
+    const inspect = async () => {
+      try {
+        const all = JSON.parse(await this.run('gh',['api','repos/DontMovePlease/Rovarin/releases'],this.root));
+        const found = Array.isArray(all) ? all.find(r => r.tag_name === plan.tag) : null;
+        if (found) return found;
+      } catch (_) {}
+      return JSON.parse(await this.run('gh',['api',`repos/DontMovePlease/Rovarin/releases/tags/${plan.tag}`],this.root));
+    };
     let release = await inspect();
     const assets = release.assets.map(a=>a.name).sort();
     if (release.tag_name !== plan.tag || !release.draft || assets.join('|') !== plan.assets.slice().sort().join('|')) throw new Error('Draft asset verification failed. The draft was not published; review it on GitHub.');
@@ -443,10 +479,11 @@ async function dispatch(root,options,emit,approvePublish) {
     const tools = new (require('./release-manager-tools').Tools)(root,execute);
     return tools.status(options.mode === 'ToolUpdates');
   }
+  if (options.mode === 'Downloads') return new (require('./release-downloads').Downloads)(root,execute).refresh();
   if (options.mode === 'Status') return manager.status();
   if (options.mode === 'History') return manager.history();
   if (options.mode === 'Plan' || options.mode === 'DryRun') return manager.plan(options.action || 'Publish',options,options.mode === 'DryRun');
-  if (!['Save','Publish','Restore','Checkpoint','UpdateTool','UpdateTools'].includes(options.mode)) throw new Error('Choose Status, History, Save, Publish, Restore, DryRun or Developer Tools.');
+  if (!['Save','Publish','PublishVerified','Restore','Checkpoint','UpdateTool','UpdateTools'].includes(options.mode)) throw new Error('Choose Status, History, Save, Publish, Restore, DryRun or Developer Tools.');
   const cache = path.join(root,'packaging/cache'); fs.mkdirSync(cache,{recursive:true}); plain(root,'packaging/cache');
   const lock = path.join(cache,'release-manager.lock'); let fd;
   try { fd = fs.openSync(lock,'wx'); } catch { throw new Error('Another manager operation may be running. Do not delete its lock until its process has been confirmed stopped.'); }
@@ -454,7 +491,8 @@ async function dispatch(root,options,emit,approvePublish) {
   try {
     if(options.mode==='UpdateTool')return await new (require('./release-manager-tools').Tools)(root,execute).update(options);
     if(options.mode==='UpdateTools')return await new (require('./release-manager-tools').Tools)(root,execute).updateAll(options,emit);
-    return await manager.operate(options.mode,options);
+    if (options.mode === 'PublishVerified' && !options.verifiedSha256) throw new Error('Exact verified installer checksum is required.');
+    return await manager.operate(options.mode === 'PublishVerified' ? 'Publish' : options.mode,options);
   }
   finally { fs.closeSync(fd); fs.unlinkSync(lock); }
 }

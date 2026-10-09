@@ -42,3 +42,26 @@ desktop-trust.bin
 # Non-secret local developer storage policy; never ship/publish it.
 .rovarin-development-state.json
 .rovarin-development-state.json.tmp
+
+# Private VM/session diagnostics: retained locally, excluded from publication.
+scripts/check-maint-status.ps1
+scripts/diagnose-service.ps1
+scripts/execute-crash-recovery-interactive.ps1
+scripts/execute-interrupted-install-interactive.ps1
+scripts/guest-install-rovarin.ps1
+scripts/guest-step-check.ps1
+scripts/guest-test-e2e-api.ps1
+scripts/guest-test-network-reset.ps1
+scripts/install-maintenance-interactive.ps1
+scripts/maintenance-release-vm-validation.ps1
+scripts/run-guest-cmd.ps1
+scripts/test-clean-install.ps1
+scripts/test-crash-recovery.ps1
+scripts/test-elevation.ps1
+scripts/test-mid-provisioning-interruption.ps1
+scripts/test-privileged-operations.ps1
+scripts/test-sfc-scan.ps1
+scripts/test-upgrade-scenario.ps1
+scripts/update-guest-service.ps1
+scripts/upload-maint-fixtures.ps1
+scripts/vm-control.ps1

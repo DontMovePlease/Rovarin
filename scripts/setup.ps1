@@ -31,7 +31,8 @@ function Get-PhoneSetupState($Report, [int]$Port) {
 }
 $appDir = Split-Path -Parent $PSScriptRoot
 $installed = Test-Path -LiteralPath (Join-Path $appDir 'installation.json')
-$dataDir = if ($installed) { Join-Path (Split-Path -Parent $appDir) 'data' } else { $appDir }
+. (Join-Path $PSScriptRoot 'dashboard-runtime.ps1')
+$dataDir = Get-RovarinDataDirectory $appDir
 $onboardingLock = $null
 function Complete-LocalOnboarding {
     [IO.File]::WriteAllText((Join-Path $dataDir 'onboarding-complete.json'), '{"completed":true}', (New-Object Text.UTF8Encoding($false)))
@@ -195,7 +196,27 @@ $pinField.Font=New-Object Drawing.Font('Segoe UI',22)
 $pinField.Dock='Top'; $pinField.Margin=New-Object Windows.Forms.Padding(0,0,16,0)
 $pinField.BackColor=$surface; $pinField.ForeColor=$foreground; $pinField.BorderStyle='FixedSingle'
 $copy = New-SetupButton 'Copy PIN'
-$copy.Add_Click({ [Windows.Forms.Clipboard]::SetText($pin); $copy.Text='Copied' })
+# Refresh only from the canonical, safety-validated local configuration.
+# Never copy a PIN cached by a long-lived Recovery window.
+function Update-SetupPin {
+    try {
+        $freshPin = & $node -e "const p=require(process.argv[1]);process.stdout.write(p.readConfig(p.configurationFile()).pin)" (Join-Path $appDir 'pin-manager.js')
+        if ($LASTEXITCODE -ne 0 -or $freshPin -cnotmatch '^(\d{6}|\d{12})$') { throw 'Saved PIN unavailable.' }
+        $script:pin = [string]$freshPin
+        $pinField.Text = if ($pin.Length -eq 6) { $pin -replace '(\d{3})(\d{3})','$1 $2' } else { $pin -replace '(\d{4})(\d{4})(\d{4})','$1 $2 $3' }
+        $copy.Enabled=$true; $copy.Text='Copy PIN'
+        $pinHint.Text='Your Rovarin PIN signs you in on this PC and other devices. Keep it private.'
+        return $true
+    } catch {
+        $script:pin=$null; $pinField.Text=''; $copy.Enabled=$false
+        $pinHint.Text='The saved PIN is unavailable. No PIN was reset. Reopen Recovery after resolving the local configuration problem.'
+        return $false
+    }
+}
+$copy.Add_Click({
+    if (-not (Update-SetupPin)) { return }
+    [Windows.Forms.Clipboard]::SetText($script:pin); $copy.Text='Copied'
+})
 $pinRow.Controls.Add($pinField,0,0); $pinRow.Controls.Add($copy,1,0); Add-SetupRow $pinRow
 $regenerate = New-SetupButton 'Generate New PIN'
 $regenerate.Add_Click({
@@ -203,8 +224,7 @@ $regenerate.Add_Click({
     try {
         & $node (Join-Path $appDir 'pin-manager.js') --regenerate | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'PIN regeneration failed.' }
-        $script:pin = (Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json).pin
-        $pinField.Text = $pin -replace '(\d{3})(\d{3})','$1 $2'; $copy.Text='Copy PIN'
+        if (-not (Update-SetupPin)) { throw 'Updated PIN unavailable.' }
     } catch { [Windows.Forms.MessageBox]::Show('Could not update the PIN. Check the local saved configuration.', 'PIN update failed') | Out-Null }
 })
 $temp = $report.checks | Where-Object id -eq 'cpu-temperature' | Select-Object -First 1
@@ -270,7 +290,8 @@ $recheck.Add_Click({
 })
 Update-PhoneSetup
 $body.Add_Resize({Update-SetupLayout})
-$form.Add_Shown({Update-SetupLayout; $form.BringToFront(); $form.Activate()})
+$form.Add_Activated({ [void](Update-SetupPin) })
+$form.Add_Shown({ [void](Update-SetupPin); Update-SetupLayout; $form.BringToFront(); $form.Activate()})
 $form.Add_FormClosing({Complete-LocalOnboarding})
 try {$form.ShowDialog() | Out-Null}
 finally {if($qrBox.Image){$qrBox.Image.Dispose()};$form.Dispose();if($onboardingLock){$onboardingLock.Dispose()}}

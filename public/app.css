@@ -541,6 +541,7 @@ body {
   display: block;
   cursor: crosshair;
   outline: none;
+  touch-action: pan-y;
 }
 
 .sparkline-canvas:focus-visible {
@@ -1112,9 +1113,11 @@ body {
 @media (max-width: 599px) {
   #dashboardPage .overview-hardware-card .detail-chips-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
   #dashboardPage .overview-hardware-card .detail-chip:last-child:nth-child(3) { grid-column: 1 / -1; }
-  #dashboardPage .core-bar-track { height: 18px; }
-  .processes-page { display: flex; flex-direction: column; height: calc(100dvh - 136px); min-height: 440px; }
-  .processes-table-wrap { flex: 1; min-height: 120px; overflow: auto; }
+  .native-shell .processes-page { display: flex; flex-direction: column; height: calc(100dvh - 136px); min-height: 440px; }
+  .native-shell .processes-table-wrap { flex: 1; min-height: 120px; overflow: auto; }
+  html:not(.native-shell) .processes-page { display: flex; flex-direction: column; height: auto; min-height: 0; }
+  html:not(.native-shell) .processes-table-wrap { flex: none; min-height: 0; max-height: none; overflow-x: auto; overflow-y: visible; touch-action: pan-x pan-y; -webkit-overflow-scrolling: touch; }
+  html:not(.native-shell) .processes-table { touch-action: pan-x pan-y; }
   .processes-kill { min-height: 44px; }
 }
 /* Pair CPU controls/plots within its overview card to avoid a tall first row. */
@@ -1152,6 +1155,7 @@ body.sidebar-expanded { --sidebar-width: 176px; }
 #securitySettingsPanel p { color: #a9b6c9; font-size: 13px; line-height: 1.5; }
 .desktop-pin-toggle { display: flex; align-items: center; gap: 9px; min-height: 44px; cursor: pointer; }
 .desktop-pin-toggle input { width: 20px; height: 20px; }
+#adminMaintenanceLabel[aria-disabled="true"] { cursor: default; }
 .native-shell .processes-page { height: calc(100dvh - 56px); }
 @media (max-width: 699px) {
   body, .native-shell body { --sidebar-width: 0px; }
@@ -1198,18 +1202,17 @@ body.sidebar-expanded { --sidebar-width: 176px; }
     display: block;
     min-height: 100%;
     min-height: 100dvh;
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow-x: clip;
+    overflow-y: visible;
     padding: 0;
     background-color: var(--chrome-background);
     background-image: none;
     background-attachment: scroll;
+    touch-action: pan-y;
     -webkit-overflow-scrolling: touch;
   }
-  html:not(.native-shell) body.sidebar-expanded,
-  html:not(.native-shell) body.phone-drawer-dragging {
-    overflow: hidden;
-  }
+  html:not(.native-shell) { overflow-x: clip; }
+  html:not(.native-shell).phone-navigation-locked { overflow: hidden; overscroll-behavior: none; }
   .native-shell body {
     display: flex;
     flex-direction: column;
@@ -1256,7 +1259,7 @@ body.sidebar-expanded { --sidebar-width: 176px; }
   }
 }
 /* One moving phone surface; desktop retains its existing native chrome. */
-.phone-page-surface { display: contents; }
+.phone-page-surface, .phone-header { display: contents; }
 .sidebar-phone-brand { display: none; }
 @media (max-width: 699px) {
   html:not(.native-shell) body {
@@ -1273,11 +1276,19 @@ body.sidebar-expanded { --sidebar-width: 176px; }
     display: block; position: relative; z-index: 45;
     width: 100%; min-height: 100%; min-height: 100dvh; height: auto;
     box-sizing: border-box;
-    padding-top: var(--app-safe-top); background: var(--chrome-background);
+    padding-top: 0; background: var(--chrome-background);
+    touch-action: pan-y;
     transform: translate3d(var(--phone-drawer-offset), 0, 0);
     transition: transform .34s cubic-bezier(.22,1,.36,1), border-radius .34s ease, box-shadow .34s ease;
   }
-  html:not(.native-shell) body:not(.sidebar-expanded):not(.phone-drawer-dragging) .phone-page-surface { transform: none; }
+  /* The real header owns the safe area, so its background never scrolls away
+     from the sticky controls. It shares the page's single horizontal transform. */
+  html:not(.native-shell) .phone-header {
+    display: flow-root; position: sticky; top: 0; z-index: 50;
+    padding-top: var(--app-safe-top); background: var(--chrome-background);
+    border-top-left-radius: inherit;
+  }
+  /* Preserve the same containing block when closed, dragging and open. */
   html:not(.native-shell) .sidebar-expanded .phone-page-surface { border-radius: 22px 0 0 22px; box-shadow: -12px 0 32px #0005; }
   html:not(.native-shell) .dashboard-container {
     height: auto;
@@ -1291,10 +1302,14 @@ body.sidebar-expanded { --sidebar-width: 176px; }
     background: transparent;
     padding-inline: max(8px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-right));
     border-radius: inherit;
+    touch-action: pan-y;
     transition: none;
   }
+  html:not(.native-shell) .app-page {
+    touch-action: pan-y;
+  }
   html:not(.native-shell) .native-app-bar {
-    position: sticky; top: 8px; left: auto; right: auto;
+    position: relative; top: auto; left: auto; right: auto;
     z-index: 50; width: auto; height: 60px;
     margin: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
     padding: 5px; gap: 14px;
@@ -1318,12 +1333,13 @@ body.sidebar-expanded { --sidebar-width: 176px; }
   html:not(.native-shell) .phone-drawer-dragging .app-sidebar { visibility: visible; transition-delay: 0s; }
   html:not(.native-shell) .sidebar-phone-brand { display: block; font-size: 22px; font-weight: 700; padding: 12px 10px 20px; }
   html:not(.native-shell) .app-sidebar .page-nav-button { min-height: 48px; border-radius: 12px; }
-  html:not(.native-shell) .sidebar-backdrop { inset: 0; z-index: 46; background: #0004; opacity: var(--phone-drawer-progress); transition: opacity .34s ease, visibility 0s .34s; }
+  html:not(.native-shell) .sidebar-backdrop { inset: 0; z-index: 46; background: #0004; opacity: var(--phone-drawer-progress); transform: translate3d(var(--phone-drawer-offset), 0, 0); transition: transform .34s cubic-bezier(.22,1,.36,1), opacity .34s cubic-bezier(.22,1,.36,1), visibility 0s .34s; }
   html:not(.native-shell) .phone-drawer-dragging .sidebar-backdrop { visibility: visible; pointer-events: none; }
+  html:not(.native-shell) .app-sidebar.page-nav { overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; }
   html:not(.native-shell) .phone-drawer-dragging .phone-page-surface,
   html:not(.native-shell) .phone-drawer-dragging .sidebar-backdrop { transition: none; }
 }
-@media (prefers-reduced-motion: reduce) { .phone-page-surface, .sidebar-toggle { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { .phone-page-surface, .sidebar-toggle, .sidebar-backdrop, .app-sidebar { transition: none !important; } }
 /* Midnight Glass: solid information, bounded glass controls, one shared palette. */
 body {
   background-color: var(--bg-canvas-deep);
@@ -1428,9 +1444,8 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .mobile-onboarding-dialog { width: calc(100vw - 20px); margin: auto auto max(12px, env(safe-area-inset-bottom)); }
   .mobile-onboarding-sheet { max-height: calc(100dvh - 36px); padding-bottom: max(18px, env(safe-area-inset-bottom)); }
   .mobile-onboarding-dismiss { min-height: 48px; }
-  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-    html:not(.native-shell) .native-app-bar { background: var(--surface-glass); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
-  }
+  /* Moving sticky phone chrome uses the existing dark material, without a
+     second backdrop-filter sampling/compositing boundary during swipes. */
 }
 @media (max-width: 359px) {
   #dashboardPage .metrics-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "cpu" "gpu" "ram" "storage" "network"; }

@@ -8,6 +8,31 @@ $result = @{ exitCode = -1; failureCode='package-unavailable'; completedAt = [Da
 $child = $null
 $handle = $null
 $operationLock = $null
+function Test-EnhancedAlreadyInstalled {
+    # A duplicate installer exit is not success. Reuse only a verified exact
+    # supported installation; ambiguous/old/tampered registrations still install.
+    try {
+        $entry = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO' -ErrorAction Stop
+        $directory = [IO.Path]::GetFullPath(([string]$entry.InstallLocation).TrimEnd('\'))
+        if ($entry.DisplayVersion -ne '2.2.0.0' -or $directory -ine (Join-Path $env:ProgramFiles 'PawnIO')) { return $false }
+        $service = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\PawnIO' -ErrorAction Stop
+        if ($service.Type -ne 1 -or $service.Start -ne 3) { return $false }
+        $driver = [IO.Path]::GetFullPath(([string]$service.ImagePath -replace '^\\SystemRoot\\',($env:SystemRoot+'\')))
+        $driverRoot = Join-Path $env:SystemRoot 'System32\DriverStore\FileRepository'
+        if (-not $driver.StartsWith($driverRoot+'\',[StringComparison]::OrdinalIgnoreCase) -or $driver -notmatch '\\pawnio\.inf_[^\\]+\\PawnIO\.sys$') { return $false }
+        foreach ($file in @((Join-Path $directory 'PawnIOLib.dll'),$driver)) {
+            for ($cursor=$file;$cursor;$cursor=[IO.Path]::GetDirectoryName($cursor)) {
+                if ((Get-Item -LiteralPath $cursor -Force -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+            }
+            $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($file)
+            if ($version.FileMajorPart -ne 2 -or $version.FileMinorPart -ne 2 -or $version.FileBuildPart -ne 0 -or $version.FilePrivatePart -ne 0) { return $false }
+            $signature = Get-AuthenticodeSignature -LiteralPath $file -ErrorAction Stop
+            $publisher = if ($file -eq $driver) { 'CN=Microsoft Windows Hardware Compatibility Publisher,' } else { 'CN=namazso.eu,' }
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch [regex]::Escape($publisher)) { return $false }
+        }
+        return $true
+    } catch { return $false }
+}
 try {
     [IO.Directory]::CreateDirectory($dataDir) | Out-Null
     $operationLock = [IO.File]::Open((Join-Path $dataDir 'enhanced-install.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
@@ -28,16 +53,21 @@ try {
         $bootMilliseconds = ([DateTimeOffset]$boot).ToUnixTimeMilliseconds()
         if ($previous.exitCode -eq 1460 -and $bootMilliseconds -le $previous.completedAt) { $result.exitCode = 1460; throw 'Previous installation unconfirmed; restart Windows before retrying.' }
     }
-    # A crash during UAC/install leaves a persistent unconfirmed result instead
-    # of permitting repeated privileged installers after a server restart.
-    $pending = @{exitCode=1460;completedAt=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()}
-    [IO.File]::WriteAllText($record, ($pending | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding($false)))
-    # These exact flags select the normal signed edition. Never -unrestricted.
-    $child = Start-Process -FilePath $installer -ArgumentList '-install', '-silent' -Verb RunAs -PassThru -ErrorAction Stop
-    $result.exitCode = 1460
-    if (-not $child.WaitForExit(240000)) { $result.exitCode = 1460; throw 'Installation result unconfirmed; inspect Windows before retrying.' }
-    $result.exitCode = if ($null -ne $child.ExitCode) { [int]$child.ExitCode } else { 1460 }
-    $result.failureCode='install-failed'
+    if (Test-EnhancedAlreadyInstalled) {
+        $result.exitCode=0; $result.failureCode='already-installed'
+    } else {
+        $result.failureCode='launch-failed'
+        # A crash during UAC/install leaves a persistent unconfirmed result instead
+        # of permitting repeated privileged installers after a server restart.
+        $pending = @{exitCode=1460;completedAt=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()}
+        [IO.File]::WriteAllText($record, ($pending | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding($false)))
+        # These exact flags select the normal signed edition. Never -unrestricted.
+        $child = Start-Process -FilePath $installer -ArgumentList '-install', '-silent' -Verb RunAs -PassThru -ErrorAction Stop
+        $result.exitCode = 1460
+        if (-not $child.WaitForExit(240000)) { $result.exitCode = 1460; throw 'Installation result unconfirmed; inspect Windows before retrying.' }
+        $result.exitCode = if ($null -ne $child.ExitCode) { [int]$child.ExitCode } else { 1460 }
+        $result.failureCode='install-failed'
+    }
 } catch {
     $native = $_.Exception
     while ($native.InnerException) { $native = $native.InnerException }
@@ -51,7 +81,8 @@ try {
     [IO.File]::WriteAllText($record, ($result | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding($false)))
 } catch { } finally { if ($operationLock) { $operationLock.Dispose() } }
 function Get-EnhancedInstallMessage($result) {
-    $message = if ($result.exitCode -eq 0) { 'Enhanced hardware support installer completed successfully. CPU sensor availability is checked separately in the dashboard; virtual machines may have no compatible sensor. Rovarin is ready to use.' }
+    $message = if ($result.exitCode -eq 0 -and $result.failureCode -eq 'already-installed') { 'Verified Enhanced hardware support is already installed. CPU sensor availability is checked separately; virtual machines may have no compatible sensor. Rovarin is ready to use.' }
+      elseif ($result.exitCode -eq 0) { 'Enhanced hardware support installer completed successfully. CPU sensor availability is checked separately in the dashboard; virtual machines may have no compatible sensor. Rovarin is ready to use.' }
       elseif ($result.exitCode -in @(3010,1641)) { 'Enhanced hardware support was installed. Restart Windows to finish setup. Rovarin remains usable now.' }
       elseif ($result.exitCode -in @(1223,1602)) { 'Enhanced installation was cancelled. Rovarin remains usable without CPU temperature.' }
       elseif ($result.exitCode -eq 1460) { 'The Enhanced installer has not returned a confirmed result. Check Windows; restart Windows before retrying. Rovarin remains usable.' }
@@ -61,7 +92,7 @@ function Get-EnhancedInstallMessage($result) {
       else { 'Enhanced hardware support installation failed (installer exit ' + $result.exitCode + '). Rovarin remains usable without CPU temperature.' }
     return $message
 }
-if ($Notify) {
+if ($Notify -and $result.failureCode -ne 'already-installed') {
     Add-Type -AssemblyName System.Windows.Forms
     [Windows.Forms.MessageBox]::Show((Get-EnhancedInstallMessage $result), 'Rovarin - Enhanced Support') | Out-Null
 }

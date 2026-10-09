@@ -319,6 +319,8 @@ async function main() {
   // helper/server. Hashes bind the exception to the entire inspected deny-list/owned-
   // process condition; any changed or additional legacy text still fails.
   const compatibilityGuardLines = {
+  "app/scripts/app-leftovers.cs": ["b432d234de8d5a8df1cfb4d5f1917b88a4330191e794165afc8a7c33bf07f8a7"],
+  "app/leftover-manager.js": ["6e330604dd39645f0d988af04077306626ca7d9f5c431c58d1b22f98c6610740"],
   "app/scripts/terminate-process.ps1": ["4d4d3a970c1804ff016cd339820096110ffd1fa207fa51c18fe970b424a1616b"],
   "app/server.js": ["a6f79e93bd4b701e8c215ca933b55b1e388595b39d4e6d8525b7fd9ce305bd08"],
   "app/scripts/app-manager.ps1": [
@@ -346,8 +348,10 @@ async function main() {
   for (const asset of ASSETS) assert(files.includes('app/vendor/LibreHardwareMonitor/0.9.6/' + asset));
   for (const file of ['LICENSE', 'THIRD-PARTY-NOTICES.txt', 'licenses/PawnIO.Modules.txt', 'source/LibreHardwareMonitor.zip']) assert(files.includes('app/vendor/LibreHardwareMonitor/0.9.6/' + file));
   assert(!files.some(file => /(?:config\.json|temperature-settings|server\.pid|server-state|server\.instance|\.log$|node_modules|smoke-test|pet-output|AGENTS\.md|PROJECT_STATUS\.md|THE-PLAN\.md)/.test(file)));
-  for (const file of ['pin-manager.js','process-termination.js', 'app-manager.js','scripts/terminate-process.ps1']) assert(files.includes('app/' + file));
-  const developmentPin = fs.existsSync(path.join(root, 'config.json')) ? JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8')).pin : null;
+  for (const file of ['pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','scripts/app-leftovers.ps1','scripts/app-leftovers.cs','public/app-leftovers.js','scripts/terminate-process.ps1']) assert(files.includes('app/' + file));
+  const pins = require('../pin-manager');
+  const developmentConfig = pins.configurationFile(root);
+  const developmentPin = fs.existsSync(developmentConfig) ? pins.readConfig(developmentConfig).pin : null;
   const privateAddresses = Object.values(os.networkInterfaces()).flat().filter(Boolean).map(info => info.address).filter(address => /^100\./.test(address));
   for (const file of manifest.files) {
     const contents = fs.readFileSync(path.join(payload, file.path));
@@ -372,6 +376,8 @@ async function main() {
   assert.match(iss, /Name: "desktopPin";[^\r\n]*Flags: checkedonce; Check: FreshDesktopPreference/);
   assert(iss.includes('if not ExistingConfiguration then begin') && iss.includes('Passwordless desktop requires interactive confirmation.'));
   assert(files.includes('app/scripts/native-trust.ps1'), 'native-only DPAPI helper must ship');
+  assert(files.includes('app/scripts/native-startup.ps1'), 'fixed native startup helper must ship');
+  assert(!files.includes('app/scripts/migrate-development-state.ps1') && !files.includes('app/scripts/development-start.ps1'), 'developer migration/launcher never ship');
   assert(!files.some(file => /desktop-trust\.bin$/.test(file)), 'no recipient credential in payload');
   assert(!iss.includes('Tasks: desktopicon'), 'desktop shortcut is unconditional');
   assert.strictEqual((iss.match(/Name: "\{autodesktop\}\\Rovarin"/g) || []).length, 1);
@@ -440,7 +446,8 @@ async function main() {
   assert(files.includes('app/vendor/QRCode/1.8.0/NOTICE.txt'));
   assert(!/fetch\(|require\(['"]https?['"]\)|createConnection\(|\.connect\(/.test(fs.readFileSync(path.join(root,'scripts/phone-qr.js'),'utf8')), 'QR helper has no network request mechanism');
   assert(setupSource.includes('$form.Add_FormClosing({Complete-LocalOnboarding})'));
-  assert(setupSource.includes('[Windows.Forms.Clipboard]::SetText($pin)'));
+  assert(setupSource.includes('[Windows.Forms.Clipboard]::SetText($script:pin)'), 'Copy uses the refreshed canonical PIN');
+  assert(/\$copy\.Add_Click\(\{\s*if \(\-not \(Update-SetupPin\)\) \{ return \}\s*\[Windows\.Forms\.Clipboard\]::SetText\(\$script:pin\)/.test(setupSource), 'Copy must refresh successfully before accessing the clipboard');
   assert(fs.readFileSync(path.join(root,'scripts/installed-desktop.ps1'),'utf8').includes("'setup.ps1') -Automatic"));
   assert(iss.includes('ExistingOnboarding') && iss.includes('onboarding-complete.json'));
   console.log('PASS locally decoded exact URL-only QR, fallback port, invalid/secret URL rejection, pinned MIT encoder and one-time local Setup wiring');
@@ -592,7 +599,7 @@ async function main() {
     console.log('PASS payload hashes/licenses/no secrets, signed production package selection, fixed UAC flags, local address enforcement, result mapping and in-flight guard');
     // Isolated installed structure, random port, no startup/driver changes.
     const app = path.join(temp, 'app'); fs.mkdirSync(app);
-    for (const name of ['server.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','cpu-temperature-provider.js','temperature-manager.js','maintenance.js','process-stats.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(app,name));
+    for (const name of ['server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','cpu-temperature-provider.js','temperature-manager.js','maintenance.js','process-stats.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(app,name));
     fs.writeFileSync(path.join(app,'installation.json'),'{}');
     let output = '', base;
     child = spawn(process.execPath, [path.join(app,'server.js')], {cwd:app, env:{...process.env,PORT:'0',PC_MONITOR_PIN:''},windowsHide:true,stdio:['ignore','pipe','pipe']});
@@ -646,4 +653,43 @@ async function main() {
     await removeOwnedFixture(temp);
   }
 }
-(process.argv[2]==='--migration-only' ? testMigrationPreflight() : main().then(testPackagedRuntime).then(()=>require('./native-desktop-test')(__dirname.replace(/[\\/]scripts$/,''),payload))).catch(error=>{console.error(error);process.exitCode=1;});
+async function testEnhancedExisting() {
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'rovarin-enhanced-existing-'));
+  try {
+    const code=path.join(temp,'fixture.cs'),binary=path.join(temp,'versioned.dll');
+    fs.writeFileSync(code,'using System.Reflection;[assembly:AssemblyFileVersion("2.2.0.0")] public class Fixture {}');
+    execFileSync(path.join(process.env.SystemRoot,'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),['/nologo','/target:library','/out:'+binary,code],{windowsHide:true,stdio:'pipe'});
+    const directory=path.join(temp,'PawnIO'),driver=path.join(temp,'System32/DriverStore/FileRepository/pawnio.inf_fixture/PawnIO.sys');
+    fs.mkdirSync(directory,{recursive:true});fs.mkdirSync(path.dirname(driver),{recursive:true});
+    fs.copyFileSync(binary,path.join(directory,'PawnIOLib.dll'));fs.copyFileSync(binary,driver);
+    const q=v=>v.replace(/'/g,"''");
+    const output=execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',`
+      $t=$null;$e=$null;$text=[IO.File]::ReadAllText('${q(path.join(root,'scripts/install-enhanced.ps1'))}');$ast=[Management.Automation.Language.Parser]::ParseInput($text,[ref]$t,[ref]$e);if($e.Count){throw 'Syntax'}
+      foreach($name in @('Test-EnhancedAlreadyInstalled','Get-EnhancedInstallMessage')){$f=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true);Invoke-Expression $f.Extent.Text}
+      $env:ProgramFiles='${q(temp)}';$env:SystemRoot='${q(temp)}';$script:case='valid'
+      function Get-ItemProperty($LiteralPath){
+        if($script:case -eq 'absent'){throw 'Missing'}
+        if($LiteralPath -like '*Uninstall*'){return @{DisplayVersion=$(if($script:case -eq 'old'){'2.1.0.0'}else{'2.2.0.0'});InstallLocation=$(if($script:case -eq 'wrong-directory'){'C:\\Other\\PawnIO'}else{'${q(directory)}'})}}
+        return @{Type=$(if($script:case -eq 'shared-host'){32}else{1});Start=$(if($script:case -eq 'disabled'){4}else{3});ImagePath=$(if($script:case -eq 'wrong-driver'){'C:\\Other\\PawnIO.sys'}else{'${q(driver)}'})}
+      }
+      function Get-Item($LiteralPath,[switch]$Force){@{Attributes=$(if($script:case -eq 'redirected'){[IO.FileAttributes]::ReparsePoint}else{[IO.FileAttributes]::Normal})}}
+      function Get-AuthenticodeSignature($LiteralPath){@{Status=$(if($script:case -eq 'invalid-signature'){'HashMismatch'}else{'Valid'});SignerCertificate=@{Subject=$(if($script:case -eq 'wrong-publisher'){'CN=Other,'}elseif($LiteralPath.EndsWith('.sys')){'CN=Microsoft Windows Hardware Compatibility Publisher,'}else{'CN=namazso.eu,'})}}}
+      foreach($case in @('valid','absent','old','wrong-directory','shared-host','disabled','wrong-driver','redirected','invalid-signature','wrong-publisher')){$script:case=$case;if((Test-EnhancedAlreadyInstalled) -ne ($case -eq 'valid')){throw ('Verification: '+$case)}}
+      $m=Get-EnhancedInstallMessage @{exitCode=0;failureCode='already-installed'};if(!$m.Contains('already installed') -or !$m.Contains('checked separately')){throw 'Status'}
+      if(!(Get-EnhancedInstallMessage @{exitCode=183;failureCode='install-failed'}).Contains('exit 183')){throw 'Duplicate error swallowed'}
+      Write-Output 'ENHANCED_EXISTING_PASS'
+    `],{windowsHide:true,timeout:30000,encoding:'utf8'});
+    assert(output.includes('ENHANCED_EXISTING_PASS'));
+    const helper=fs.readFileSync(path.join(root,'scripts/install-enhanced.ps1'),'utf8');
+    assert(helper.indexOf('if (Test-EnhancedAlreadyInstalled)') > helper.indexOf("throw 'Package verification failed.'"));
+    assert(helper.indexOf('$previous.exitCode -eq 1460') < helper.indexOf('if (Test-EnhancedAlreadyInstalled)'), 'existing files cannot clear an unconfirmed installer before reboot');
+    assert(helper.includes("if ($Notify -and $result.failureCode -ne 'already-installed')"));
+    assert.strictEqual(installationResult(183).success,false);assert(installationResult(0,'already-installed').message.includes('already installed'));
+    const iss=fs.readFileSync(path.join(root,'packaging/Rovarin.iss'),'utf8');
+    assert(iss.includes('Name: "{group}\\Rovarin Setup and PIN Recovery"') && iss.includes('Lost your PIN? Open Windows Start'));
+    assert(iss.includes('Parameters: "setup"; Description: "Open Setup and PIN Recovery"; Flags: postinstall nowait skipifsilent unchecked'));
+    console.log('PASS verified PawnIO reuse; missing/old/wrong/shared/disabled/redirected/tampered registrations refused; error 183 preserved; PIN Recovery shortcut/guidance');
+  } finally { await removeOwnedFixture(temp); }
+}
+
+(process.argv[2]==='--migration-only' ? testMigrationPreflight() : process.argv[2]==='--enhanced-only' ? testEnhancedExisting() : main().then(testEnhancedExisting).then(testPackagedRuntime).then(()=>require('./native-desktop-test')(__dirname.replace(/[\\/]scripts$/,''),payload))).catch(error=>{console.error(error);process.exitCode=1;});

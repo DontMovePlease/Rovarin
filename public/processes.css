@@ -99,3 +99,12 @@
 #processesPage .processes-search {margin-top:0}
 @media(min-width:700px){#processesPage {height:calc(100dvh - var(--app-bar-height) - 24px)}}
 @media(max-width:699px){html:not(.native-shell) #processesPage {height:100%}}
+
+/* Match the Applications tray while keeping actions outside scrolling transforms. */
+#processesActions {align-items:center;justify-content:flex-end;gap:8px}
+#processesActions .processes-selection {flex:1;min-width:120px;overflow-wrap:anywhere}
+#processesActions button {min-height:44px}
+#processesActions .processes-kill-status {flex-basis:100%;margin:0;overflow-wrap:anywhere}
+#processesActions .processes-kill-status:empty {display:none}
+#processesActions .processes-advanced[open] {max-height:35dvh;overflow:auto}
+#processesPage.has-process-actions .processes-table-wrap {padding-bottom:calc(180px + env(safe-area-inset-bottom,0px))}

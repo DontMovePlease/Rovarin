@@ -267,10 +267,12 @@ async function test(root = path.resolve(__dirname,'..')) {
         fs.mkdirSync(path.join(dir,'dist'),{recursive:true}); fs.mkdirSync(path.join(dir,'publish'),{recursive:true});
         const bytes=Buffer.from('DISPOSABLE MOCK INSTALLER ONLY'); const digest=hash(bytes);
         fs.writeFileSync(path.join(dir,'dist/RovarinSetup.exe'),bytes); fs.writeFileSync(path.join(dir,'publish/RovarinSetup.exe'),bytes);
-        fs.writeFileSync(path.join(dir,'packaging/payload-manifest.json'),JSON.stringify({files:[]}));
+        fs.mkdirSync(path.join(dir,'packaging/payload/app'),{recursive:true});
+        fs.copyFileSync(path.join(dir,'server.js'),path.join(dir,'packaging/payload/app/server.js'));
+        fs.writeFileSync(path.join(dir,'packaging/payload-manifest.json'),JSON.stringify({files:[{path:'app/server.js',sha256:hash(fs.readFileSync(path.join(dir,'server.js')))}]}));
         const manifest=hash(fs.readFileSync(path.join(dir,'packaging/payload-manifest.json')));
         const version=JSON.parse(fs.readFileSync(path.join(dir,'package.json'))).version;
-        fs.writeFileSync(path.join(dir,'dist/build.json'),JSON.stringify({version,sha256:digest,payloadManifestSha256:manifest}));
+        fs.writeFileSync(path.join(dir,'dist/build.json'),JSON.stringify({version,sha256:digest,payloadManifestSha256:manifest,inputs:['packaging/build.ps1','packaging/Rovarin.iss','packaging/RovarinLauncher.cs','packaging/DesktopShell.cs','packaging/desktop.manifest','packaging/create-icon.ps1'].map(p=>({path:p,sha256:hash(fs.readFileSync(path.join(dir,p)))}))}));
         fs.writeFileSync(path.join(dir,'publish/RovarinSetup.sha256'),digest+'  RovarinSetup.exe\n');
         fs.writeFileSync(path.join(dir,'publish/release.json'),JSON.stringify({version,builtAt:new Date().toISOString(),verifiedAt:new Date().toISOString(),signing:'unsigned',sha256:digest,payloadManifestSha256:manifest,suites:[...SUITES,'installer-integration']}));
         if(editDuringVerify)fs.appendFileSync(path.join(dir,'server.js'),'\n// changed during build\n');
@@ -281,6 +283,7 @@ async function test(root = path.resolve(__dirname,'..')) {
     return {dir,pub,calls,manager:new Manager(dir,{run:runner,approvePublish:async()=>true}),set(values){({failedBuild=failedBuild,failedVerify=failedVerify,editDuringVerify=editDuringVerify,remoteTag=remoteTag,oldRelease=oldRelease,corruptUpload=corruptUpload}=values);}};
   }
   try {
+    for(const file of ["scripts/check-maint-status.ps1", "scripts/diagnose-service.ps1", "scripts/execute-crash-recovery-interactive.ps1", "scripts/execute-interrupted-install-interactive.ps1", "scripts/guest-install-rovarin.ps1", "scripts/guest-step-check.ps1", "scripts/guest-test-e2e-api.ps1", "scripts/guest-test-network-reset.ps1", "scripts/install-maintenance-interactive.ps1", "scripts/maintenance-release-vm-validation.ps1", "scripts/run-guest-cmd.ps1", "scripts/test-clean-install.ps1", "scripts/test-crash-recovery.ps1", "scripts/test-elevation.ps1", "scripts/test-mid-provisioning-interruption.ps1", "scripts/test-privileged-operations.ps1", "scripts/test-sfc-scan.ps1", "scripts/test-upgrade-scenario.ps1", "scripts/update-guest-service.ps1", "scripts/upload-maint-fixtures.ps1", "scripts/vm-control.ps1"]) assert(!permitted(file),file);
     for(const file of ['AGENTS.md','PROJECT_STATUS.md','THE-PLAN.md','SECURITY.md','docs/planning.md','config.json','desktop-trust.bin','publish/release.json','dist/setup.exe','packaging/cache/tool.js','../server.js','C:/Users/file','server.pid']) assert(!permitted(file),file);
     for(const file of ['README.md','LICENSE','vendor/LibreHardwareMonitor/0.9.6/README.md','docs/images/overview.png','scripts/release-manager.js']) assert(permitted(file),file);
     assert.strictEqual(semver('0.1.0').patchVersion,'0.1.1'); assert.strictEqual(semver('0.1.0').minorVersion,'0.2.0'); semver('0.2.0-rc.1+test');
@@ -347,6 +350,8 @@ async function test(root = path.resolve(__dirname,'..')) {
       assert.throws(()=>f.manager.secrets(),/Cannot safely inspect canonical configuration/);
       fs.writeFileSync(canonical,saved);
       fs.unlinkSync(path.join(f.dir,'.rovarin-development-state.json'));
+      assert.throws(()=>f.manager.secrets(),/Cannot safely inspect canonical configuration/,'missing migration marker must not bypass existing canonical data');
+      fs.unlinkSync(canonical);
       assert(!f.manager.secrets().includes(pin),'fresh checkout without config is valid');
       const app=path.join(temp,'installed-privacy','app'),data=path.join(temp,'installed-privacy','data');
       fs.mkdirSync(app,{recursive:true});fs.mkdirSync(data);
@@ -397,6 +402,14 @@ async function test(root = path.resolve(__dirname,'..')) {
       else assert(!fail.calls.some(c=>c.args.includes('push') || (c.command==='gh' && c.args.includes('create'))));
     }
     console.log('PASS build failure, verification failure, build/source race and corrupt uploaded digest abort before public release');
+    const resumed=fixture();fs.appendFileSync(path.join(resumed.dir,'public/app.css'),'\n/* verified continuation */\n');resumed.manager.synchronize('0.1.1');await resumed.manager.run(process.execPath,['scripts/release-verify.js'],resumed.dir);
+    const pinned=hash(fs.readFileSync(path.join(resumed.dir,'publish/RovarinSetup.exe')));
+    await assert.rejects(resumed.manager.operate('Publish',{confirm:true,version:'0.1.1',verifiedSha256:'0'.repeat(64)}),/checksum changed/);
+    const sourceFile=path.join(resumed.dir,'packaging/DesktopShell.cs'),savedSource=fs.readFileSync(sourceFile);fs.appendFileSync(sourceFile,'\n// drift\n');assert.throws(()=>resumed.manager.verifyAssets('0.1.1'),/source changed/);fs.writeFileSync(sourceFile,savedSource);
+    const beforeCalls=resumed.calls.length;await resumed.manager.operate('Publish',{confirm:true,version:'0.1.1',verifiedSha256:pinned});
+    assert(!resumed.calls.slice(beforeCalls).some(c=>(c.command==='powershell.exe'&&c.args.includes('packaging/build.ps1'))||(c.command===process.execPath&&c.args.includes('scripts/release-verify.js'))));
+    assert(resumed.calls.slice(beforeCalls).some(c=>c.command==='gh'&&c.args.includes('--draft=false')));
+    console.log('PASS exact verified candidate continuation, unchanged full-gate receipt, source/checksum drift rejection, same protected publication path and no rebuild');
     const local=fixture();fs.appendFileSync(path.join(local.dir,'public/app.css'),'\n/* local save only */\n');
     await assert.rejects(local.manager.operate('Checkpoint',{}),/Explicit confirmation/);
     const localResult=await local.manager.operate('Checkpoint',{confirm:true});assert(localResult.sha);assert(!local.calls.some(c=>c.args.includes('push') || c.args.includes('fetch') || c.command==='gh'));
@@ -406,7 +419,7 @@ async function test(root = path.resolve(__dirname,'..')) {
     fs.appendFileSync(path.join(r.dir,'public/app.css'),'\n/* committed second state */\n');git(r.dir,['add','public/app.css']);git(r.dir,['commit','-m','Fixture second state']);
     fs.appendFileSync(path.join(r.dir,'public/app.css'),'\n/* unfinished tracked work */\n');
     // Approved, untracked source is saved in the same protected stash.
-    git(r.dir,['rm','--cached','start.bat']); fs.appendFileSync(path.join(r.dir,'start.bat'),'\r\nREM unfinished untracked source\r\n');
+    git(r.dir,['rm','--cached','run_hidden.vbs']); fs.appendFileSync(path.join(r.dir,'run_hidden.vbs'),'\r\n\' unfinished untracked source\r\n');
     const unfinished=fs.readFileSync(path.join(r.dir,'public/app.css'));
     const restore=await r.manager.operate('Restore',{confirm:true,commit:initial});
     assert(restore.stash && restore.backup);assert(fs.readFileSync(path.join(r.dir,'public/app.css')).equals(fs.readFileSync(path.join(root,'public/app.css'))));

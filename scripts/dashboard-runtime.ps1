@@ -1,3 +1,11 @@
+function Get-RovarinDataDirectory([string]$ApplicationDir) {
+    if (Test-Path -LiteralPath (Join-Path $ApplicationDir 'installation.json')) { return (Join-Path (Split-Path -Parent $ApplicationDir) 'data') }
+    $node = (Get-Command node.exe -ErrorAction Stop).Source
+    $result = & $node (Join-Path $ApplicationDir 'pin-manager.js') --data-path
+    if ($LASTEXITCODE -ne 0 -or -not $result -or -not [IO.Path]::IsPathRooted([string]$result)) { throw 'Canonical development storage unavailable.' }
+    return [string]$result
+}
+
 function Get-DashboardListener([int]$Port, [int]$ServerPid) {
     return (& netstat.exe -ano -p tcp 2>$null | Select-String ":$Port\s+.*LISTENING\s+$ServerPid\s*$" | Select-Object -First 1)
 }
@@ -26,7 +34,8 @@ function Test-DashboardHttpResponsive([int]$Port) {
 function Get-DashboardRuntime([string]$ProjectDir) {
     $applicationDir = $ProjectDir
     $candidate = $null
-    if (Test-Path -LiteralPath (Join-Path $ProjectDir 'installation.json')) { $ProjectDir = Join-Path (Split-Path -Parent $ProjectDir) 'data' }
+    try { $ProjectDir = Get-RovarinDataDirectory $ProjectDir }
+    catch { return @{ state='unsafe'; reason='Canonical runtime storage unavailable.' } }
     $serverPid = 0
     $port = 7331
     $pidFile = Join-Path $ProjectDir 'server.pid'

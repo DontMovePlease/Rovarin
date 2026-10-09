@@ -19,8 +19,8 @@ public static class RovarinProcessTree {
     [DllImport("kernel32.dll",SetLastError=true)] static extern bool TerminateProcess(IntPtr h,uint code);
     [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr h,uint ms);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
-    public class Outcome { public int pid; public string name, code; }
-    public class Result { public bool success, verified; public string code; public int descendantCount; public List<Outcome> results=new List<Outcome>(); public List<int> remaining=new List<int>(); }
+    public class Outcome { public int pid; public string name, code, startedAt; }
+    public class Result { public bool success, verified; public string code; public int descendantCount; public List<Outcome> members=new List<Outcome>(); public List<Outcome> results=new List<Outcome>(); public List<int> remaining=new List<int>(); }
     class Node { public int pid, depth; public string name; public long creation; public IntPtr handle; public bool processed; }
     static bool ProtectedName(string name) {
         string[] names={"idle","system","smss","csrss","wininit","winlogon","lsass","services","rovarin","pcmonitor"};
@@ -68,7 +68,7 @@ public static class RovarinProcessTree {
             if(root.creation!=time||!String.Equals(root.name,name,StringComparison.OrdinalIgnoreCase)){result.code="stale-process";return result;}
             if(IsOwnedTarget(pid,protectedPids)){result.code="protected-process";return result;}
             Collect(Snapshot(),nodes,protectedIds,result);result.descendantCount=nodes.Count-1;
-            if(!execute){result.code="tree-preview";result.success=true;return result;}
+            if(!execute){foreach(var member in nodes.Values)result.members.Add(new Outcome{pid=member.pid,name=member.name,startedAt=DateTime.FromFileTimeUtc(member.creation).ToString("o"),code="verified"});result.code="tree-preview";result.success=true;return result;}
             var clock=Stopwatch.StartNew();
             for(int pass=0;pass<4&&clock.ElapsedMilliseconds<8000;pass++){
                 if(pass>0)Collect(Snapshot(),nodes,protectedIds,result);
@@ -77,7 +77,7 @@ public static class RovarinProcessTree {
                     if(WaitForSingleObject(target.handle,0)==0)code="already-exited";
                     else if(!TerminateProcess(target.handle,1))code=WaitForSingleObject(target.handle,0)==0?"already-exited":"access-denied";
                     else code=WaitForSingleObject(target.handle,500)==0?"terminated":"termination-unconfirmed";
-                    result.results.Add(new Outcome{pid=target.pid,name=target.name,code=code});
+                    result.results.Add(new Outcome{pid=target.pid,name=target.name,startedAt=DateTime.FromFileTimeUtc(target.creation).ToString("o"),code=code});
                 }
             }
             Collect(Snapshot(),nodes,protectedIds,result);

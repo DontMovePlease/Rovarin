@@ -56,3 +56,24 @@
 .native-shell .app-sidebar.page-nav { background: linear-gradient(180deg, #142030, #0d1622); }
 .native-shell .cpu-detail-panel, .native-shell .maint-modal, .native-shell .maint-toast { background: var(--surface-glass-strong); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .native-shell .metric-card, .native-shell .health-card, .native-shell .system-specs-card { box-shadow: inset 0 1px 0 rgba(225,241,255,.06), 0 3px 10px #0002; }
+
+/* Keep the desktop brand slot so navigation buttons stay in place. */
+.native-shell .sidebar-phone-brand svg { visibility: hidden; }
+@media (hover: hover) and (pointer: fine) and (min-width: 700px) {
+  .native-shell body.desktop-sidebar-hover { --sidebar-width: 176px; }
+  .native-shell .desktop-sidebar-hover .app-sidebar span { opacity: 1; transform: translateX(0); }
+  .native-shell .desktop-sidebar-hover .sidebar-phone-brand span { display: block; }
+}
+
+/* One continuous desktop chrome surface, matching the native window controls. */
+.native-shell .native-app-bar { background: var(--chrome-background); border: 0; border-radius: 0; box-shadow: none; }
+.native-shell .app-sidebar.page-nav { background: var(--chrome-background); }
+
+/* A softer desktop rail edge without moving its navigation targets. */
+@media (min-width: 700px) {
+  .native-shell .app-sidebar.page-nav { border-radius: 0 16px 16px 0; border-right-color: rgba(164,180,198,.10); box-shadow: 4px 0 14px rgba(0,0,0,.12); transition-duration: .22s; }
+}
+
+@media (min-width: 700px) {
+  .native-shell .dashboard-container { transition-duration: .22s; }
+}

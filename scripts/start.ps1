@@ -21,5 +21,5 @@ $runtime = Wait-DashboardRuntime $projectDir
 if ($runtime.state -eq 'owned' -and $runtime.healthy) {
     Write-Host "[SUCCESS] Dashboard PID $($runtime.pid); http://127.0.0.1:$($runtime.port)" -ForegroundColor Green
 } else {
-    Write-Host "[ERROR] Server did not become healthy (state: $($runtime.state); $($runtime.reason)). Check server.log and server-state.json for the startup/bind failure." -ForegroundColor Red
+    Write-Host "[ERROR] Server did not become healthy (state: $($runtime.state); $($runtime.reason)). Check the canonical runtime directory for server.log and server-state.json." -ForegroundColor Red
 }

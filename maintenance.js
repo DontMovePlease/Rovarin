@@ -2,13 +2,16 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const { execFile, spawn } = require('child_process');
+const maintenanceService = require('./maintenance-service');
+
+let serviceClient = maintenanceService.createClient();
 
 // Maintenance State
 let isRunning = false;
 let currentTask = null;
 const history = [];
 const MAX_HISTORY = 20;
-const ADMIN_RELAUNCH_NOTE = "Requires Administrator privileges. Stop the dashboard, then right-click 'Start Dashboard.bat' and choose 'Run as administrator'.";
+const ADMIN_RELAUNCH_NOTE = "Administrator approval is required for this action.";
 
 // Admin rights cache
 let cachedIsAdmin = null;
@@ -55,7 +58,8 @@ function addToHistory(task, success, summary) {
     date: new Date().toLocaleDateString('en-US'),
     duration: `${durationSec}s`,
     success,
-    summary
+    summary,
+    status: task.status
   };
   history.unshift(entry);
   if (history.length > MAX_HISTORY) history.pop();
@@ -81,7 +85,7 @@ const ACTIONS = {
     id: 'clear_dns',
     title: 'Clear DNS Cache',
     category: 'Cleanup',
-    requiresAdmin: false,
+    requiresAdmin: true,
     description: 'Flushes the Windows DNS resolver cache.'
   },
   windows_repair: {
@@ -129,12 +133,12 @@ const ACTIONS = {
 };
 
 // Execute allowlisted action
-function runAction(actionId, onProgress, onComplete) {
+function runAction(actionId, onProgress, onComplete, options = {}) {
   if (isRunning) {
     return { success: false, error: 'A maintenance operation is already running.' };
   }
 
-  const actionDef = ACTIONS[actionId];
+  const actionDef = Object.hasOwn(ACTIONS, actionId) ? ACTIONS[actionId] : null;
   if (!actionDef) {
     return { success: false, error: 'Invalid or unauthorized maintenance action.' };
   }
@@ -157,8 +161,17 @@ function runAction(actionId, onProgress, onComplete) {
   appendLog(currentTask, `Starting operation: ${actionDef.title}...`);
 
   // Dispatch to appropriate handler
+  let finished = false;
   const finish = (success, summary, detailedResult = null) => {
-    currentTask.status = success ? 'completed' : 'failed';
+    if (finished) return;
+    finished = true;
+    // Partial completion is not full success, including older helper results.
+    if (detailedResult?.code === 'partially-completed') success = false;
+    currentTask.status = detailedResult?.code === 'uac-cancelled'
+      ? 'cancelled'
+      : detailedResult?.code === 'partially-completed'
+        ? 'partially-completed'
+        : success ? 'completed' : 'failed';
     currentTask.result = { success, summary, detailedResult };
     appendLog(currentTask, summary, success ? 'success' : 'error');
     addToHistory(currentTask, success, summary);
@@ -167,49 +180,147 @@ function runAction(actionId, onProgress, onComplete) {
   };
 
   checkIsAdmin((isAdmin) => {
-    if (actionDef.requiresAdmin && !isAdmin) {
-      appendLog(currentTask, 'Warning: This operation requires Administrator privileges.', 'warn');
-      appendLog(currentTask, 'The server is currently running with standard user rights.', 'warn');
-    }
-
-    try {
-      switch (actionId) {
-        case 'clean_temp':
-          executeCleanTemp(currentTask, finish).catch(() => finish(false, 'Temporary cleanup could not be completed.'));
-          break;
-        case 'empty_recycle_bin':
-          executeEmptyRecycleBin(currentTask, finish);
-          break;
-        case 'clear_dns':
-          executeClearDns(currentTask, finish);
-          break;
-        case 'windows_repair':
-          executeWindowsRepair(currentTask, finish, isAdmin);
-          break;
-        case 'sfc_scan':
-          executeSfcScan(currentTask, finish, isAdmin);
-          break;
-        case 'dism_check':
-          executeDismCheck(currentTask, finish, isAdmin);
-          break;
-        case 'reset_network':
-          executeResetNetwork(currentTask, finish, isAdmin);
-          break;
-        case 'renew_network':
-          executeRenewNetwork(currentTask, finish);
-          break;
-        case 'restart_explorer':
-          executeRestartExplorer(currentTask, finish);
-          break;
-        default:
-          finish(false, 'Unknown action.');
+    serviceClient.status().then(serviceStatus => {
+      if (actionDef.requiresAdmin) {
+        if (serviceStatus && serviceStatus.enabled) {
+          executeServiceAction(currentTask, finish);
+          return;
+        }
+        if (options.isLocal === false) {
+          finish(false, 'Administrator maintenance is not enabled on this PC. Enable it in Settings on your desktop first.', { code: 'service-disabled' });
+          return;
+        }
+        if (!isAdmin) {
+          executeElevatedAction(currentTask, finish);
+          return;
+        }
       }
-    } catch (err) {
-      finish(false, `Unexpected error during execution: ${err.message}`);
-    }
+
+      try {
+        switch (actionId) {
+          case 'clean_temp':
+            executeCleanTemp(currentTask, finish).catch(() => finish(false, 'Temporary cleanup could not be completed.'));
+            break;
+          case 'empty_recycle_bin':
+            executeEmptyRecycleBin(currentTask, finish);
+            break;
+          case 'clear_dns':
+            executeClearDns(currentTask, finish);
+            break;
+          case 'windows_repair':
+            executeWindowsRepair(currentTask, finish, isAdmin);
+            break;
+          case 'sfc_scan':
+            executeSfcScan(currentTask, finish, isAdmin);
+            break;
+          case 'dism_check':
+            executeDismCheck(currentTask, finish, isAdmin);
+            break;
+          case 'reset_network':
+            executeResetNetwork(currentTask, finish, isAdmin);
+            break;
+          case 'renew_network':
+            executeRenewNetwork(currentTask, finish);
+            break;
+          case 'restart_explorer':
+            executeRestartExplorer(currentTask, finish);
+            break;
+          default:
+            finish(false, 'Unknown action.');
+        }
+      } catch (err) {
+        finish(false, `Unexpected error during execution: ${err.message}`);
+      }
+    }).catch(err => {
+      finish(false, `Maintenance status check failed: ${err.message}`);
+    });
   });
 
   return { success: true, message: `Operation ${actionDef.title} started.` };
+}
+
+function consumeMaintenanceProcess(child, task, complete, timeoutMs = 32 * 60 * 1000) {
+  let buffer = '', result = null, settled = false, outputBytes = 0, failure = null;
+  const done = (code, reason) => {
+    if (settled) return; settled = true; clearTimeout(timeout);
+    if (reason) return complete(false, reason.summary, { code: reason.code });
+    if (!result) return complete(false, 'The maintenance operation stopped without confirming a result.', { code: 'helper-crashed' });
+    if (result.success && code !== 0) return complete(false, 'The maintenance operation could not confirm a safe shutdown.', { code: 'shutdown-unconfirmed' });
+    complete(result.success, result.summary, { code: result.code, exitCode: result.exitCode });
+  };
+  const timeout = setTimeout(() => { failure = { code: 'timeout', summary: 'The maintenance operation timed out.' }; child.kill(); }, timeoutMs);
+  timeout.unref?.();
+  function invalid() { result = null; failure = { code: 'invalid-output', summary: 'The maintenance operation returned an invalid result.' }; child.kill(); }
+  child.stdout.on('data', chunk => {
+    outputBytes += chunk.length;
+    if (outputBytes > 2 * 1024 * 1024) return invalid();
+    buffer += chunk.toString();
+    let newline;
+    while ((newline = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, newline).trim(); buffer = buffer.slice(newline + 1);
+      if (!line) continue;
+      let message; try { message = JSON.parse(line); } catch (_) { return invalid(); }
+      if (!message || message.action !== task.id || !['progress', 'log', 'result'].includes(message.type)) return invalid();
+      if (message.type === 'result') {
+        const codes = ['completed', 'partially-completed', 'uac-cancelled', 'launch-failed', 'connection-failed', 'identity-mismatch', 'helper-failed', 'helper-crashed', 'shutdown-unconfirmed', 'timeout', 'tool-unavailable', 'tool-failed', 'operation-failed', 'service-unavailable', 'service-disabled'];
+        const isSuccessCode = message.code === 'completed';
+        const isPartial = message.code === 'partially-completed';
+        if (typeof message.success !== 'boolean' || !codes.includes(message.code) || (!isPartial && message.success !== isSuccessCode) || typeof message.summary !== 'string' || message.summary.length > 2000 || (message.exitCode !== null && !Number.isInteger(message.exitCode))) return invalid();
+        result = { ...message, success: isSuccessCode };
+      } else {
+        if (typeof message.message !== 'string' || message.message.length > 2000) return invalid();
+        if (message.type === 'progress') {
+          if (!Number.isInteger(message.step) || !Number.isInteger(message.total) || message.step < 0 || message.total < 1 || message.total > 4 || message.step > message.total) return invalid();
+          task.currentStep = message.step; task.totalSteps = message.total; task.stepTitle = message.message;
+        }
+        appendLog(task, message.message);
+      }
+    }
+    if (buffer.length > 8192) return invalid();
+  });
+  child.stderr.on('data', () => {});
+  child.once('error', () => done(-1, { code: 'launch-failed', summary: 'Windows could not start the maintenance operation.' }));
+  child.once('close', code => done(code, failure));
+}
+
+function executeServiceAction(task, finish) {
+  appendLog(task, 'Starting action via authorized Rovarin maintenance service...');
+  let child;
+  try {
+    child = serviceClient.run(task.id);
+  } catch (_) {
+    return finish(false, 'The maintenance service could not be started.', { code: 'service-unavailable' });
+  }
+  // Native service: 35-minute work + 1-minute result window, then a bounded
+  // outer cleanup margin. The local one-shot fallback keeps its 32-minute guard.
+  consumeMaintenanceProcess(child, task, finish, 37 * 60 * 1000);
+}
+
+// Compile only this fixed Rovarin source into a unique, server-owned temporary
+// directory. Never accept a destination/source/compiler/action argument from a client.
+function executeElevatedAction(task, finish) {
+  if (process.platform !== 'win32') return finish(false, 'Administrator-approved maintenance is available on Windows only.', { code: 'unsupported' });
+  let directory;
+  try { directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rovarin-maintenance-')); }
+  catch (_) { return finish(false, 'The maintenance helper workspace could not be created.', { code: 'helper-unavailable' }); }
+  const helper = path.join(directory, 'RovarinMaintenance.exe');
+  const compiler = path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
+  const cleanup = () => {
+    try { fs.rmSync(directory, { recursive: true, force: true }); }
+    catch (_) { appendLog(task, 'Temporary helper cleanup was deferred because Windows still holds the file.', 'warn'); }
+  };
+  const complete = (success, summary, detail) => { cleanup(); finish(success, summary, detail); };
+  appendLog(task, 'Preparing this action for local Windows administrator approval.');
+  try {
+    execFile(compiler, ['/nologo', '/target:exe', '/platform:x64', '/optimize+', '/r:System.Web.Extensions.dll', '/out:' + helper, path.join(__dirname, 'scripts', 'maintenance-elevated.cs')],
+      { windowsHide: true, timeout: 30000, maxBuffer: 8192 }, (error) => {
+        if (error) return complete(false, 'The fixed maintenance helper could not be prepared.', { code: 'helper-unavailable' });
+        let child;
+        try { child = spawn(helper, [task.id, String(process.pid)], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); }
+        catch (_) { return complete(false, 'Windows could not start the maintenance helper.', { code: 'launch-failed' }); }
+        consumeMaintenanceProcess(child, task, complete);
+      });
+  } catch (_) { complete(false, 'The fixed maintenance helper could not be prepared.', { code: 'helper-unavailable' }); }
 }
 
 // 1. Clean Temporary Files
@@ -384,7 +495,7 @@ function executeWindowsRepair(task, finish, isAdmin) {
     (line) => appendLog(task, line),
     (code1, error1) => {
       if (code1 !== 0) {
-        return finish(false, `DISM CheckHealth failed (exit ${code1}${error1 ? `: ${error1.message}` : ''}). Run the dashboard as Administrator and review the log.`);
+        return finish(false, `DISM CheckHealth failed (exit ${code1}${error1 ? `: ${error1.message}` : ''}). Review the maintenance log.`);
       }
       task.currentStep = 2;
       task.stepTitle = "Step 2 of 4: Scanning Component Store for Corruption (DISM ScanHealth)...";
@@ -474,7 +585,7 @@ function executeDismCheck(task, finish, isAdmin) {
     (line) => appendLog(task, line),
     (code1, error1) => {
       if (code1 !== 0) {
-        return finish(false, `DISM CheckHealth failed (exit ${code1}${error1 ? `: ${error1.message}` : ''}). Run the dashboard as Administrator.`);
+        return finish(false, `DISM CheckHealth failed (exit ${code1}${error1 ? `: ${error1.message}` : ''}). Review the maintenance log.`);
       }
       task.currentStep = 2;
       task.stepTitle = "Step 2 of 2: Deep Component Store Scan (ScanHealth)...";
@@ -496,7 +607,7 @@ function executeDismCheck(task, finish, isAdmin) {
           } else if (text.includes("no component store corruption detected")) {
             summary = "Component Store is healthy: DISM reported no corruption.";
           } else if (text.includes("the component store is repairable")) {
-            summary = "DISM found repairable component-store corruption. Run Windows System Repair as Administrator.";
+            summary = "DISM found repairable component-store corruption. Run Windows System Repair with administrator approval.";
           } else if (text.includes("the component store cannot be repaired")) {
             summary = "DISM found component-store corruption that it cannot repair automatically. Review DISM.log.";
           } else {
@@ -531,13 +642,21 @@ function executeResetNetwork(task, finish, isAdmin) {
     appendLog(task, "Running: netsh int ip reset...");
 
     execFile('netsh', ['int', 'ip', 'reset'], { windowsHide: true, timeout: 45000 }, (err2, out2) => {
-      appendLog(task, (out2 || '').trim());
-      if (err2) {
-        appendLog(task, `TCP/IP reset failed: ${err2.message}`, 'error');
-        return finish(false, `Winsock reset completed, but TCP/IP reset failed (exit ${err2.code ?? 'unknown'}): ${err2.message}`);
+      const text2 = (out2 || '').trim();
+      appendLog(task, text2);
+      const netshOk = (text2.includes(', OK!') || /successfully reset/i.test(text2) || /sucessfully reset/i.test(text2));
+      const netshFail = (text2.includes(', failed.') || /access is denied/i.test(text2));
+      const netshReboot = /restart the computer/i.test(text2);
+      if (err2 || netshFail) {
+        if (netshOk && netshReboot) {
+          const summary = "Network reset partially completed (some protected system settings require restart). Restart your PC to finish applying it.";
+          return finish(false, summary, { code: 'partially-completed', exitCode: err2?.code ?? 1 });
+        }
+        appendLog(task, `TCP/IP reset failed: ${err2?.message || 'Access denied'}`, 'error');
+        return finish(false, `Winsock reset completed, but TCP/IP reset failed (exit ${err2?.code ?? 'unknown'}): ${err2?.message || 'Incomplete reset'}`, { code: 'operation-failed', exitCode: err2?.code ?? 1 });
       }
       const summary = "Winsock and TCP/IP stack have been reset to factory defaults. Please restart your PC to complete the reset.";
-      finish(true, summary);
+      finish(true, summary, { code: 'completed', exitCode: 0 });
     });
   });
 }
@@ -585,23 +704,45 @@ function executeRestartExplorer(task, finish) {
 module.exports = {
   ACTIONS,
   runAction,
+  setServiceClient: (client) => { serviceClient = client; },
   getStatus: (callback) => {
     checkIsAdmin((isAdmin) => {
-      callback({
-        isAdmin,
-        isRunning,
-        currentTask: currentTask ? {
-          id: currentTask.id,
-          title: currentTask.title,
-          category: currentTask.category,
-          status: currentTask.status,
-          currentStep: currentTask.currentStep,
-          totalSteps: currentTask.totalSteps,
-          stepTitle: currentTask.stepTitle,
-          logs: currentTask.logs,
-          result: currentTask.result
-        } : null,
-        history
+      serviceClient.status().then(service => {
+        callback({
+          isAdmin,
+          isRunning,
+          service: { enabled: Boolean(service && service.enabled), state: service ? service.state : 'unavailable' },
+          currentTask: currentTask ? {
+            id: currentTask.id,
+            title: currentTask.title,
+            category: currentTask.category,
+            status: currentTask.status,
+            currentStep: currentTask.currentStep,
+            totalSteps: currentTask.totalSteps,
+            stepTitle: currentTask.stepTitle,
+            logs: currentTask.logs,
+            result: currentTask.result
+          } : null,
+          history
+        });
+      }).catch(() => {
+        callback({
+          isAdmin,
+          isRunning,
+          service: { enabled: false, state: 'unavailable' },
+          currentTask: currentTask ? {
+            id: currentTask.id,
+            title: currentTask.title,
+            category: currentTask.category,
+            status: currentTask.status,
+            currentStep: currentTask.currentStep,
+            totalSteps: currentTask.totalSteps,
+            stepTitle: currentTask.stepTitle,
+            logs: currentTask.logs,
+            result: currentTask.result
+          } : null,
+          history
+        });
       });
     });
   }

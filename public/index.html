@@ -28,6 +28,7 @@
     </nav>
   <div class="phone-page-surface">
     <button id="sidebarBackdrop" class="sidebar-backdrop" type="button" aria-label="Close navigation" hidden></button>
+  <div class="phone-header">
   <div class="native-app-bar" aria-label="Rovarin application">
     <button id="sidebarToggle" type="button" class="native-navigation-button sidebar-toggle" aria-label="Open navigation" aria-controls="appSidebar" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
     <div class="native-history" aria-label="Page history">
@@ -35,6 +36,7 @@
       <button id="nativeForwardButton" class="native-navigation-button" type="button" aria-label="Next page" title="Forward" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m10 6 6 6-6 6"/></svg></button>
     </div>
     <div class="native-app-identity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="3"/><path d="M8 21h8M12 17v4M6 11h3l2-4 2 7 2-3h3"/></svg><span id="appSectionTitle">Dashboard</span></div>
+  </div>
   </div>
   <div class="dashboard-container">
     <div id="reconnectBanner" class="reconnect-banner">
@@ -328,12 +330,7 @@
 
     <section id="diagnosticsPage" class="app-page diagnostics-page" data-profile="dashboard" aria-labelledby="diagnosticsTitle" hidden>
       <header class="sr-only"><p class="processes-eyebrow">COMPATIBILITY REPORT</p><h1 id="diagnosticsTitle">Diagnostics</h1><p>Available capabilities on this PC.</p></header>
-      <div class="diagnostics-toolbar">
-        <button id="refreshDiagnostics" type="button">Refresh checks</button>
-        <button id="copyDiagnostics" type="button" disabled>Copy report</button>
-      </div>
-      <p id="diagnosticsFeedback" role="status" aria-live="polite"></p>
-      <section id="monitorSettings" class="diagnostics-summary temperature-settings" tabindex="-1" aria-label="Rovarin settings">
+      <section id="monitorSettings" class="diagnostics-summary" tabindex="-1" aria-label="Rovarin settings">
         <div class="settings-tabs" role="tablist" aria-label="Settings">
           <button id="generalSettingsTab" type="button" role="tab" aria-selected="true" aria-controls="generalSettingsPanel">Monitoring</button>
           <button id="securitySettingsTab" type="button" role="tab" aria-selected="false" aria-controls="securitySettingsPanel">Security</button>
@@ -359,48 +356,74 @@
           <h2>Security</h2>
           <p>One Rovarin PIN protects both this PC and your phone. Lock signs out this session immediately.</p>
           <button id="logoutButton" type="button">Lock Rovarin now</button>
+          <label class="desktop-pin-toggle"><input id="phoneRemovalPinPreference" type="checkbox" disabled> Require PIN for app removal on phone</label>
+          <p class="settings-help">Require your PIN before uninstalling apps or deleting leftover files from your phone.</p>
+          <div id="phoneRemovalPinApproval" hidden><label for="phoneRemovalSettingPin">Current Rovarin PIN</label><input id="phoneRemovalSettingPin" type="password" inputmode="numeric" autocomplete="off" maxlength="12"><button id="phoneRemovalSettingSave" type="button">Save preference</button></div>
+          <p id="phoneRemovalPinFeedback" role="status"></p>
           <div id="nativeSecurityControls" hidden>
+            <label class="desktop-pin-toggle"><input id="startWithWindows" type="checkbox" disabled> Start Rovarin with Windows</label>
+            <p id="windowsStartupFeedback" role="status">Checking Windows startup…</p>
             <label class="desktop-pin-toggle"><input id="desktopPinPreference" type="checkbox" checked disabled> Require PIN on this PC</label>
             <button id="generateDesktopPin" type="button">Generate New PIN</button>
+            <label id="adminMaintenanceLabel" for="adminMaintenanceToggle" class="desktop-pin-toggle" aria-disabled="true"><input id="adminMaintenanceToggle" type="checkbox" aria-describedby="adminMaintenanceFeedback" disabled> Enable administrator maintenance</label>
+            <p id="adminMaintenanceFeedback" role="status">Checking administrator maintenance…</p>
+            <p class="settings-help">Allow authorized maintenance actions from your phone without repeated Windows administrator prompts.</p>
             <p>These controls open a secure native dialog. Turning off desktop PIN prompts affects only this Windows account’s native app; your phone and regular browsers still require the same PIN.</p>
           </div>
+          <div id="remoteMaintenanceStatusSection">
+            <h3 style="margin-top: 1rem; margin-bottom: 0.25rem;">Administrator Maintenance</h3>
+            <p id="remoteMaintenanceStatus" role="status">Checking administrator maintenance…</p>
+            <p class="settings-help">Allow authorized maintenance actions from your phone without repeated Windows administrator prompts. Manage this setting from the Rovarin desktop app on your PC.</p>
+          </div>
+          <section id="uninstallControls" class="diagnostics-summary" hidden>
+            <details><summary>Uninstall Rovarin</summary>
+              <p>This stops Rovarin and removes the installed application. You will lose remote dashboard access. Shared PawnIO and Tailscale remain installed.</p>
+              <form id="uninstallForm" class="uninstall-form">
+                <label><input id="uninstallRemoveData" type="checkbox"> Full removal: erase my PIN and Rovarin settings</label>
+                <p>Unchecked preserves your PIN and temperature preferences for reinstall. Logs and runtime records are removed either way.</p>
+                <label for="uninstallPin">Enter your current PIN</label>
+                <input id="uninstallPin" type="password" inputmode="numeric" pattern="[0-9]{6}|[0-9]{12}" maxlength="12" autocomplete="off" required>
+                <div class="diagnostics-toolbar"><button id="uninstallSubmit" type="submit">Uninstall Rovarin…</button></div>
+              </form>
+            </details>
+            <p id="uninstallFeedback" role="status" aria-live="polite"></p>
+          </section>
         </div>
         <div id="generalSettingsPanel" role="tabpanel" aria-labelledby="generalSettingsTab">
-        <label for="cpuTemperatureMode">Temperature source</label>
-        <select id="cpuTemperatureMode">
-          <option value="enhanced">Enhanced — Recommended</option>
-            <option id="experimentalTemperatureOption" value="thermal-zone" hidden disabled>System Thermal Zone — Experimental</option>
-          <option value="off">Off</option>
-        </select>
-          <button id="saveTemperatureMode" type="button">Save source</button>
-          <details id="temperatureAdvanced"><summary>Advanced / Experimental</summary>
-            <label><input id="enableExperimentalTemperature" type="checkbox"> Allow System Thermal Zone selection</label>
-            <p>Firmware/ACPI zones may represent multiple devices or platform hotspots. They are not verified CPU package temperature. CPU warnings and alerts are disabled for this source. It is never enabled automatically.</p>
-          </details>
-        <p id="temperatureModeFeedback" role="status" aria-live="polite">Enhanced needs supported CPU sensors and PawnIO. Thermal zones are not verified CPU package readings. Sampling runs only with a monitoring lease.</p>
-        </div></section>
-        <section class="diagnostics-summary">
-          <h2>Enhanced CPU Temperature Support</h2>
-          <p id="enhancedSupportStatus" role="status" aria-live="polite">Open Diagnostics to check installation options.</p>
-          <div class="diagnostics-toolbar"><button id="installEnhancedSupport" type="button" hidden>Install Enhanced Support</button></div>
-          <p>Optional PawnIO hardware-access driver. Installation requires approval through Windows UAC. No driver is installed by changing the temperature source.</p>
-        </section>
-      <section class="diagnostics-summary" aria-live="polite"><h2 id="diagnosticsSummaryTitle">Open this page to check compatibility</h2><p id="diagnosticsSummaryText">Checks run on demand. Optional missing tools are normal.</p><p id="diagnosticsUpdated"></p></section>
-      <div id="diagnosticsChecks" class="diagnostics-checks"></div>
-      <details id="diagnosticsReportDetails" hidden><summary>Text report / manual copy</summary><textarea id="diagnosticsReport" readonly aria-label="Compatibility report"></textarea></details>
-      <p class="diagnostics-footnote">Checks are cached for 30 seconds. This report contains no PIN, session data, account details, or file paths. Tailscale peer connectivity is not tested.</p>
-      <section id="uninstallControls" class="diagnostics-summary" hidden>
-        <details><summary>Uninstall Rovarin</summary>
-          <p>This stops Rovarin and removes the installed application. You will lose remote dashboard access. Shared PawnIO and Tailscale remain installed.</p>
-          <form id="uninstallForm" class="uninstall-form">
-            <label><input id="uninstallRemoveData" type="checkbox"> Full removal: erase my PIN and Rovarin settings</label>
-            <p>Unchecked preserves your PIN and temperature preferences for reinstall. Logs and runtime records are removed either way.</p>
-            <label for="uninstallPin">Enter your current PIN</label>
-            <input id="uninstallPin" type="password" inputmode="numeric" pattern="[0-9]{6}|[0-9]{12}" maxlength="12" autocomplete="off" required>
-            <div class="diagnostics-toolbar"><button id="uninstallSubmit" type="submit">Uninstall Rovarin…</button></div>
-          </form>
-        </details>
-        <p id="uninstallFeedback" role="status" aria-live="polite"></p>
+          <div class="temperature-settings">
+            <label for="cpuTemperatureMode">Temperature source</label>
+            <select id="cpuTemperatureMode">
+              <option value="enhanced">Enhanced — Recommended</option>
+              <option id="experimentalTemperatureOption" value="thermal-zone" hidden disabled>System Thermal Zone — Experimental</option>
+              <option value="off">Off</option>
+            </select>
+            <button id="saveTemperatureMode" type="button">Save source</button>
+            <details id="temperatureAdvanced"><summary>Advanced / Experimental</summary>
+              <label><input id="enableExperimentalTemperature" type="checkbox"> Allow System Thermal Zone selection</label>
+              <p>Firmware/ACPI zones may represent multiple devices or platform hotspots. They are not verified CPU package temperature. CPU warnings and alerts are disabled for this source. It is never enabled automatically.</p>
+            </details>
+            <p id="temperatureModeFeedback" role="status" aria-live="polite">Enhanced needs supported CPU sensors and PawnIO. Thermal zones are not verified CPU package readings. Sampling runs only with a monitoring lease.</p>
+          </div>
+          <section class="diagnostics-summary">
+            <h2>Enhanced CPU Temperature Support</h2>
+            <p id="enhancedSupportStatus" role="status" aria-live="polite">Open Diagnostics to check installation options.</p>
+            <div class="diagnostics-toolbar"><button id="installEnhancedSupport" type="button" hidden>Install Enhanced Support</button></div>
+            <p>Optional PawnIO hardware-access driver. Installation requires approval through Windows UAC. No driver is installed by changing the temperature source.</p>
+          </section>
+          <section class="diagnostics-summary" aria-live="polite">
+            <h2 id="diagnosticsSummaryTitle">Open this page to check compatibility</h2>
+            <p id="diagnosticsSummaryText">Checks run on demand. Optional missing tools are normal.</p>
+            <p id="diagnosticsUpdated"></p>
+          </section>
+          <div id="diagnosticsChecks" class="diagnostics-checks"></div>
+          <div class="diagnostics-toolbar">
+            <button id="refreshDiagnostics" type="button">Refresh checks</button>
+            <button id="copyDiagnostics" type="button" disabled>Copy report</button>
+          </div>
+          <p id="diagnosticsFeedback" role="status" aria-live="polite"></p>
+          <details id="diagnosticsReportDetails" hidden><summary>Text report / manual copy</summary><textarea id="diagnosticsReport" readonly aria-label="Compatibility report"></textarea></details>
+          <p class="diagnostics-footnote">Checks are cached for 30 seconds. This report contains no PIN, session data, account details, or file paths. Tailscale peer connectivity is not tested.</p>
+        </div>
       </section>
     </section>
 
@@ -409,8 +432,7 @@
       <label class="processes-search"><span class="sr-only">Search processes</span><input id="processesSearch" type="search" placeholder="Search processes…" maxlength="200" aria-label="Search processes"></label>
       <div class="processes-toolbar"><div class="processes-live-state"><span id="processesLiveDot"></span><span id="processesLiveText">Waiting</span></div><span id="processesUpdated" class="processes-updated">Updated —</span><button id="processesFreezeButton" class="processes-freeze" type="button" aria-pressed="false">Pause</button></div>
       <div class="processes-table-wrap"><table class="processes-table"><thead><tr><th><button type="button" data-sort="name">Name</button></th><th class="process-pid"><button type="button" data-sort="pid">PID</button></th><th aria-sort="descending"><button type="button" data-sort="cpu" aria-pressed="true">CPU ↓</button></th><th><button type="button" data-sort="memory">Memory</button></th></tr></thead><tbody id="processesRows"><tr><td colspan="4" class="processes-empty">Loading processes…</td></tr></tbody></table></div>
-      <div id="processesActions" class="processes-killbar" hidden><span id="processesSelection" class="processes-selection"></span><button id="processesKillButton" class="processes-kill" type="button" disabled>End task</button><details class="processes-advanced"><summary>More</summary><button id="processesTreeButton" class="processes-kill" type="button" disabled>End process tree</button><p>Targets verified descendants, not a display group. Unsaved work may be lost.</p></details></div>
-      <p id="processesKillStatus" class="processes-kill-status" role="status" aria-live="polite"></p>
+
     </section>
     <section id="appsPage" class="app-page processes-page apps-page" aria-labelledby="appsTitle" hidden>
       <header class="processes-heading sr-only"><h1 id="appsTitle">Applications</h1></header>
@@ -444,8 +466,23 @@
           <p id="appsStatus" role="status" aria-live="polite">Open this page to load installed applications.</p>
           <div class="apps-view-controls" role="group" aria-label="Application view"><button id="appsViewList" type="button" aria-pressed="true">List</button><button id="appsViewGrid" type="button" aria-pressed="false">Grid</button></div>
         </div>
+        <section id="appLeftoversOffers" class="app-leftover-offers" hidden aria-label="Optional leftover cleanup"></section>
+        <section id="appsProgress" class="apps-progress-banner" hidden aria-labelledby="appsProgressTitle">
+          <div class="apps-progress-header">
+            <div>
+              <h2 id="appsProgressTitle">Uninstall progress</h2>
+              <p id="appsProgressSubtext" class="apps-progress-subtext"></p>
+            </div>
+            <div class="apps-progress-header-actions">
+              <button id="appsProgressDismiss" class="processes-freeze" type="button" hidden>Dismiss</button>
+              <button id="appsProgressRefresh" class="processes-freeze" type="button">Refresh progress</button>
+            </div>
+          </div>
+          <div id="appsProgressBar" class="apps-progress-bar" role="progressbar" aria-label="Uninstall progress"><span></span></div>
+          <p id="appsProgressStage" class="apps-progress-stage" role="status"></p>
+          <ol id="appsProgressRows"></ol>
+        </section>
         <div id="appsList" class="apps-list"></div>
-        <section id="appsProgress" hidden aria-labelledby="appsProgressTitle"><h2 id="appsProgressTitle">Uninstall progress</h2><ol id="appsProgressRows"></ol><button id="appsProgressRefresh" class="processes-freeze" type="button">Refresh progress</button></section>
       </div>
 
       <!-- Startup Apps Panel -->
@@ -463,7 +500,22 @@
       </div>
     </section>
   </div>
-  <dialog id="appsConfirmDialog" class="apps-confirm" aria-labelledby="appsConfirmTitle"><form id="appsConfirmForm"><h2 id="appsConfirmTitle">Review uninstall</h2><ul id="appsConfirmList"></ul><p id="appsReviewLimitations" role="status"></p><p>Application data may be removed by each app’s uninstaller. Close those apps first. UAC approval or an interactive uninstaller may need attention on the PC.</p><label for="appsConfirmPin">Current Rovarin PIN</label><input id="appsConfirmPin" type="password" inputmode="numeric" autocomplete="off" maxlength="12" required pattern="(?:[0-9]{6}|[0-9]{12})"><div class="apps-dialog-actions"><button id="appsConfirmCancel" class="processes-freeze" type="button">Cancel</button><button id="appsConfirmSubmit" class="processes-kill" type="submit">Confirm uninstall</button></div><p id="appsConfirmError" role="alert"></p></form></dialog>
+  <dialog id="appLeftoversDialog" class="apps-confirm" aria-labelledby="appLeftoversTitle">
+    <form id="appLeftoversForm">
+      <h2 id="appLeftoversTitle">Scan for leftovers</h2>
+      <p id="appLeftoversSummary" role="status" aria-live="polite"></p>
+      <ul id="appLeftoversFolders" class="app-leftover-folders"></ul>
+      <details id="appLeftoversExcluded" hidden><summary>Locations excluded from cleanup</summary><ul></ul></details>
+      <div id="appLeftoversApproval" hidden>
+        <p>Deletion is permanent and may remove this application’s saved settings and caches.</p>
+        <div id="leftoverRemovalPinFields"><label for="appLeftoversPin">Current Rovarin PIN</label>
+        <input id="appLeftoversPin" type="password" inputmode="numeric" autocomplete="off" maxlength="12" pattern="(?:[0-9]{6}|[0-9]{12})"></div>
+      </div>
+      <p id="appLeftoversError" role="alert"></p>
+      <div class="apps-dialog-actions"><button id="appLeftoversCancel" type="button" class="processes-freeze">Cancel</button><button id="appLeftoversDelete" type="submit" class="processes-kill" hidden>Delete</button></div>
+    </form>
+  </dialog>
+  <dialog id="appsConfirmDialog" class="apps-confirm" aria-labelledby="appsConfirmTitle"><form id="appsConfirmForm"><h2 id="appsConfirmTitle">Review uninstall</h2><ul id="appsConfirmList"></ul><p id="appsReviewLimitations" role="status"></p><p>Application data may be removed by each app’s uninstaller. Close those apps first. UAC approval or an interactive uninstaller may need attention on the PC.</p><div id="appsRemovalPinFields"><label for="appsConfirmPin">Current Rovarin PIN</label><input id="appsConfirmPin" type="password" inputmode="numeric" autocomplete="off" maxlength="12" required pattern="(?:[0-9]{6}|[0-9]{12})"></div><div class="apps-dialog-actions"><button id="appsConfirmCancel" class="processes-freeze" type="button">Cancel</button><button id="appsConfirmSubmit" class="processes-kill" type="submit">Confirm uninstall</button></div><p id="appsConfirmError" role="alert"></p></form></dialog>
   <dialog id="quickLaunchPickerDialog" class="apps-confirm ql-picker-dialog" aria-labelledby="qlPickerTitle">
     <div class="ql-picker-container">
       <div class="ql-picker-header">
@@ -487,6 +539,8 @@
     <form id="startupConfirmForm">
       <h2 id="startupConfirmTitle">Toggle Startup App</h2>
       <div id="startupConfirmDetails" class="startup-confirm-details"></div>
+      <label for="startupConfirmPin">Enter your current PIN</label>
+      <input id="startupConfirmPin" type="password" inputmode="numeric" pattern="[0-9]{6}|[0-9]{12}" maxlength="12" autocomplete="off" required>
       <p id="startupConfirmNote">This changes whether the application starts automatically when you log into Windows. The app itself is not modified or deleted.</p>
       <div class="apps-dialog-actions">
         <button id="startupConfirmCancel" class="processes-freeze" type="button">Cancel</button>
@@ -497,6 +551,11 @@
   </dialog>
 
 
+  </div>
+
+  <!-- Process actions stay outside the transformed scrolling page. -->
+  <div id="processesActions" class="processes-killbar apps-selection-tray" hidden role="region" aria-label="Selected process"><span id="processesSelection" class="processes-selection"></span><button id="processesKillButton" class="processes-kill" type="button" disabled>End task</button><details class="processes-advanced"><summary>More</summary><button id="processesTreeButton" class="processes-kill" type="button" disabled>End process tree</button><p>Targets verified descendants, not a display group. Unsaved work may be lost.</p></details><button id="processesClearSelection" class="processes-freeze" type="button">Done</button>
+      <p id="processesKillStatus" class="processes-kill-status" role="status" aria-live="polite"></p>
   </div>
 
   <!-- Installed Apps Selection Tray (floating viewport-fixed bar) -->
@@ -592,6 +651,7 @@
 
   <script src="/app.js"></script>
   <script src="/processes.js"></script>
+  <script src="/app-leftovers.js"></script>
   <script src="/apps.js"></script>
   <script src="/maintenance.js"></script>
   <script src="/diagnostics.js"></script>

@@ -14,13 +14,23 @@ try{
   pins.writeConfig(developer,original);
   fs.writeFileSync(path.join(app,'.rovarin-development-state.json'),'{"schema":1}');
   assert.strictEqual(pins.configurationFile(app),developer,'backend and Recovery share fixed unsynced config');
+  assert.strictEqual(pins.dataDirectory(app),directory,'all marked-development state shares protected unsynced storage');
+  fs.unlinkSync(path.join(app,'.rovarin-development-state.json'));
+  assert.throws(()=>pins.configurationFile(app),/Development storage marker missing/);
+  assert.throws(()=>pins.dataDirectory(app),/Development storage marker missing/);
+  assert(!fs.existsSync(path.join(app,'config.json')),'temporary marker loss cannot create a second credential');
+  fs.writeFileSync(path.join(app,'.rovarin-development-state.json'),'{"schema":1}');
   assert.notStrictEqual(pins.developmentConfigFile(path.join(temp,'other')),developer,'checkouts cannot share credentials accidentally');
   assert.strictEqual(pins.readConfig(developer).pin,original.pin);
   pins.regeneratePin(app);
   const rotated=pins.readConfig(developer);assert.notStrictEqual(rotated.pin,original.pin);
   assert.deepStrictEqual({...rotated,pin:original.pin},original,'Recovery preserves every unrelated field');
   assert.strictEqual(fs.lstatSync(developer).nlink,1);
+  // Reproduce disappearance after successful resolution but before startup read.
+  const resolvedBeforeRemoval=pins.configurationFile(app);
   fs.unlinkSync(developer);
+  assert.throws(()=>pins.loadConfig(resolvedBeforeRemoval,{allowCreate:false}),/ENOENT/);
+  assert(!fs.existsSync(developer),'startup read race cannot reset a migrated PIN');
   assert.throws(()=>pins.configurationFile(app),/Migrated development configuration missing/);
   assert(!fs.existsSync(developer),'missing migrated state never generates a replacement PIN');
   fs.writeFileSync(path.join(app,'.rovarin-development-state.json'),'{"schema":1,"path":"untrusted"}');

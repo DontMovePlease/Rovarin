@@ -272,6 +272,12 @@
   border: 1px solid rgba(16, 185, 129, 0.35);
 }
 
+.maint-status-pill.partially-completed {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
 .maint-status-pill.failed {
   background: rgba(244, 63, 94, 0.2);
   color: #fb7185;
@@ -341,6 +347,13 @@
   color: #34d399;
 }
 
+.maint-result-banner.partially-completed {
+  display: block;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #fbbf24;
+}
+
 .maint-result-banner.failed {
   display: block;
   background: rgba(244, 63, 94, 0.12);
@@ -388,6 +401,7 @@
 }
 
 .maint-history-dot.success { background: #10b981; box-shadow: 0 0 5px #10b981; }
+.maint-history-dot.partial { background: #f59e0b; box-shadow: 0 0 5px #f59e0b; }
 .maint-history-dot.failed  { background: #f43f5e; box-shadow: 0 0 5px #f43f5e; }
 
 .maint-history-body {
@@ -634,3 +648,10 @@
 /* The pinned navigation already names this page; retain its permission badge. */
 #maintenancePage .maint-section-title>svg,#maintenancePage .maint-heading-text {display:none}
 #maintenancePage .maint-section-title {margin-bottom:8px;padding-bottom:0;border-bottom:0}
+
+/* Declining local UAC is cancellation, not an application/authentication error. */
+.maint-status-pill.cancelled, .maint-result-banner.cancelled { color: var(--text-secondary); background: var(--bg-subtle); border-color: var(--border-card); }
+.maint-toast.cancelled { border-color: var(--border-card); }
+.maint-toast.cancelled .maint-toast-icon { color: var(--text-secondary); background: var(--bg-subtle); }
+.maint-toast.partial { border-color: rgba(245, 158, 11, 0.4); }
+.maint-toast.partial .maint-toast-icon { color: #fbbf24; background: rgba(245, 158, 11, 0.2); }

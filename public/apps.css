@@ -5,7 +5,23 @@
 .apps-toolbar input,.apps-toolbar select,.apps-confirm input {width:100%;min-height:44px;background:var(--surface-content-raised);color:var(--text-primary);border:1px solid var(--border-card);border-radius:10px;padding:9px;font:inherit}
 .apps-list {display:grid;gap:9px}.apps-row {display:flex;align-items:center;gap:14px;padding:14px;border:1px solid var(--border-card);border-radius:14px;background:var(--surface-content-raised);min-width:0}
 .apps-row>input {width:22px;height:22px;accent-color:var(--accent-primary);flex-shrink:0}.apps-info {flex:1;min-width:0}.apps-info h2 {font-size:15px;margin:0 0 4px;overflow-wrap:anywhere}.apps-info p {font-size:11px;color:var(--text-secondary);margin:3px 0;overflow-wrap:anywhere}
-.apps-row button,.apps-dialog-actions button,.apps-batchbar button {min-height:44px}.apps-confirm {background:var(--surface-content);color:var(--text-primary);border:1px solid var(--border-card);border-radius:24px;max-width:min(520px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto;padding:24px}.apps-confirm::backdrop {background:rgba(3,8,15,.75)}.apps-confirm p,.apps-confirm li {font-size:13px;line-height:1.6;overflow-wrap:anywhere}.apps-confirm h2 {font-size:22px}.apps-dialog-actions {display:flex;justify-content:end;gap:12px;margin-top:18px}#appsProgress {margin-top:22px}#appsProgressRows li {overflow-wrap:anywhere;font-size:13px;padding:6px 0}#appsStatus {font-size:12px;color:var(--text-secondary)}
+.apps-row button,.apps-dialog-actions button,.apps-batchbar button {min-height:44px}.apps-confirm {background:var(--surface-content);color:var(--text-primary);border:1px solid var(--border-card);border-radius:24px;max-width:min(520px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto;padding:24px}.apps-confirm::backdrop {background:rgba(3,8,15,.75)}.apps-confirm p,.apps-confirm li {font-size:13px;line-height:1.6;overflow-wrap:anywhere}.apps-confirm h2 {font-size:20px;margin-top:0}.apps-dialog-actions {display:flex;justify-content:end;gap:12px;margin-top:18px}#appsProgress {margin:12px 0 16px;padding:16px;background:var(--surface-content-raised);border:1px solid var(--accent-primary);border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,.25)}#appsProgressRows {margin:12px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}#appsProgressRows li {overflow-wrap:anywhere;font-size:13px;padding:8px 12px;background:var(--surface-content);border:1px solid var(--border-card);border-radius:10px;display:flex;align-items:center;gap:10px;line-height:1.4}#appsStatus {font-size:12px;color:var(--text-secondary)}
+.apps-progress-header {display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.apps-progress-header h2 {font-size:16px;font-weight:700;margin:0 0 4px;color:var(--text-primary)}
+.apps-progress-subtext {font-size:12px;line-height:1.5;color:var(--text-secondary);margin:0}
+.apps-progress-header-actions {display:flex;align-items:center;gap:8px;flex-shrink:0}
+.apps-prog-badge {display:inline-flex;align-items:center;font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px;white-space:nowrap;flex-shrink:0}
+.apps-prog-running {background:rgba(56,189,248,.15);color:var(--accent-primary);border:1px solid rgba(56,189,248,.3)}
+.apps-prog-completed {background:rgba(34,197,94,.15);color:#4ade80;border:1px solid rgba(34,197,94,.3)}
+.apps-prog-reboot {background:rgba(245,158,11,.15);color:#fbbf24;border:1px solid rgba(245,158,11,.3)}
+.apps-prog-failed {background:rgba(239,68,68,.15);color:#f87171;border:1px solid rgba(239,68,68,.3)}
+.apps-prog-queued {background:rgba(148,163,184,.12);color:var(--text-secondary);border:1px solid var(--border-card)}
+.apps-prog-skipped {background:rgba(148,163,184,.08);color:var(--text-secondary);border:1px solid var(--border-card)}
+.apps-removal-notice {padding:8px 12px;border-radius:10px;font-size:12px;line-height:1.5;margin-top:8px}
+.apps-notice-interactive {background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.3);color:#fef3c7}
+.apps-notice-silent {background:rgba(56,189,248,.1);border:1px solid rgba(56,189,248,.25);color:var(--text-primary)}
+.apps-notice-uac {background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.3);color:#f3e8ff}
+.apps-notice-manual {background:rgba(148,163,184,.1);border:1px solid var(--border-card);color:var(--text-secondary)}
 .processes-table th button {min-height:44px;padding:4px 0;background:transparent;border:0;color:var(--text-secondary);font:inherit;cursor:pointer}.processes-table th[aria-sort="ascending"] button,.processes-table th[aria-sort="descending"] button {color:var(--accent-primary)}
 @media(max-width:699px){.apps-row {gap:10px;padding:12px;flex-wrap:wrap}.apps-info {flex-basis:calc(100% - 35px)}.apps-row>button {margin-left:32px}.apps-toolbar label:first-child {flex-basis:100%}.apps-confirm {padding:18px}.apps-batchbar {align-items:center}}
 
@@ -399,7 +415,10 @@ html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
 .apps-confirm .apps-removal-support {margin-top:5px;color:var(--accent-primary)}.apps-confirm #appsReviewLimitations {color:var(--state-warning)}
 .apps-confirm button:disabled {opacity:.45;cursor:not-allowed}.apps-empty {font-size:13px;color:var(--text-secondary);padding:20px 8px}
 @media(max-width:699px){
- #appsPage {height:calc(100dvh - 148px);padding:12px;border-radius:16px;box-sizing:border-box;max-width:100%;overflow-x:hidden}
+ .native-shell #appsPage {height:calc(100dvh - 148px);padding:12px;border-radius:16px;box-sizing:border-box;max-width:100%;overflow-x:hidden}
+ html:not(.native-shell) #appsPage {height:auto;min-height:0;padding:12px;border-radius:16px;box-sizing:border-box;max-width:100%;overflow-x:hidden;touch-action:pan-y}
+ html:not(.native-shell) #appsPage #appsList {overflow-y:visible;height:auto;max-height:none;padding-right:0;touch-action:pan-y}
+ html:not(.native-shell) .startup-list {overflow-y:visible;height:auto;max-height:none;touch-action:pan-y}
  #appsPage .apps-toolbar {gap:8px}
  #appsPage .apps-toolbar label {min-width:70px}
  #appsPage .apps-toolbar label:first-child {flex-basis:100%}
@@ -487,7 +506,7 @@ html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
 
 #appsPage .apps-toolbar {margin-top:0}
 .apps-meta {flex-wrap:wrap}
-@media(max-width:699px){html:not(.native-shell) #appsPage {height:100%}.apps-meta #appsStatus {flex-basis:100%;order:1}}
+@media(max-width:699px){html:not(.native-shell) #appsPage {height:auto;min-height:0}.apps-meta #appsStatus {flex-basis:100%;order:1}}
 
 /* Quick Launch Section */
 .quick-launch-section {flex-shrink:0;margin-bottom:12px;padding:12px;border:1px solid var(--border-card);border-radius:14px;background:var(--surface-content-raised);box-sizing:border-box;max-width:100%}
@@ -504,7 +523,7 @@ html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
 .quick-launch-count {font-size:11px;color:var(--text-secondary)}
 .quick-launch-status {font-size:11px;color:var(--accent-emerald);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .quick-launch-status.is-error {color:var(--accent-amber)}
-.quick-launch-rail {display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;scrollbar-width:thin;max-width:100%;box-sizing:border-box}
+.quick-launch-rail {display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;scrollbar-width:thin;max-width:100%;box-sizing:border-box;touch-action:pan-x pan-y}
 .quick-launch-empty {font-size:12px;color:var(--text-secondary);padding:6px 0;margin:0}
 .quick-launch-tile {position:relative;flex:0 0 86px;width:86px;min-height:92px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 6px 8px;border:1px solid var(--border-card);border-radius:12px;background:var(--surface-content);cursor:pointer;scroll-snap-align:start;text-decoration:none;color:inherit;transition:background .15s,border-color .15s,transform .1s}
 .quick-launch-tile:hover {background:var(--tint-primary);border-color:var(--accent-primary)}
@@ -517,8 +536,36 @@ html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
 .quick-launch-tile-icon {width:38px;height:38px;object-fit:contain;margin-bottom:4px;image-rendering:-webkit-optimize-contrast}
 .quick-launch-tile-name {font-size:11px;font-weight:500;color:var(--text-primary);text-align:center;line-height:1.2;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-inline:2px}
 .quick-launch-missing-label {font-size:9px;color:var(--accent-amber);margin-top:2px}
-.quick-launch-unpin-btn {position:absolute;top:2px;right:2px;width:20px;height:20px;border:0;background:transparent;color:var(--text-secondary);border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;line-height:1;opacity:.6;padding:0}
-.quick-launch-unpin-btn:hover {opacity:1;color:var(--accent-amber);background:rgba(255,255,255,.08)}
+.quick-launch-unpin-btn {position:absolute;top:-5px;right:-5px;width:22px;height:22px;border:0;background:#1e293b;border:1px solid rgba(255,255,255,.25);box-shadow:0 2px 6px rgba(0,0,0,.45);color:#f87171;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;line-height:1;padding:0;z-index:5;transition:transform .18s cubic-bezier(0.34, 1.56, 0.64, 1),opacity .15s ease}
+.quick-launch-unpin-btn:hover {background:#ef4444;color:#fff;border-color:#ef4444;transform:scale(1.1)}
+.quick-launch-unpin-btn:focus-visible {outline:2px solid var(--accent-primary);outline-offset:2px}
+@keyframes ql-wiggle-even {
+  0% { transform: rotate(-1.5deg) scale(1.01); }
+  50% { transform: rotate(1.5deg) scale(1.01); }
+  100% { transform: rotate(-1.5deg) scale(1.01); }
+}
+@keyframes ql-wiggle-odd {
+  0% { transform: rotate(1.5deg) scale(1.01); }
+  50% { transform: rotate(-1.5deg) scale(1.01); }
+  100% { transform: rotate(1.5deg) scale(1.01); }
+}
+.quick-launch-tile.is-wiggling:nth-child(even),
+.quick-launch-rail.is-editing .quick-launch-tile:nth-child(even) {
+  animation: ql-wiggle-even 0.28s ease-in-out infinite alternate;
+  border-color: rgba(245, 158, 11, 0.45);
+}
+.quick-launch-tile.is-wiggling:nth-child(odd),
+.quick-launch-rail.is-editing .quick-launch-tile:nth-child(odd) {
+  animation: ql-wiggle-odd 0.26s ease-in-out infinite alternate;
+  border-color: rgba(245, 158, 11, 0.45);
+}
+@media (prefers-reduced-motion: reduce) {
+  .quick-launch-tile.is-wiggling,
+  .quick-launch-rail.is-editing .quick-launch-tile {
+    animation: none !important;
+    border-color: var(--accent-amber);
+  }
+}
 
 /* Quick Launch Picker Dialog */
 .ql-picker-dialog {max-width:min(520px,calc(100vw - 24px));width:100%;padding:20px}
@@ -593,8 +640,63 @@ html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
   .quick-launch-rail {gap:6px}
   .quick-launch-tile {flex:0 0 76px;width:76px;min-height:86px;padding:8px 4px}
   .quick-launch-tile-icon {width:32px;height:32px}
+  .quick-launch-tile .quick-launch-unpin-btn {
+    display: none;
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  .quick-launch-tile.is-wiggling .quick-launch-unpin-btn,
+  .quick-launch-rail.is-editing .quick-launch-unpin-btn {
+    display: flex;
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 @media(min-width:700px){
   .quick-launch-rail {flex-wrap:wrap;overflow-x:visible}
   .quick-launch-tile {flex:0 0 88px;width:88px}
 }
+
+/* Source information stays secondary and accessible on both phone and desktop. */
+.startup-entry-details {font-size:12px;color:var(--text-secondary);margin-top:5px}
+.startup-entry-details summary {cursor:pointer;padding:6px 0;min-height:32px;box-sizing:border-box}
+.startup-entry-details summary:focus-visible {outline:2px solid var(--accent-primary);outline-offset:2px}
+.startup-status-unknown {color:var(--text-secondary);background:var(--surface-content)}
+@media(max-width:699px){.startup-toggle-btn {min-height:44px}.startup-entry-details summary {min-height:44px;display:list-item}}
+
+.startup-associated-services>summary {cursor:pointer;padding:12px 2px;color:var(--text-secondary);font-size:13px}
+.startup-associated-services .startup-row {margin-top:8px}
+.startup-associated-services>summary:focus-visible {outline:2px solid var(--accent-primary)}
+
+/* Optional cleanup shares the existing Apps dialog and responsive controls. */
+.app-leftover-offers{margin:12px 0;padding:12px;border:1px solid var(--glass-border);border-radius:var(--radius-card)}
+.app-leftover-offers>div{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0;flex-wrap:wrap}
+.app-leftover-folders{list-style:none;padding:0;max-height:35vh;overflow:auto;overscroll-behavior:contain}
+.app-leftover-folders li{display:block;padding:10px 0;border-bottom:1px solid var(--glass-border);overflow-wrap:anywhere}
+.app-leftover-folders small{display:block;color:var(--text-secondary);margin-top:4px}
+#appLeftoversDialog{margin:auto;width:min(520px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto}
+#appLeftoversExcluded{overflow-wrap:anywhere;color:var(--text-secondary)}
+
+/* Stable stage-based uninstall progress; no fabricated elapsed-time percentage. */
+.apps-progress-bar {height:6px;overflow:hidden;border-radius:999px;background:var(--surface-content);margin:12px 0 6px}
+.apps-progress-bar>span {display:block;height:100%;width:100%;background:var(--accent-primary)}
+.apps-progress-bar[data-state="active"]>span {width:35%;animation:apps-uninstall-progress 1.8s ease-in-out infinite}
+.apps-progress-bar[data-state="completed"]>span {background:var(--state-success,#64d6ad)}
+.apps-progress-bar[data-state="failed"]>span {background:var(--state-danger,#ef8099)}
+.apps-progress-bar[data-state="partial"]>span,.apps-progress-bar[data-state="unconfirmed"]>span {background:var(--state-warning,#e8be72)}
+.apps-progress-stage {margin:0;font-size:12px;color:var(--text-secondary)}
+@keyframes apps-uninstall-progress {from{transform:translateX(-110%)}to{transform:translateX(390%)}}
+.apps-progress-header>div:first-child {flex:1 1 240px;min-width:0}
+.apps-progress-subtext {overflow-wrap:anywhere}
+@media(prefers-reduced-motion:reduce){.apps-progress-bar[data-state="active"]>span{animation:none;width:35%}}
+@media(max-width:699px){
+ #appsPage .apps-meta #appsStatus {flex:0 0 100%;order:2;line-height:1.5}
+ .apps-progress-header-actions {flex-wrap:wrap;width:100%}
+ #appsProgressRows li {flex-wrap:wrap;gap:5px 8px}
+ #appsProgressRows li>strong {flex:1;min-width:0}
+ #appsProgressRows li>span:last-child {flex-basis:100%}
+}
+
+.startup-actions {display:flex;gap:8px;flex-wrap:wrap}
+.startup-control-reason {font-size:12px;color:var(--text-secondary);margin:6px 0 0}
+@media(max-width:699px){.startup-actions {grid-column:1/-1}.startup-actions .startup-toggle-btn {flex:1;min-height:44px}}
