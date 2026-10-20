@@ -30,7 +30,7 @@ Rovarin is a Windows PC monitoring and system-management app. Check CPU, GPU, me
 ![Rovarin desktop Overview](docs/images/overview.png)
 
 
-<sub>v0.5.0 Liquid Glass, captured in the actual Windows desktop shell using isolated test state. Readings show total PC usage, not Rovarin's own resource usage; hardware and load vary by machine.</sub>
+<sub>Rovarin v0.5.0 — The Liquid Glass Update.</sub>
 
 
 ## v0.5.0 — The Liquid Glass Update
@@ -87,14 +87,14 @@ After confirmed removal, choose **Scan for leftovers** if wanted. Review the att
 
 Vendor uninstallers may require interaction or local Windows administrator approval. Removing an app can also remove its data; Rovarin follows the app's own supported uninstall mechanism.
 
-![Rovarin desktop Applications page with Quick Launch, filters, Grid view and Uninstall controls](docs/images/applications-desktop.png)
+![Rovarin Liquid Glass Applications Manager on desktop](docs/images/applications-desktop.png)
 
 <table>
-<tr><th>Pin apps from your phone</th><th>Browse and uninstall apps</th></tr>
-<tr><td align="center"><img src="docs/images/quick-launch-phone.png" width="230" alt="Phone Quick Launch picker with search and Add controls"></td><td align="center"><img src="docs/images/applications-phone.png" width="230" alt="Phone Applications page with Quick Launch, app search and Uninstall buttons"></td></tr>
+<tr><th>Mobile dashboard</th><th>Mobile Applications Manager</th></tr>
+<tr><td align="center"><img src="docs/images/dashboard-phone.png" width="230" alt="Rovarin Liquid Glass mobile dashboard"></td><td align="center"><img src="docs/images/applications-phone.png" width="230" alt="Rovarin Liquid Glass mobile Applications Manager"></td></tr>
 </table>
 
-<sub>Existing Rovarin website screenshots, reused here unchanged. Installed apps and available actions vary by PC.</sub>
+<sub>Rovarin v0.5.0 on desktop and mobile. Installed apps and available actions vary by PC.</sub>
 
 ## Install on Windows
 
