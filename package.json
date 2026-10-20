@@ -1,6 +1,6 @@
 {
   "name": "rovarin-dashboard",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Lightweight personal Rovarining dashboard for Windows accessible via Tailscale",
   "main": "server.js",
   "scripts": {
@@ -21,7 +21,11 @@
     "test:system-ui": "node scripts/system-management-ui-smoke-test.js",
     "test:process-labels": "node scripts/process-display-smoke-test.js",
     "test:diagnostics": "node scripts/diagnostics-smoke-test.js",
-    "test:leftovers": "node scripts/app-leftovers-smoke-test.js && node scripts/app-leftovers-ui-smoke-test.js"
+    "test:leftovers": "node scripts/app-leftovers-smoke-test.js && node scripts/app-leftovers-ui-smoke-test.js",
+    "test:power": "node scripts/power-controls-smoke-test.js",
+    "test:glass": "node scripts/liquid-glass-smoke-test.js",
+    "test:glass:native": "node scripts/native-desktop-test.js --glass",
+    "test:mobile-auth": "node scripts/mobile-auth-smoke-test.js"
   },
   "keywords": [
     "system-monitor",

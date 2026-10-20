@@ -1,0 +1,381 @@
+/* Rovarin Liquid Glass: one shared visual system above an optional optical scene.
+   Layout, hit targets, native chrome geometry and business logic stay in their owners. */
+html.liquid-theme {
+ --bg-canvas:#080e1b; --bg-canvas-deep:#050a14; --chrome-background:#0c1420;
+ --text-primary:#f1f5ff; --text-secondary:#b0bed4; --text-muted:#91a4c0;
+ --accent-primary:#8bdeed; --accent-secondary:#c1abf8;
+ --state-success:#7ce4c2; --state-warning:#f3cc87; --state-danger:#ffa4b7;
+ --tint-primary:rgba(139,222,237,.13); --tint-success:rgba(124,228,194,.12);
+ --tint-warning:rgba(243,204,135,.12); --tint-danger:rgba(255,164,183,.12);
+ --border-card:rgba(191,220,249,.16); --glass-border:rgba(205,231,255,.24);
+ --glass-highlight:rgba(239,251,255,.24);
+ --surface-content:linear-gradient(145deg,rgba(30,44,65,.88),rgba(14,24,43,.94));
+ --surface-content-raised:rgba(37,51,73,.8);
+ --surface-glass:linear-gradient(145deg,rgba(46,67,90,.66),rgba(17,28,49,.82));
+ --surface-glass-strong:linear-gradient(150deg,#253b50,#18253e);
+ --shadow-card:inset 0 1px 0 rgba(232,249,255,.14),inset 0 -1px 0 rgba(157,176,255,.05),0 12px 32px #02071340;
+ --shadow-control:inset 0 1px 0 rgba(241,253,255,.16),0 3px 9px #02071324;
+ --glass-shadow:inset 0 1px 0 rgba(239,251,255,.2),0 18px 45px #02071355;
+ --liquid-wallpaper-fallback:radial-gradient(ellipse at 90% 72%,#50386d77,transparent 58%),linear-gradient(118deg,#080f20 4%,#0d2539 24%,#2a6378 30%,#123449 35%,#091323 53%,#29213e 78%,#0b1424);
+ --radius-card:24px; --radius-panel:26px; --radius-control:12px;
+}
+html.liquid-theme body { isolation:isolate; background-color:#080e1b; background-image:var(--liquid-wallpaper-fallback); background-attachment:fixed; }
+.liquid-scene {position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none;contain:strict;}
+html.liquid-theme .dashboard-container,html.liquid-theme .phone-page-surface,html.liquid-theme .phone-header {background:transparent;}
+html.liquid-theme :is(.metric-card,.health-card,.system-specs-card,.pc-details-footer,.maint-section,.power-section,.diagnostics-page,.app-page.processes-page,.cpu-detail-panel,.login-card) {
+ background:var(--surface-content);border:1px solid var(--border-card);border-radius:var(--radius-card);box-shadow:var(--shadow-card);backdrop-filter:none;-webkit-backdrop-filter:none;
+}
+html.liquid-theme.liquid-ready :is(.metric-card,.health-card,.system-specs-card,.pc-details-footer,.maint-section,.power-section,.diagnostics-page,.app-page.processes-page,.cpu-detail-panel,.login-card) {background:linear-gradient(150deg,rgba(27,42,63,.42),rgba(9,20,38,.53));}
+html.liquid-theme :is(.health-card,.metric-card) {padding:20px;}
+html.liquid-theme .metric-card:hover {border-color:rgba(187,231,251,.33);box-shadow:var(--shadow-card);}
+html.liquid-theme :is(.metric-value,.stat-value,.processes-table,.apps-card-size,.network-speed) {font-variant-numeric:tabular-nums;}
+html.liquid-theme :is(h1,h2,h3,.metric-value) {letter-spacing:-.025em;}
+html.liquid-theme :is(.metric-label,.maint-group-label,.processes-eyebrow) {letter-spacing:.045em;}
+html.liquid-theme :is(.metric-icon,.health-icon-box,.login-icon) {background:linear-gradient(135deg,rgba(139,222,237,.2),rgba(167,146,241,.1));border:1px solid rgba(170,223,243,.2);box-shadow:inset 0 1px 0 #effaff24;color:var(--accent-primary);border-radius:14px;}
+html.liquid-theme .metric-value {text-shadow:0 2px 20px rgba(164,211,255,.09);}
+html.liquid-theme :is(.detail-chip,.drive-item,.health-check-item,.diagnostics-check,.specs-section,.network-speed-card) {background:rgba(158,192,225,.055);border-color:rgba(191,220,249,.1);box-shadow:inset 0 1px 0 #e7f4ff08;}
+html.liquid-theme .progress-bar {background:rgba(160,190,221,.12);border-radius:999px;overflow:hidden;}
+html.liquid-theme :is(.progress-fill,.usage-fill) {border-radius:999px;}
+/* Quick settings and diagnostics launcher with subtle orbit styling */
+.liquid-overview {display:flex;align-items:center;justify-content:space-between;gap:16px;padding:5px 4px 12px;grid-column:1/-1;}
+.liquid-overview p {color:var(--text-muted);font-size:10px;font-weight:650;letter-spacing:.16em;text-transform:uppercase;margin-bottom:5px;}
+.liquid-overview h1 {font-size:clamp(22px,2.5vw,32px);font-weight:620;line-height:1.15;color:#f1f5ff;}
+.liquid-orbit {display:grid;place-items:center;width:40px;height:40px;flex:0 0 40px;border-radius:14px;border:1px solid #cadfff35;background:linear-gradient(135deg,#aacdf522,#b895f51a);box-shadow:inset 0 1px 0 #edffff26,0 5px 15px #0002;transform:rotate(10deg);color:#c8c4ff;cursor:pointer;transition:transform .2s cubic-bezier(.2,.8,.2,1),background .2s ease,border-color .2s ease,box-shadow .2s ease;outline:none;}
+.liquid-orbit:hover {transform:rotate(18deg) scale(1.05);border-color:rgba(187,231,251,.5);background:linear-gradient(135deg,#aacdf535,#b895f528);box-shadow:inset 0 1px 0 #edffff40,0 8px 20px rgba(139,222,237,.2);color:#eaf8ff;}
+.liquid-orbit:active {transform:rotate(5deg) scale(.96);}
+.liquid-orbit:focus-visible {outline:2px solid var(--accent-primary);outline-offset:3px;}
+.liquid-orbit svg {width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.3;}
+/* Existing chrome keeps its drag regions, window buttons and safe-area geometry. */
+html.liquid-theme :is(.native-app-bar,.app-sidebar.page-nav) {background:rgba(14,26,44,.92);border-color:rgba(198,228,250,.19);box-shadow:inset 0 1px 0 #ecfaff19,0 8px 24px #02071326;}
+html.liquid-theme.liquid-ready :is(.native-app-bar,.app-sidebar.page-nav) {background:rgba(13,26,45,.5);}
+html.liquid-theme .native-app-identity {font-weight:650;letter-spacing:-.01em;}
+html.liquid-theme .app-sidebar .page-nav-button {border-radius:14px;transition:background .18s ease,color .18s ease,box-shadow .18s ease;}
+html.liquid-theme .app-sidebar .page-nav-button.is-active {color:#b3f1f8;background:linear-gradient(120deg,rgba(126,218,231,.22),rgba(154,150,241,.13));box-shadow:inset 0 1px 0 #e6ffff38,inset 0 0 0 1px #a9e2ff29,0 4px 12px #0002;}
+html.liquid-theme .app-sidebar .page-nav-button:hover:not(.is-active) {background:#b5d1f012;color:#eaf8ff;}
+/* Primitives are shared by live telemetry, Apps, Processes, Maintenance and Settings. */
+html.liquid-theme :is(button,input,select,textarea) {font-family:var(--font-system);}
+html.liquid-theme :is(.maint-btn,.maint-action-card,.diagnostics-toolbar button,.diagnostics-actions button,.temperature-settings button,.temperature-settings select,.processes-freeze,.apps-toolbar button,.apps-tab,.apps-card button,.apps-action,.power-actions button,#powerRefresh) {border-color:var(--glass-border);background:var(--surface-glass);color:var(--text-primary);box-shadow:var(--shadow-control);border-radius:var(--radius-control);}
+html.liquid-theme :is(button,a,summary,input,select,textarea):focus-visible {outline:2px solid var(--accent-primary);outline-offset:3px;}
+html.liquid-theme button:not(:disabled):not(.sidebar-backdrop) {transition:background .17s ease,border-color .17s ease,box-shadow .17s ease,transform .17s cubic-bezier(.2,.8,.2,1);}
+html.liquid-theme button:active:not(:disabled):not(.sidebar-backdrop) {transform:translateY(1px) scale(.985);}
+html.liquid-theme :is(button,input,select,textarea):disabled {cursor:not-allowed;}
+html.liquid-theme :is(input[type=search],input[type=password],input[type=text],textarea,select) {background:rgba(5,13,27,.62);color:var(--text-primary);border:1px solid var(--glass-border);border-radius:12px;}
+html.liquid-theme input::placeholder,html.liquid-theme textarea::placeholder {color:#91a4bd;}
+html.liquid-theme select option {background:#17243a;color:#f1f5ff;}
+html.liquid-theme input[type=checkbox],html.liquid-theme input[type=range] {accent-color:#89dbea;}
+html.liquid-theme :is(.settings-tabs,.processes-sort,.apps-tabs) {background:#07122270;border-color:rgba(194,222,249,.13);border-radius:15px;}
+html.liquid-theme :is(.settings-tabs [aria-selected=true],.apps-tab[aria-selected=true],.processes-sort button.is-selected) {background:linear-gradient(140deg,#78dfe02a,#aaa5ef20);color:#b1f0f6;border-color:#a2e4f34a;box-shadow:inset 0 1px 0 #e9fbff29;}
+html.liquid-theme :is(.processes-table,.apps-list) {background:transparent;}
+html.liquid-theme #processesPage .processes-table th {background:#15263a;color:#bacde1;border-color:#c9dfff21;}
+html.liquid-theme .processes-table td {border-color:#cadfff12;}
+html.liquid-theme .processes-table tr.is-selected td {background:#7ad9ed17;}
+html.liquid-theme :is(.apps-card,.quick-launch-tile,.apps-progress,.apps-batch-review,.startup-card) {background:linear-gradient(150deg,#b5daff0d,#839dec05);border-color:#c4e4ff1f;border-radius:16px;box-shadow:inset 0 1px 0 #e7f4ff0d;}
+html.liquid-theme :is(.apps-card:hover,.quick-launch-tile:hover,.maint-action-card:hover:not(:disabled)) {border-color:#b3e6fd55;background:linear-gradient(140deg,#9ccce71c,#b19dee12);}
+html.liquid-theme :is(.apps-selection-tray,.processes-killbar) {background:linear-gradient(135deg,#1b3548f5,#25283ff5);border-color:#bbdfef55;box-shadow:inset 0 1px 0 #e6ffff33,0 10px 35px #0008;border-radius:20px;}
+html.liquid-theme :is(.maint-card-emoji,.apps-card-icon,.quick-launch-icon) {filter:saturate(.78);}
+html.liquid-theme .maint-action-card {border-radius:18px;padding:17px;}
+html.liquid-theme .maint-group-label {font-size:10px;color:#a2b6d1;}
+html.liquid-theme :is(.maint-log,.maint-progress-panel,.apps-progress-log,pre) {background:#06111bc9;border-color:#bad7ef20;color:#c6d6e8;border-radius:13px;}
+html.liquid-theme :is(.maint-progress-bar,.apps-operation-progress) {border-radius:999px;}
+html.liquid-theme :is(.power-actions button) {min-height:76px;border-radius:16px;background:linear-gradient(140deg,#b8d6ff14,#bb9bdf0c);}
+html.liquid-theme :is(.power-actions .power-action-icon) {width:23px;height:23px;flex-basis:23px;}
+html.liquid-theme .power-action-copy strong {font-size:15px;}
+html.liquid-theme :is(#monitorSettings,.diagnostics-summary) {background:rgba(135,174,215,.035);border-color:#bfdfff17;}
+html.liquid-theme #monitorSettings {border:0;padding:4px;box-shadow:none;}
+html.liquid-theme #monitorSettings button {min-height:44px;border-radius:12px;background:var(--surface-glass);}
+html.liquid-theme #monitorSettings .settings-tabs button[aria-selected=true] {background:linear-gradient(140deg,#78dfe02a,#aaa5ef20);color:#b1f0f6;border-color:#a2e4f34a;}
+.graphics-settings {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 20px;align-items:center;padding:16px 0 18px;margin-bottom:16px;border-bottom:1px solid var(--border-card);}
+.graphics-settings label {font-size:14px;font-weight:650;}
+.graphics-settings p {font-size:12px;color:var(--text-secondary);line-height:1.45;grid-column:1/-1;margin:0;}
+.graphics-settings select {min-height:44px;padding:8px 12px;width:150px;}
+.graphics-settings #graphicsQualityStatus {font-size:11px;color:var(--text-muted);}
+/* Top-layer dialogs use an opaque-enough CSS material; no promise of DOM refraction. */
+html.liquid-theme :is(dialog,.maint-modal,.maint-toast,.chart-tooltip,.cpu-detail-dialog,.mobile-onboarding-sheet) {background:linear-gradient(140deg,rgba(34,52,73,.98),rgba(18,29,49,.98));color:var(--text-primary);border-color:#c5e3ff45;border-radius:24px;box-shadow:inset 0 1px 0 #edffff2b,0 24px 70px #0008;}
+html.liquid-theme dialog::backdrop {background:rgba(2,8,19,.73);}
+html.liquid-theme :is(.maint-toast,.reconnect-banner,.apps-feedback) {border-radius:14px;}
+html.liquid-theme .pin-input {letter-spacing:min(.24em,6px);background:#081527a6;box-shadow:inset 0 2px 8px #0002;}
+html.liquid-theme .login-btn {background:linear-gradient(135deg,#a2e8ed,#b4b9f2);color:#122538;border:1px solid #d3fbff85;box-shadow:inset 0 1px 0 #fff9,0 6px 20px #77d4e026;font-weight:700;}
+html.liquid-theme .login-card {border-color:#c8e5fc40;}
+html.liquid-theme :is(.maint-btn-danger,.processes-kill,#uninstallSubmit,#powerConfirmSubmit) {background:linear-gradient(140deg,#a34b662a,#672f472e);border-color:#ffa4b74a;color:#ffc5d0;}
+html.liquid-theme :is(.chart-container canvas,.history-chart) {opacity:.95;}
+@media (max-width:699px) {
+ html.liquid-theme :is(.metric-card,.health-card) {padding:14px;}
+ html.liquid-theme .metric-card {border-radius:21px;}
+ html.liquid-theme .liquid-overview {padding:4px 4px 9px;gap:10px;}
+ html.liquid-theme .liquid-overview h1 {font-size:22px;}
+ html.liquid-theme .liquid-orbit {width:34px;height:34px;flex-basis:34px;border-radius:11px;}
+ html.liquid-theme .liquid-orbit svg {width:23px;height:23px;}
+ html.liquid-theme .maint-action-card {min-height:64px;}
+ html.liquid-theme .power-actions button {min-height:76px;}
+ .graphics-settings {grid-template-columns:1fr;gap:8px;}
+ .graphics-settings select {width:100%;}
+ html.liquid-theme .app-sidebar .page-nav-button {min-height:44px;}
+ html.liquid-theme :is(.apps-selection-tray,.processes-killbar) {border-radius:18px;}
+}
+@media (prefers-reduced-motion:reduce) {
+ html.liquid-theme *,html.liquid-theme *::before,html.liquid-theme *::after {transition:none!important;animation:none!important;scroll-behavior:auto!important;}
+ html.liquid-theme button:active:not(:disabled):not(.sidebar-backdrop) {transform:none;}
+}
+@media (prefers-contrast:more) {
+ html.liquid-theme {--text-primary:#fff;--text-secondary:#dce7f8;--text-muted:#c2d1e8;--border-card:#96b0c9;--glass-border:#96b0c9;--surface-content:#101e30;}
+ html.liquid-theme :is(.metric-card,.health-card,.maint-section,.power-section,.diagnostics-page,.app-page.processes-page,.login-card) {background:#101e30;}
+}
+@media (forced-colors:active) {
+ html.liquid-theme body {background:Canvas;color:CanvasText;}
+ html.liquid-theme :is(button,input,select,.metric-card,.health-card,.login-card) {border:1px solid ButtonText;box-shadow:none;background:Canvas;color:CanvasText;}
+}
+/* Desktop Native Shell Parity: Translucent glass top bar with seamless blend into native window buttons */
+html.liquid-theme.native-shell .native-app-bar {
+  background: linear-gradient(90deg, rgba(14,26,44,0.88) calc(100% - 120px), rgba(12,20,32,0.96) calc(100% - 85px), var(--chrome-background) 100%);
+  border-bottom: 1px solid var(--border-card);
+  box-shadow: inset 0 -1px 0 rgba(198,228,250,.08), 0 4px 16px rgba(2,7,19,.28);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+html.liquid-theme.native-shell.liquid-ready .native-app-bar {
+  background: linear-gradient(90deg, rgba(13,26,45,0.52) calc(100% - 120px), rgba(12,20,32,0.94) calc(100% - 85px), var(--chrome-background) 100%);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Desktop Native Shell: Translucent Liquid Glass sidebar rail */
+html.liquid-theme.native-shell .app-sidebar.page-nav {
+  background: rgba(14,26,44,0.88);
+  border-right: 1px solid var(--border-card);
+  box-shadow: 4px 0 24px rgba(2,7,19,.35), inset -1px 0 0 rgba(232,249,255,.05);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+html.liquid-theme.native-shell.liquid-ready .app-sidebar.page-nav {
+  background: rgba(13,26,45,0.52);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Desktop Native Shell: Dashboard cards match full liquid glass proportion & typography */
+html.liquid-theme.native-shell #dashboardPage {
+  gap: 16px;
+}
+html.liquid-theme.native-shell #dashboardPage .health-card {
+  padding: 18px 20px;
+  border-radius: var(--radius-card);
+}
+html.liquid-theme.native-shell #dashboardPage .metric-card {
+  padding: 18px 20px;
+  border-radius: var(--radius-card);
+  gap: 10px;
+}
+html.liquid-theme.native-shell #dashboardPage .metrics-grid {
+  gap: 16px;
+}
+html.liquid-theme.native-shell #dashboardPage .chart-container {
+  height: 48px;
+}
+html.liquid-theme.native-shell #dashboardPage .val-large {
+  font-size: 34px;
+}
+html.liquid-theme.native-shell #dashboardPage .card-label {
+  font-size: 13px;
+}
+html.liquid-theme.native-shell #dashboardPage .card-badge {
+  font-size: 11px;
+}
+html.liquid-theme.native-shell #dashboardPage .health-check-item {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+html.liquid-theme.native-shell #dashboardPage .health-icon-box {
+  width: 36px;
+  height: 36px;
+}
+html.liquid-theme.native-shell #dashboardPage .cpu-detail-open-button {
+  min-height: 32px;
+  font-size: 12px;
+  padding: 0 12px;
+}
+
+/* Desktop Native Shell: Dialogs, Modals, Overlays and Views */
+html.liquid-theme.native-shell :is(.cpu-detail-panel, .maint-modal, .maint-toast, .mobile-onboarding-sheet) {
+  background: linear-gradient(140deg, rgba(30, 46, 68, 0.96), rgba(16, 26, 44, 0.98));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: var(--radius-panel);
+}
+html.liquid-theme.native-shell .app-page.processes-page {
+  padding: 20px;
+  border-radius: var(--radius-panel);
+}
+html.liquid-theme.native-shell #appsPage {
+  padding: 20px;
+  border-radius: var(--radius-panel);
+}
+
+/* Reusable Liquid Glass Primitives (Supports Current and Future Downloads/LinkGrabber Views) */
+html.liquid-theme .glass-panel {
+  background: var(--surface-content);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-card);
+  padding: 20px;
+}
+html.liquid-theme.liquid-ready .glass-panel {
+  background: linear-gradient(150deg, rgba(27,42,63,.42), rgba(9,20,38,.53));
+}
+html.liquid-theme .glass-card {
+  background: linear-gradient(150deg, rgba(181,218,255,.05), rgba(131,157,236,.02));
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-card);
+  box-shadow: inset 0 1px 0 rgba(232,249,255,.1);
+  padding: 16px;
+  transition: border-color .18s ease, background .18s ease, transform .18s ease;
+}
+html.liquid-theme .glass-card:hover {
+  border-color: rgba(187,231,251,.35);
+  background: linear-gradient(140deg, rgba(156,204,231,.12), rgba(177,157,238,.08));
+}
+html.liquid-theme .glass-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(158,192,225,.08);
+  border: 1px solid var(--border-card);
+  color: var(--text-secondary);
+}
+html.liquid-theme .glass-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 16px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--glass-border);
+  background: var(--surface-glass);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow-control);
+  transition: background .17s ease, border-color .17s ease, transform .17s ease;
+}
+html.liquid-theme .glass-btn:hover:not(:disabled) {
+  border-color: rgba(187,231,251,.45);
+  background: linear-gradient(140deg, rgba(156,204,231,.22), rgba(177,157,238,.14));
+}
+html.liquid-theme .glass-btn-primary {
+  background: linear-gradient(135deg, rgba(139,222,237,.28), rgba(193,171,248,.22));
+  border-color: rgba(170,223,243,.5);
+  color: #f1f8ff;
+}
+html.liquid-theme .glass-input {
+  background: rgba(5,13,27,.62);
+  color: var(--text-primary);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  padding: 8px 14px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color .18s ease;
+}
+html.liquid-theme .glass-input:focus {
+  border-color: var(--accent-primary);
+}
+html.liquid-theme .glass-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-muted);
+  border: 1px dashed var(--border-card);
+  border-radius: var(--radius-card);
+  background: rgba(158,192,225,.03);
+}
+html.liquid-theme .glass-empty-state svg {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 12px;
+  opacity: .6;
+}
+html.liquid-theme .glass-loading-shimmer {
+  position: relative;
+  overflow: hidden;
+  background: rgba(158,192,225,.08);
+  border-radius: 8px;
+}
+html.liquid-theme .glass-loading-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(239,251,255,.09), transparent);
+  animation: glassShimmer 1.8s infinite;
+}
+@keyframes glassShimmer {
+  100% { transform: translateX(100%); }
+}
+
+
+/* Minimal skips compositor blur as well as WebGL, including native chrome. */
+html.liquid-theme[data-graphics-quality="minimal"] :is(.native-app-bar,.app-sidebar.page-nav) {backdrop-filter:none;-webkit-backdrop-filter:none;}
+html.liquid-theme[data-graphics-quality="minimal"] .glass-loading-shimmer::after {animation:none;display:none;}
+
+@media (max-width:699px) {
+ /* Glass follows content over a fixed backdrop; mobile controls float without an enclosing bar. */
+ html.liquid-theme:not(.native-shell) body {background-image:none;}
+ html.liquid-theme:not(.native-shell) body::before {content:'';position:fixed;inset:0;z-index:-2;pointer-events:none;background-color:var(--bg-canvas);background-image:var(--liquid-wallpaper,var(--liquid-wallpaper-fallback));background-size:100% auto;background-position:center top;background-repeat:no-repeat;}
+ /* The transparent page is not a solid sheet: keep depth on glass surfaces,
+    not a full-height shadow following the drawer. */
+ html.liquid-theme:not(.native-shell) .phone-page-surface {box-shadow:none;}
+ /* Mobile uses one title row. The existing orbit shortcut is moved into the
+    floating capsule; its desktop overview stays in its original location. */
+ html.liquid-theme:not(.native-shell) .liquid-overview {display:none;}
+ html.liquid-theme:not(.native-shell) .phone-header .native-app-identity {flex:1;min-width:0;}
+ html.liquid-theme:not(.native-shell) .phone-header .liquid-orbit {margin-left:auto;flex-shrink:0;}
+ html.liquid-theme:not(.native-shell) .phone-header {background:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;}
+ html.liquid-theme:not(.native-shell) .phone-header .native-app-bar {
+  box-sizing:border-box;
+  width:min(380px,calc(100% - max(12px,env(safe-area-inset-left)) - max(12px,env(safe-area-inset-right))));
+  max-width:calc(100% - 24px);padding-inline:5px 18px;
+  background:linear-gradient(115deg,rgba(228,247,255,.12),rgba(228,247,255,0) 42%,rgba(169,198,255,.06)),linear-gradient(145deg,rgba(28,47,68,.42),rgba(12,24,43,.48));
+  border:1px solid rgba(199,231,255,.3);border-radius:30px;
+  box-shadow:inset 0 1px 0 rgba(244,252,255,.32),inset 1px 0 0 rgba(198,236,255,.13),inset 0 -1px 0 rgba(141,182,240,.13),0 7px 22px rgba(2,7,19,.16);
+  backdrop-filter:blur(18px) saturate(1.2);-webkit-backdrop-filter:blur(18px) saturate(1.2);
+ }
+ html.liquid-theme:not(.native-shell) .native-app-identity {text-shadow:0 2px 9px rgba(2,7,19,.95);}
+ html.liquid-theme:not(.native-shell) .sidebar-toggle {background:rgba(18,35,53,.5);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}
+ html.liquid-theme:not(.native-shell) .liquid-scene-page {position:absolute;inset:0;width:100%;height:100%;border-radius:inherit;}
+ html.liquid-theme[data-graphics-quality="minimal"] :is(.phone-header,.sidebar-toggle,.phone-header .native-app-bar) {backdrop-filter:none;-webkit-backdrop-filter:none;}
+ /* A moving clip and a compositor transform can separate in WebKit. Slide
+    the real drawer edge with the page; the constant clip contains its shadow. */
+ html.liquid-theme:not(.native-shell) .app-sidebar.page-nav {clip-path:inset(0);transform:translate3d(calc(var(--phone-drawer-offset) - var(--phone-drawer-width)),0,0);transition:transform .34s cubic-bezier(.22,1,.36,1),visibility 0s .34s;}
+ /* Hide only after closing; opening/dragging must reveal the stationary menu
+    immediately rather than inherit the closing visibility delay. */
+ html.liquid-theme:not(.native-shell) .sidebar-expanded .app-sidebar.page-nav,
+ html.liquid-theme:not(.native-shell) .phone-drawer-dragging .app-sidebar.page-nav {transition-delay:0s;}
+ /* Counter-move the menu inside the bounded reveal frame. Its options stay
+    fixed underneath while the page exposes them; only the clipping frame moves. */
+ html.liquid-theme:not(.native-shell) .sidebar-content {display:flex;flex-direction:column;gap:inherit;flex:1;min-height:0;transform:translate3d(calc(var(--phone-drawer-width) - var(--phone-drawer-offset)),0,0);transition:transform .34s cubic-bezier(.22,1,.36,1);}
+ html.liquid-theme:not(.native-shell) .phone-drawer-dragging .app-sidebar.page-nav,
+ html.liquid-theme:not(.native-shell) .phone-drawer-dragging .sidebar-content {transition:none;}
+}
+
+@media (prefers-contrast:more),(prefers-reduced-transparency:reduce) {
+ html.liquid-theme:not(.native-shell) .phone-header .native-app-bar {background:var(--chrome-background);backdrop-filter:none;-webkit-backdrop-filter:none;}
+}
+@media (forced-colors:active) {
+ html.liquid-theme:not(.native-shell) .phone-header .native-app-bar {background:Canvas;border-color:ButtonText;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;}
+}
+
+/* Honor the OS transparency preference after the Liquid Glass theme overrides. */
+@media (prefers-reduced-transparency:reduce) {
+ html.liquid-theme {--surface-content:#101e30;--surface-content-raised:#253349;--surface-glass:#172232;--surface-glass-strong:#172232;}
+ html.liquid-theme.native-shell :is(.native-app-bar,.app-sidebar.page-nav,.metric-card,.health-card,.system-specs-card,.pc-details-footer,.cpu-detail-panel,.maint-section,.power-section,.diagnostics-page,.app-page.processes-page,.login-card,.glass-panel,.glass-card,.power-dialog),
+ html.liquid-theme:not(.native-shell) :is(.native-app-bar,.app-sidebar.page-nav,.metric-card,.health-card,.system-specs-card,.pc-details-footer,.cpu-detail-panel,.maint-section,.power-section,.diagnostics-page,.app-page.processes-page,.login-card,.glass-panel,.glass-card,.power-dialog) {background:var(--surface-content);backdrop-filter:none;-webkit-backdrop-filter:none;}
+ html.liquid-theme:not(.native-shell) .phone-header .native-app-bar {background:var(--chrome-background);}
+}

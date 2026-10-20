@@ -24,7 +24,7 @@ try{
   assert.strictEqual(pins.readConfig(developer).pin,original.pin);
   pins.regeneratePin(app);
   const rotated=pins.readConfig(developer);assert.notStrictEqual(rotated.pin,original.pin);
-  assert.deepStrictEqual({...rotated,pin:original.pin},original,'Recovery preserves every unrelated field');
+  const {pinCredential,...rotatedSettings}=rotated;assert.deepStrictEqual({...rotatedSettings,pin:original.pin},original,'Recovery preserves every unrelated field');
   assert.strictEqual(fs.lstatSync(developer).nlink,1);
   // Reproduce disappearance after successful resolution but before startup read.
   const resolvedBeforeRemoval=pins.configurationFile(app);

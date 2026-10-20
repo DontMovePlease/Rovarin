@@ -93,7 +93,8 @@ if ($RegeneratePin) {
     }
     if ($LASTEXITCODE -ne 0) { throw 'PIN regeneration failed.' }
 }
-$pin = (Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json).pin
+$pin = & $node -e "const p=require(process.argv[1]);process.stdout.write(p.readConfig(p.configurationFile()).pin)" (Join-Path $appDir 'pin-manager.js')
+if ($LASTEXITCODE -ne 0) { throw 'Protected PIN unavailable for this Windows user.' }
 if ($pin -cnotmatch '^(\d{6}|\d{12})$') { throw 'A valid saved PIN is not available.' }
 $local = "http://127.0.0.1:$($runtime.port)"
 $webSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession

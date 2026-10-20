@@ -6,6 +6,9 @@ const os = require('os');
 const crypto = require('crypto');
 const {execFileSync} = require('child_process');
 const {Manager,execute,permitted,semver,hash} = require('./release-manager');
+for(const file of ['public/three-LICENSE.txt','public/three-glass.NOTICE.txt','public/three-glass.module.js'])assert(permitted(file),'reviewed frontend vendor asset');
+for(const file of ['public/private.NOTICE.txt','public/unknown.module.js','scripts/vm-control.ps1'])assert(!permitted(file),'unreviewed/private assets refused');
+const privacy=new Manager(path.resolve(__dirname,'..'));assert.throws(()=>privacy.scan('public/three-glass.NOTICE.txt',Buffer.from(['-----BEGIN','PRIVATE KEY-----'].join(' ')),[]),/Possible local/);
 const {SUITES,verifyAndPublish} = require('./release-verify');
 async function test(root = path.resolve(__dirname,'..')) {
   {

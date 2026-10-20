@@ -36,25 +36,30 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   });
   await context.addInitScript(() => {
     const active = new Map();
+    const blocking = new Set();
     const add = document.addEventListener.bind(document), remove = document.removeEventListener.bind(document);
     document.addEventListener = (type, fn, options) => {
       if (/^(handlePhoneDrawerTouch|preventPhoneBackgroundScroll)/.test(fn.name)) {
         if (!active.has(type)) active.set(type, new Set());
         active.get(type).add(fn);
+        if(type==='touchmove' && options?.passive===false)blocking.add(fn);
       }
       return add(type, fn, options);
     };
     document.removeEventListener = (type, fn, options) => {
       active.get(type)?.delete(fn);
+      if(type==='touchmove')blocking.delete(fn);
       return remove(type, fn, options);
     };
+    window.navigationBlockingListeners = () => blocking.size;
     window.navigationTouchListeners = () => [...active].filter(([type]) => type !== 'touchstart').reduce((n, [, listeners]) => n + listeners.size, 0);
   });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(base);
-  await page.waitForFunction(() => typeof setSidebarOpen === 'function');
+  await page.waitForFunction(() => typeof setSidebarOpen === 'function' && document.getElementById('liquidStyles')?.media==='all' && window.RovarinGlass);
+  await delay(600);
   const geometry = () => page.evaluate(() => {
     const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; };
     return { header: rect('.native-app-bar'), surface: rect('.phone-page-surface'), backdrop: rect('#sidebarBackdrop'), scroll: scrollY };
@@ -130,6 +135,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   // A vertical beginning is not a permanent rejection of this touch.
   await touch('touchstart',180,200);
   await touch('touchmove',180,160);
+  assert.equal(await page.evaluate(()=>navigationBlockingListeners()),0,'vertical intent has no blocking touchmove listener');
   assert(await page.evaluate(()=>phoneDrawerSwipe && !phoneDrawerSwipe.horizontal),'vertical touch remains observable without claiming scroll');
   assert(!await page.evaluate(()=>document.documentElement.classList.contains('phone-navigation-locked')),'vertical intent leaves scroll unlocked');
   await touch('touchmove',215,160);
@@ -167,12 +173,15 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   await page.waitForTimeout(20);
   const flingNext=await page.evaluate(()=>scrollY);
   console.log('Chromium scroll momentum observed:',flingNext>flingStart);
-  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:190,y:85}]});
+  // The live cards can shift under a fling; begin on actual noninteractive content.
+  const flingY=await page.evaluate(()=>{for(const y of [85,120,160,220,280,340]){const target=document.elementFromPoint(190,y);if(target?.closest('.phone-page-surface')&&!phoneGestureExcluded(target))return y;}throw Error('No ordinary content for the momentum gesture');});
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:190,y:flingY}]});
   for(const x of [215,250,290,320]) {
     await page.waitForTimeout(20);
-    await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:85}]});
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:flingY}]});
   }
-  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await settle(true);
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await settle(true);
   await page.evaluate(()=>setSidebarOpen(false));await settle(false);
   // Maintenance uses the same listener. Never invoke an actual operation.
   // Keep injected presentation rows stable against normal background refresh.
@@ -291,9 +300,11 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       const c=chrome.getBoundingClientRect(),b=bar.getBoundingClientRect();
       const hit=document.elementFromPoint(c.x+35,20);
       return Math.abs(c.y)<1 && Math.abs(b.y-52)<1 && (chrome.contains(hit) || hit?.id === "sidebarBackdrop") &&
-        getComputedStyle(chrome).backgroundColor !== "rgba(0, 0, 0, 0)" &&
-        getComputedStyle(bar).backdropFilter==='none' && document.documentElement.scrollWidth<=innerWidth+1;
-    }),'real header owns top safe-area background without blur/clipping');
+        getComputedStyle(chrome).backgroundColor === "rgba(0, 0, 0, 0)" &&
+        getComputedStyle(bar).backgroundColor === "rgba(0, 0, 0, 0)" &&
+        getComputedStyle(document.body,"::before").position === "fixed" &&
+        parseFloat(getComputedStyle(bar).borderTopLeftRadius)>0 && getComputedStyle(bar).backgroundImage!=='none' && b.width<=innerWidth-24 && document.documentElement.scrollWidth<=innerWidth+1;
+    }),'floating capsule preserves safe-area placement over fixed wallpaper without full-width chrome/clipping');
   };
   await safeChrome();
   await page.screenshot({path:path.join(root,'packaging/cache/mobile-safe-header-closed.png')});

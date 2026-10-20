@@ -66,6 +66,16 @@ async function tests() {
     await assert.rejects(manager.download(),/update-busy/);
     manager.cancel();assert.strictEqual(manager.status().busy,false);
     manager.reserve();fs.writeFileSync(path.join(directory,'updates/handoff.json'),JSON.stringify({phase:'cancelled'}));assert.strictEqual(manager.status().busy,false);
+    manager.reserve();
+    fs.writeFileSync(path.join(directory,'updates/handoff.json'),JSON.stringify({phase:'launched'}));
+    const launched=manager.cancel();assert.strictEqual(launched.installerLaunched,true);assert.strictEqual(launched.busy,true);assert.strictEqual(launched.state,'handoff');
+    assert(launched.message.includes('installer is open'));await assert.rejects(manager.download(),/update-busy/);
+    fs.writeFileSync(path.join(directory,'updates/handoff.json'),JSON.stringify({phase:'cancelled'}));
+    assert.strictEqual(manager.status().busy,false);assert.strictEqual(manager.status().installerLaunched,false);
+    manager.reserve();fs.writeFileSync(path.join(directory,'updates/handoff.json'),JSON.stringify({phase:'failed'}));
+    assert.strictEqual(manager.status().state,'failed');assert.strictEqual(manager.status().busy,false);
+    // Restore the ready fixture without a new installer invocation.
+    manager.state='ready';
     const before=requests;await manager.check(true);assert.strictEqual(requests,before,'daily throttle');
     manager.preference();assert.strictEqual(manager.status().autoCheck,false);
     const reopened=new UpdateManager({root:app,configFile,transport,current:'0.1.9'});assert.strictEqual(reopened.status().autoCheck,false,'preference survives restart');

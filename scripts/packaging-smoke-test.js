@@ -104,7 +104,7 @@ async function testPackagedRuntime() {
       child.once('error', error => { clearTimeout(timer); reject(error); });
       child.once('exit', () => { clearTimeout(timer); if (!base) reject(new Error('Packaged startup exited')); });
     });
-    const pin = JSON.parse(fs.readFileSync(path.join(temp, 'data/config.json'))).pin;
+    const pin = require('../pin-manager').readConfig(path.join(temp, 'data/config.json')).pin;
     assert(!output.includes(pin));
     const response = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
     assert.strictEqual(response.status, 200);
@@ -223,7 +223,7 @@ async function testPackagedRuntime() {
     }
     assert(state?.actualPort >= 7334 && state.actualPort <= 7335, 'successive real occupied-port fallback');
     base = 'http://127.0.0.1:' + state.actualPort;
-    const pin = JSON.parse(fs.readFileSync(path.join(temp, 'data/config.json'))).pin;
+    const pin = require('../pin-manager').readConfig(path.join(temp, 'data/config.json')).pin;
     const login = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
     assert.strictEqual(login.status, 200);
     cookie = login.headers.getSetCookie().find(value => value.startsWith('pc_monitor_session=')).split(';')[0];
@@ -599,7 +599,7 @@ async function main() {
     console.log('PASS payload hashes/licenses/no secrets, signed production package selection, fixed UAC flags, local address enforcement, result mapping and in-flight guard');
     // Isolated installed structure, random port, no startup/driver changes.
     const app = path.join(temp, 'app'); fs.mkdirSync(app);
-    for (const name of ['server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','cpu-temperature-provider.js','temperature-manager.js','maintenance.js','process-stats.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(app,name));
+    for (const name of ['power-controls.js','server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','cpu-temperature-provider.js','temperature-manager.js','maintenance.js','process-stats.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(app,name));
     fs.writeFileSync(path.join(app,'installation.json'),'{}');
     let output = '', base;
     child = spawn(process.execPath, [path.join(app,'server.js')], {cwd:app, env:{...process.env,PORT:'0',PC_MONITOR_PIN:''},windowsHide:true,stdio:['ignore','pipe','pipe']});
@@ -609,7 +609,7 @@ async function main() {
       child.stdout.on('data',inspect);child.stderr.on('data',inspect);child.once('error',reject);
     });
     const dataDir=path.join(temp,'data'); const configFile=path.join(dataDir,'config.json');
-    const config=fs.readFileSync(configFile,'utf8'); const pin=JSON.parse(config).pin;
+    const config=fs.readFileSync(configFile,'utf8'); const pin=require('../pin-manager').readConfig(configFile).pin;
     assert(/^\d{6}$/.test(pin)); assert(!output.includes(pin)); assert(!fs.existsSync(path.join(app,'config.json')));
     const call = (route, method='GET', body, headers={}) => fetch(base+route,{method,headers,body});
     assert.strictEqual((await call('/api/temperature/enhanced')).status,401);

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" class="login-page">
+<html lang="en" class="login-page liquid-theme">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -10,8 +10,13 @@
   <meta name="rovarin-pin-mode" content="manual">
   <meta name="application-name" content="Rovarin">
   <meta name="apple-mobile-web-app-title" content="Rovarin">
-  <link rel="stylesheet" href="/app.css">
+  <link id="loginBaseStyles" rel="stylesheet" href="/app.css" media="print">
   <style>
+    /* Critical login paint is independent of the application/decorative styles. */
+    :root { color-scheme:dark; --surface-glass-strong:linear-gradient(150deg,#1d2c3e,#101b29); --glass-border:rgba(191,218,241,.19); --tint-primary:rgba(102,199,255,.12); --accent-primary:#66c7ff; --text-primary:#eaf1f8; }
+    * { box-sizing:border-box; }
+    html,body { margin:0; min-height:100%; background:#0c1420; color:#eaf1f8; font-family:system-ui,-apple-system,'Segoe UI',sans-serif; }
+
     .login-container {
       min-height: 100vh;
       display: flex;
@@ -164,6 +169,7 @@
       .login-page:not(.native-shell) .error-msg { margin-top: 8px; }
     }
   </style>
+  <link id="liquidStyles" rel="stylesheet" href="/liquid-glass.css" media="print">
 </head>
 <body class="dark-theme">
   <div class="login-container">
@@ -179,5 +185,6 @@
     </div>
   </div>
   <script src="/login.js" defer></script>
+  <script async src="/liquid-bootstrap.js"></script>
 </body>
 </html>

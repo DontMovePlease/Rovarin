@@ -19,6 +19,16 @@ $node = Verified-Binary 'node.exe' 'https://nodejs.org/dist/v24.21.0/win-x64/nod
 $pawn = Verified-Binary 'PawnIO_setup.exe' 'https://github.com/namazso/PawnIO.Setup/releases/download/2.2.0/PawnIO_setup.exe' '1f519a22e47187f70a1379a48ca604981c4fcf694f4e65b734aaa74a9fba3032' 'namazso.eu'
 if ([Diagnostics.FileVersionInfo]::GetVersionInfo($pawn).FileVersion -ne '2.2.0.0') { throw 'Unexpected PawnIO version.' }
 if (-not (Test-Path -LiteralPath (Join-Path $cache 'Node-LICENSE'))) { Invoke-WebRequest 'https://raw.githubusercontent.com/nodejs/node/v24.21.0/LICENSE' -OutFile (Join-Path $cache 'Node-LICENSE') }
+# Required redistribution sources must be present before packaging, including
+# synchronized checkouts where missing archives otherwise silently disappear.
+$monitorVendor = Join-Path $repo 'vendor\LibreHardwareMonitor\0.9.6'
+$monitorManifest = Get-Content -LiteralPath (Join-Path $monitorVendor 'manifest.json') -Raw | ConvertFrom-Json
+foreach ($sourceArchive in $monitorManifest.sources) {
+    $sourcePath = Join-Path $monitorVendor $sourceArchive.file
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf) -or (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $sourceArchive.sha256) {
+        throw 'Required hardware-monitor redistribution source is missing or invalid; packaging stopped.'
+    }
+}
 # Rebuild only this fixed generated payload; never copy the repository wholesale.
 $resolvedPayload = [IO.Path]::GetFullPath($payload)
 if ($resolvedPayload -ne [IO.Path]::GetFullPath((Join-Path $repo 'packaging\payload'))) { throw 'Unsafe payload path.' }
@@ -29,9 +39,9 @@ if (Test-Path -LiteralPath $payload) { Remove-Item -LiteralPath $payload -Recurs
 $app = Join-Path $payload 'app'
 $runtime = Join-Path $payload 'runtime'
 New-Item -ItemType Directory -Force -Path $app,$runtime,(Join-Path $app 'scripts'),(Join-Path $app 'public'),(Join-Path $app 'vendor\PawnIO\2.2.0') | Out-Null
-$rootFiles = @('server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js','update-manager.js','process-stats.js','maintenance.js','temperature-manager.js','cpu-temperature-provider.js','package.json','run_hidden.vbs','LICENSE')
+$rootFiles = @('power-controls.js','server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js','update-manager.js','process-stats.js','maintenance.js','temperature-manager.js','cpu-temperature-provider.js','package.json','run_hidden.vbs','LICENSE')
 foreach ($name in $rootFiles) { Copy-Item -LiteralPath (Join-Path $repo $name) -Destination $app }
-$scripts = @('start.ps1','stop.ps1','desktop.ps1','desktop-host.ps1','native-trust.ps1','native-startup.ps1','dashboard-runtime.ps1','installed-start.ps1','installed-desktop.ps1','setup.ps1','phone-qr.js','empty-recycle-bin.ps1','maintenance-elevated.cs','install-enhanced.ps1','installed-uninstall.ps1','installed-update.ps1','rebrand-migration.ps1','cpu-temperature-provider.ps1','terminate-process.ps1','process-tree.ps1','process-tree.cs','app-manager.ps1','app-leftovers.ps1','app-leftovers.cs','startup-tasks.ps1','app-uninstall.cs','app-metadata.cs','process-display.ps1','application-display.ps1')
+$scripts = @('power-control.ps1','start.ps1','stop.ps1','desktop.ps1','desktop-host.ps1','native-trust.ps1','native-startup.ps1','dashboard-runtime.ps1','installed-start.ps1','installed-desktop.ps1','setup.ps1','phone-qr.js','empty-recycle-bin.ps1','maintenance-elevated.cs','install-enhanced.ps1','installed-uninstall.ps1','installed-update.ps1','rebrand-migration.ps1','cpu-temperature-provider.ps1','terminate-process.ps1','process-tree.ps1','process-tree.cs','app-manager.ps1','app-leftovers.ps1','app-leftovers.cs','startup-tasks.ps1','app-uninstall.cs','app-metadata.cs','process-display.ps1','application-display.ps1')
 foreach ($name in $scripts) { Copy-Item -LiteralPath (Join-Path $repo "scripts\$name") -Destination (Join-Path $app 'scripts') }
 Copy-Item -LiteralPath (Join-Path $repo 'public') -Destination $app -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $repo 'vendor\LibreHardwareMonitor') -Destination (Join-Path $app 'vendor') -Recurse -Force

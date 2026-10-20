@@ -189,6 +189,12 @@ function Uninstall-TestCopy([bool]$Full) {
     Assert-Test $uninstalled 'Isolated normal uninstall failed.'; if ($p) { $p.Dispose() }
     Assert-Removed $Full
 }
+function Get-TestPin {
+    # Capture the canonical local reader; never print a credential in test output.
+    $value = & (Join-Path $testDir 'runtime\node.exe') -e "const p=require(process.argv[1]);process.stdout.write(p.readConfig(p.configurationFile()).pin)" (Join-Path $appDir 'pin-manager.js')
+    Assert-Test ($LASTEXITCODE -eq 0 -and $value -match '^(?:\d{6}|\d{12})$') 'Saved test credential unavailable.'
+    return $value
+}
 function Login-TestCopy {
     Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
     & (Join-Path $appDir 'scripts\start.ps1') | Out-Null
@@ -207,7 +213,7 @@ function Login-TestCopy {
     $script:base="http://127.0.0.1:$($runtime.port)"
     $script:cookieSession=New-Object Microsoft.PowerShell.Commands.WebRequestSession
     Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
-    $script:pin=(Get-Content -LiteralPath (Join-Path $dataDir 'config.json') -Raw | ConvertFrom-Json).pin
+    $script:pin=(Get-TestPin)
     Invoke-RestMethod "$base/api/login" -Method Post -ContentType 'application/json' -Body (@{pin=$pin}|ConvertTo-Json -Compress) -WebSession $cookieSession -TimeoutSec 5 | Out-Null
 }
 function Remote-Uninstall([bool]$Full) {
@@ -422,7 +428,7 @@ try {
     Assert-Test (Test-Path -LiteralPath (Join-Path $testDir 'runtime\node.exe')) 'Bundled Node missing.'
     Assert-Test (-not (Test-Path -LiteralPath (Join-Path $appDir 'config.json'))) 'Installer must not distribute a PIN/config in its application payload.'
     $freshInstallerConfig = Get-Content -LiteralPath (Join-Path $dataDir 'config.json') -Raw | ConvertFrom-Json
-    Assert-Test ($freshInstallerConfig.pin -match '^\d{6}$' -and $freshInstallerConfig.requireDesktopPin -eq $true) 'Fresh installer must locally generate a canonical PIN and apply default desktop PIN protection.'
+    Assert-Test ((Get-TestPin) -match '^\d{6}$' -and $freshInstallerConfig.requireDesktopPin -eq $true) 'Fresh installer must locally generate a canonical PIN and apply default desktop PIN protection.'
     Assert-Test (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'Rovarin\Rovarin.lnk')) 'Start menu shortcut missing.'
     . (Join-Path $appDir 'scripts\dashboard-runtime.ps1')
     & (Join-Path $appDir 'scripts\start.ps1') | Out-Null
@@ -441,7 +447,7 @@ try {
     Test-DesktopLaunchers
     Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
     $configBytes = [IO.File]::ReadAllText((Join-Path $dataDir 'config.json'))
-    $pin = ($configBytes | ConvertFrom-Json).pin
+    $pin = Get-TestPin
     $firstPin=$pin
     Assert-Test ($pin -match '^\d{6}$') 'Fresh-install PIN must be six digits.'
     $base = "http://127.0.0.1:$($runtime.port)"
@@ -474,7 +480,7 @@ try {
     Assert-Test (-not $nextSetup.firstRun -and $nextSetup.pinValid) 'Second launch must skip automatic PIN presentation; explicit local recovery remains available.'
     Test-DesktopLaunchers $false
     Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
-    $pin = (Get-Content -LiteralPath (Join-Path $dataDir 'config.json') -Raw | ConvertFrom-Json).pin
+    $pin = (Get-TestPin)
     $tsIp = ($diag.checks | Where-Object id -eq 'tailscale-ip' | Select-Object -First 1).value
     if ($tsIp) {
         $tsBase = "http://${tsIp}:$($runtime.port)"
@@ -531,7 +537,7 @@ try {
     }
     Assert-Test ($LASTEXITCODE -eq 0 -and ($recovery | ConvertFrom-Json).pinValid) 'Native PIN recovery failed.'
     Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
-    $pin=(Get-Content -LiteralPath (Join-Path $dataDir 'config.json') -Raw | ConvertFrom-Json).pin
+    $pin=(Get-TestPin)
     Assert-Test ($pin -match '^\d{6}$' -and $pin -cne $beforeRecovery) 'Recovery did not replace PIN.'
     Assert-Test (-not (($recovery -join '') -match [regex]::Escape($pin))) 'Recovery output exposed PIN.'
     try { Invoke-RestMethod "$base/api/monitoring/status" -WebSession $cookieSession -TimeoutSec 5 | Out-Null; throw 'Old session retained.' }
@@ -539,7 +545,8 @@ try {
     # Seed a deliberate legacy fixture while its precisely owned server is stopped.
     & (Join-Path $appDir 'scripts\stop.ps1') | Out-Null
     $legacyConfig=Get-Content -LiteralPath (Join-Path $dataDir 'config.json') -Raw | ConvertFrom-Json
-    $legacyConfig.pin='123456789012'
+    $legacyConfig | Add-Member -NotePropertyName pin -NotePropertyValue '123456789012' -Force
+    $legacyConfig.PSObject.Properties.Remove('pinCredential')
     $legacyConfig.requireDesktopPin=$false
     [IO.File]::WriteAllText((Join-Path $dataDir 'config.json'),($legacyConfig | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
     Remove-SyncHardLinks (Join-Path $dataDir 'config.json')

@@ -15,7 +15,7 @@
 ![Source available](https://img.shields.io/badge/license-PolyForm_Noncommercial-617184)
 
 
-[**Download for Windows**](https://github.com/DontMovePlease/Rovarin/releases/download/v0.4.0/RovarinSetup.exe) · [Release notes](https://github.com/DontMovePlease/Rovarin/releases) · [Website](https://rovarinofficial.com/) · [Report a bug](https://github.com/DontMovePlease/Rovarin/issues/new/choose)
+[**Download for Windows**](https://github.com/DontMovePlease/Rovarin/releases/download/v0.5.0/RovarinSetup.exe) · [Release notes](https://github.com/DontMovePlease/Rovarin/releases) · [Website](https://rovarinofficial.com/) · [Report a bug](https://github.com/DontMovePlease/Rovarin/issues/new/choose)
 
 
 </div>
@@ -24,14 +24,22 @@
 Rovarin is a Windows PC monitoring and system-management app. Check CPU, GPU, memory and network activity, manage running processes, launch your apps, and uninstall supported software—all from a native Windows desktop app or your phone through Tailscale.
 
 
-**Experimental alpha:** useful for testing and code review, with compatibility and clean-machine validation still in progress. The installer is unsigned. This is not a production-ready release.
+**Experimental alpha:** compatibility and physical-device coverage remain limited. This is not a production-ready release.
 
 
 ![Rovarin desktop Overview](docs/images/overview.png)
 
 
-<sub>Desktop Overview capture. Readings show total PC usage, not Rovarin's own resource usage; hardware and load vary by machine.</sub>
+<sub>v0.5.0 Liquid Glass, captured in the actual Windows desktop shell using isolated test state. Readings show total PC usage, not Rovarin's own resource usage; hardware and load vary by machine.</sub>
 
+
+## v0.5.0 — The Liquid Glass Update
+
+Rovarin has a new astral-inspired Liquid Glass interface across Windows and mobile: translucent surfaces, optical highlights and refraction on supported graphics, with adaptive Auto, Full, Balanced and inexpensive Minimal modes.
+
+Mobile navigation is smoother, with a stationary sidebar revealed beneath the dashboard, responsive swipe gestures and a floating glass header. Login becomes usable before optional graphics load, and connection failures provide clear feedback.
+
+**New power controls:** Sleep, Restart and Shut Down from Windows or an authenticated remote browser. Every action requires confirmation. The trusted native desktop app does not repeat your Rovarin PIN for power actions; remote browsers still verify it. Sleep depends on Windows/hardware support, and losing connection does not prove a power transition completed.
 
 ## What it does
 
@@ -43,6 +51,7 @@ Rovarin is a Windows PC monitoring and system-management app. Check CPU, GPU, me
 | Focused views | Larger graphs and faster sampling only for the active view |
 | Processes | Live application groups, search, sorting, Pause/Resume, confirmed End task and separate verified process-tree control |
 | Applications | Quick Launch with app discovery/pinning, Startup Apps management, installed app search, List/Grid views, readable sizes, reviewed uninstall and optional leftover cleanup |
+| Power | Confirmed Sleep, Restart and Shut Down; native desktop trust and remote PIN protection |
 | Maintenance | Fixed Windows cleanup/repair actions with live logs, results and history; optional owner-enrolled protected service |
 | Diagnostics | Optional-tool/hardware availability, temperature status and a copyable compatibility report |
 | Desktop | Native Windows shell, tray integration, saved window bounds and optional startup at sign-in |
@@ -89,6 +98,9 @@ Vendor uninstallers may require interaction or local Windows administrator appro
 
 ## Install on Windows
 
+Current version: 0.5.0 Experimental Alpha
+
+
 
 **Requirements:** Windows 11 x64, a standard Windows user account, and Microsoft's WebView2 Runtime. The Node.js runtime is bundled; no separate Node/npm installation is needed. If WebView2 is missing, the app links to Microsoft's official runtime installer.
 
@@ -108,6 +120,10 @@ Normal Desktop and Start Menu shortcuts are named **Rovarin** and open Rovarin.e
 Open native **Settings → Administrator Maintenance → Enable** and approve Windows UAC once on this PC. The protected component is included in setup and remains unauthorized until enrollment. After enrollment, the five fixed administrator maintenance actions can be requested remotely with their existing confirmation/PIN checks. Disable revokes authorization; the normal backend stays unelevated.
 
 ### Known Alpha limitations
+
+- Graphics effects depend on WebGL/WebView2 support; Minimal retains a CSS interface. Physical-device mobile acceptance and broader GPU coverage remain ongoing.
+- The installer remains unsigned; no publisher-signing assurance is claimed.
+- Power requests use Windows permissions, do not force-close unsaved applications and cannot remotely wake a sleeping or shut-down PC.
 
 Microsoft Bing AppX removal hangs on the test PC, including direct Windows removal. Third-party Windows service controls remain read-only and deferred. Physical iPhone acceptance of recent navigation/progress/action-bar changes remains pending, and Safari scroll-to-swipe takeover is unresolved. The installer is unsigned.
 

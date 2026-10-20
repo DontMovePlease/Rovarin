@@ -16,7 +16,7 @@ const PRIVATE_TOOLS = new Set(["scripts/check-maint-status.ps1", "scripts/diagno
 function permitted(file) {
   if (!file || file.includes('\\') || file.includes(':') || file.split('/').some(p => !p || p === '.' || p === '..') || PRIVATE.test(file) || PRIVATE_TOOLS.has(file)) return false;
   if (/\.md$/i.test(file)) return file === 'README.md' || file === 'vendor/LibreHardwareMonitor/0.9.6/README.md';
-  return /^[^/]+\.(?:js|bat|vbs)$/.test(file) || ['.gitignore','LICENSE','package.json'].includes(file) ||
+  return /^[^/]+\.(?:js|bat|vbs)$/.test(file) || ['.gitignore','LICENSE','package.json','public/three-LICENSE.txt','public/three-glass.NOTICE.txt','public/three-glass.module.js'].includes(file) ||
     /^scripts\/[a-z0-9_-]+\.(?:js|ps1|cs|json)$/.test(file) || /^public\/[a-z0-9-]+\.(?:html|css|js)$/.test(file) ||
     /^packaging\/[A-Za-z0-9.-]+\.(?:cs|ps1|iss|vbs|manifest)$/.test(file) || /^\.github\/ISSUE_TEMPLATE\/[a-z0-9_-]+\.yml$/.test(file) ||
     /^docs\/images\/[a-z0-9-]+\.png$/.test(file) || /^vendor\/(?:LibreHardwareMonitor\/0\.9\.6|QRCode\/1\.8\.0)\/[A-Za-z0-9/_.-]+$/.test(file);
@@ -117,7 +117,7 @@ class Manager {
     return values;
   }
   scan(file,bytes,values) {
-    if (!/\.(?:js|json|ps1|cs|iss|vbs|bat|html|css|yml|md|manifest)$/.test(file) && !['.gitignore','LICENSE'].includes(file)) return;
+    if (!/\.(?:js|json|ps1|cs|iss|vbs|bat|html|css|yml|md|txt|manifest)$/.test(file) && !['.gitignore','LICENSE'].includes(file)) return;
     const text = bytes.toString('utf8');
     if (values.some(v => new RegExp('(^|[^0-9])' + v.replace(/\./g,'\\.') + '([^0-9]|$)').test(text)) || /[A-Za-z]:\\+Users\\+(?!Public\b|Default\b)[^\\\s"']+/i.test(text) || /(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)/.test(text)) throw new Error('Possible local credential/address/personal path in ' + file + '. Nothing will be pushed.');
   }
@@ -169,7 +169,7 @@ class Manager {
       });
       if (historical.some(e => !permitted(e.file) || !files.includes(e.file) || e.type !== 'blob' || !['100644','100755'].includes(e.mode))) throw new Error('Public history includes private/unreviewed/redirecting paths. History rewriting is never automatic.');
       // One bounded batch read per commit avoids launching Git per source file.
-      const textFiles = historical.filter(e=>/\.(?:js|json|ps1|cs|iss|vbs|bat|html|css|yml|md|manifest)$/.test(e.file));
+      const textFiles = historical.filter(e=>/\.(?:js|json|ps1|cs|iss|vbs|bat|html|css|yml|md|txt|manifest)$/.test(e.file));
       if (textFiles.length) {
         const output = Buffer.from(await this.git(['cat-file','--batch'],this.publicRoot,textFiles.map(e=>e.oid).join('\n')+'\n'));
         let offset = 0;

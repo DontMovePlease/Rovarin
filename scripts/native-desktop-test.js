@@ -8,7 +8,7 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
   fs.cpSync(payload,temp,{recursive:true});
   const app=path.join(temp,'app'),data=path.join(temp,'data');fs.mkdirSync(data);
   const pins = require('../pin-manager'); const testConfig = path.join(data,'config.json');
-  pins.writeConfig(testConfig,{...pins.loadConfig(testConfig),autoCheckUpdates:false});
+  pins.writeConfig(testConfig,{...pins.loadConfig(testConfig),...(process.env.ROVARIN_NATIVE_TEST_PIN_LENGTH==='12'?{pin:pins.generatePin(undefined,12)}:{}),autoCheckUpdates:false});
   fs.writeFileSync(path.join(data,'onboarding-complete.json'),'{"completed":true}');
   let child,desktop,base,retain=false;
   const launch=(file,args,options={})=>spawn(file,args,{windowsHide:true,stdio:['ignore','pipe','pipe'],...options});
@@ -19,7 +19,7 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     if(options.currentSource){
       // Local shell QA without rebuilding or touching the installer payload.
       fs.cpSync(path.join(root,'public'),path.join(app,'public'),{recursive:true});
-      for (const name of ['server.js','diagnostics.js','pin-manager.js','update-manager.js','app-manager.js','leftover-manager.js','process-termination.js','process-stats.js','maintenance.js','maintenance-service.js']) fs.copyFileSync(path.join(root,name),path.join(app,name));
+      for (const name of ['power-controls.js','server.js','diagnostics.js','pin-manager.js','update-manager.js','app-manager.js','leftover-manager.js','process-termination.js','process-stats.js','maintenance.js','maintenance-service.js']) fs.copyFileSync(path.join(root,name),path.join(app,name));
       for(const name of ['terminate-process.ps1','app-manager.ps1','app-uninstall.cs','app-metadata.cs','process-tree.ps1','process-tree.cs','process-display.ps1','application-display.ps1'])fs.copyFileSync(path.join(root,'scripts',name),path.join(app,'scripts',name));
       fs.copyFileSync(path.join(root,'scripts/native-trust.ps1'),path.join(app,'scripts/native-trust.ps1'));
       let shell=path.join(root,'packaging/DesktopShell.cs');
@@ -36,7 +36,7 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
         shell=path.join(temp,'DesktopShell.fixture.cs');
         fs.writeFileSync(shell,original.replace('internal const string MaintenanceSetupHash = "";',`internal const string MaintenanceSetupHash = "${digest}";`).replace('Verb = "runas"','Verb = "open"'));
       }
-      execFileSync(compiler,['/nologo','/target:winexe','/platform:x64','/optimize+','/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll',`/r:${path.join(app,'Microsoft.Web.WebView2.Core.dll')}`,`/r:${path.join(app,'Microsoft.Web.WebView2.WinForms.dll')}`,`/win32manifest:${path.join(root,'packaging/desktop.manifest')}`,`/win32icon:${path.join(app,'Rovarin.ico')}`,`/out:${path.join(app,'Rovarin.exe')}`,path.join(root,'packaging/RovarinLauncher.cs'),shell],{windowsHide:true,timeout:15000});
+      execFileSync(compiler,['/nologo','/target:winexe','/platform:x64','/optimize+','/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll','/r:System.Security.dll',`/r:${path.join(app,'Microsoft.Web.WebView2.Core.dll')}`,`/r:${path.join(app,'Microsoft.Web.WebView2.WinForms.dll')}`,`/win32manifest:${path.join(root,'packaging/desktop.manifest')}`,`/win32icon:${path.join(app,'Rovarin.ico')}`,`/out:${path.join(app,'Rovarin.exe')}`,path.join(root,'packaging/RovarinLauncher.cs'),shell],{windowsHide:true,timeout:15000});
     }
     // PORT=0 intentionally skips runtime ownership records in this project.
     // A native lifecycle test must use a real, isolated published port instead.
@@ -53,11 +53,12 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     for(let i=0;i<150;i++){const match=output.match(/Localhost access: http:\/\/127\.0\.0\.1:(\d+)/);if(match){base=`http://127.0.0.1:${match[1]}`;break}await pause(100)}
     assert(base,'Native fixture backend failed');
     const remoteLogin=await fetch(base+'/').then(r=>r.text());
-    assert(remoteLogin.includes('class="login-page"'),'Canonical login document missing');
+    assert(/class="[^"\n]*\blogin-page\b/.test(remoteLogin),'Canonical login document missing');
     assert(!remoteLogin.includes('id="lock-window-minimize"')&&!remoteLogin.includes('id="lock-window-exit"')&&!remoteLogin.includes('class="lock-window-controls"'),'Web/mobile login must not contain native window controls');
     execFileSync(compiler,['/nologo','/target:exe','/platform:x64',`/win32manifest:${path.join(root,'packaging/desktop.manifest')}`,'/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll',`/r:${path.join(app,'Microsoft.Web.WebView2.Core.dll')}`,`/r:${path.join(app,'Microsoft.Web.WebView2.WinForms.dll')}`,`/out:${path.join(app,'NativeDesktopTest.exe')}`,path.join(root,'scripts/native-desktop-test.cs')],{windowsHide:true,timeout:15000});
     fs.copyFileSync(path.join(app,'Rovarin.exe.config'),path.join(app,'NativeDesktopTest.exe.config'));
-    console.log(await wait(launch(path.join(app,'NativeDesktopTest.exe'),[],{cwd:app,env:{...process.env,ROVARIN_NATIVE_MAINTENANCE_ONLY:options.maintenanceSettingsOnly?'1':''}})));
+    console.log(await wait(launch(path.join(app,'NativeDesktopTest.exe'),[],{cwd:app,env:{...process.env,ROVARIN_NATIVE_MAINTENANCE_ONLY:options.maintenanceSettingsOnly?'1':'',ROVARIN_NATIVE_GLASS_ONLY:options.glassOnly?'1':''}})));
+    if(options.glassOnly){for(const file of fs.readdirSync(app).filter(f=>/^native-glass-.*\.(png|json)$/.test(f)))fs.copyFileSync(path.join(app,file),path.join(root,'packaging/cache',file));return;}
     if(options.maintenanceSettingsOnly){fs.copyFileSync(path.join(app,'native-maintenance-settings.png'),path.join(root,'packaging/cache/native-maintenance-settings.png'));return;}
     for(const file of ['native-lock.png','login-mobile.png','login-keyboard.png','processes-polish.png']) fs.copyFileSync(path.join(app,file),path.join(root,'packaging/cache',file));
     fs.copyFileSync(path.join(app,'native-dashboard.png'),path.join(root,'packaging/cache/native-dashboard.png'));
@@ -70,7 +71,7 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     desktop=launch(path.join(app,'Rovarin.exe'),[],{cwd:app});
     await pause(4000);
     assert.strictEqual(desktop.exitCode,null,'Real native shell did not remain running');
-    const pin=JSON.parse(fs.readFileSync(path.join(data,'config.json'))).pin;
+    const pin=pins.readConfig(path.join(data,'config.json')).pin;
     const login=await fetch(base+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin})});
     const cookie=login.headers.getSetCookie().find(x=>x.startsWith('pc_monitor_session=')).split(';')[0];
     const html=[];
@@ -82,7 +83,7 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     assert.strictEqual(html[0],html[1],'Desktop and mobile must receive the exact same canonical document');
     for(const match of html[0].matchAll(/(?:src|href)="(\/[a-z-]+\.(?:css|js)\?v=[^"]+)"/g)){
       const response=await fetch(base+match[1],{headers:{Cookie:cookie}});
-      assert.strictEqual(response.status,200);assert.strictEqual(response.headers.get('cache-control'),'no-store');
+      assert.strictEqual(response.status,200);assert.strictEqual(response.headers.get('cache-control'),'private, max-age=31536000, immutable');
       assert.strictEqual(await response.text(),fs.readFileSync(path.join(app,'public',match[1].split('?')[0].slice(1)),'utf8'));
     }
     console.log('PASS shared desktop/mobile HTML, canonical versioned assets and no-store caching');
@@ -111,3 +112,8 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     if(!retain){assert(path.resolve(temp).startsWith(path.resolve(os.tmpdir())+path.sep));for(let i=0;i<20;i++){try{fs.rmSync(temp,{recursive:true,force:true});break}catch(error){if(i===19)throw error;await pause(300)}}}
   }
 };
+
+if(require.main===module && process.argv.includes('--glass')){
+  const root=path.resolve(__dirname,'..');
+  module.exports(root,path.join(root,'packaging/payload'),{currentSource:true,glassOnly:true}).catch(error=>{console.error(error);process.exitCode=1;});
+}

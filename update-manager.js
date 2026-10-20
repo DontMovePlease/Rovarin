@@ -80,10 +80,13 @@ class UpdateManager {
     try { const marker = JSON.parse(fs.readFileSync(path.join(this.root,'installation.json'))); return process.platform === 'win32' && marker.schema === 1 && marker.channel === 'windows-x64' && path.resolve(process.execPath).toLowerCase() === path.resolve(this.root,'../runtime/node.exe').toLowerCase(); } catch (_) { return false; }
   }
   status() {
+    let installerLaunched = false;
     if (this.state === 'handoff') {
       try {
         const file = path.join(this.directory,'handoff.json'); plain(file);
         const result = JSON.parse(fs.readFileSync(file));
+        installerLaunched = result.phase === 'launched';
+        if (installerLaunched) this.message = 'The verified Windows installer is open. Continue there to upgrade.';
         if (['cancelled','failed','complete'].includes(result.phase)) {
           this.busy = false; this.state = result.phase === 'failed' ? 'failed' : 'ready';
           this.message = result.phase === 'failed' ? 'Installer handoff failed; your current version remains available.' : 'Installer finished. Check for updates when ready.';
@@ -92,7 +95,7 @@ class UpdateManager {
     }
     const config = readConfig(this.configFile);
     return { channel: this.channel, currentVersion: this.current, latestVersion: this.candidate?.version || null, state: this.state, message: this.message,
-      available: !!this.candidate?.newer && !!this.candidate?.sha256, installed: this.installed(), busy: this.busy,
+      installerLaunched, available: !!this.candidate?.newer && !!this.candidate?.sha256, installed: this.installed(), busy: this.busy,
       autoCheck: config.autoCheckUpdates !== false, lastChecked: config.updateLastChecked || null,
       releaseNotes: this.candidate?.notes || '', releaseUrl: this.candidate?.notesUrl || null };
   }
@@ -104,6 +107,9 @@ class UpdateManager {
     return this.status();
   }
   cancel() {
+    const observed = this.status();
+    // An acknowledgement failure must not revive Update Now while Setup is open.
+    if (observed.installerLaunched) return observed;
     if (this.state === 'handoff') { this.busy = false; this.state = 'ready'; this.message = 'Installer launch was not confirmed; your current version is still available.'; }
     return this.status();
   }

@@ -1,0 +1,11 @@
+Three.js r186 / 0.186.1, MIT license (see three-LICENSE.txt).
+Source: https://registry.npmjs.org/three/-/three-0.186.1.tgz
+Frontend only: no Node runtime dependency and no CDN requests at runtime.
+Vendored tree-shaken ESM build made with esbuild 0.25.12:
+  export { WebGLRenderer, WebGLRenderTarget, Scene, OrthographicCamera, PlaneGeometry,
+    Mesh, ShaderMaterial, Vector2, Vector4, LinearFilter, NoBlending, SRGBColorSpace }
+    from './package/build/three.module.js';
+  esbuild entry.js --bundle --minify --format=esm --legal-comments=inline --outfile=three-glass.module.js
+Rovarin-owned GLSL and compositor are in liquid-shaders.js and liquid-glass.js.
+Only the generated backdrop is refracted; live HTML and top-layer dialog content
+are never rasterized or sampled. Minimal skips loading this bundle.

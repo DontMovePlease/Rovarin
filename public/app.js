@@ -1,48 +1,3 @@
-function reportClientLog(event, detail = {}) {
-  try {
-    const payload = JSON.stringify({
-      event,
-      url: window.location.href,
-      page: typeof currentAppPage !== 'undefined' ? currentAppPage : 'unknown',
-      visibility: typeof document !== 'undefined' ? document.visibilityState : 'unknown',
-      detail
-    });
-    console.log('[Rovarin Client Log]', event, detail);
-    fetch('/api/debug/client-log', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      keepalive: true,
-      body: payload
-    }).catch(() => {
-      if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
-        navigator.sendBeacon('/api/debug/client-log', new Blob([payload], { type: 'application/json' }));
-      }
-    });
-  } catch (_) {}
-}
-window.reportClientLog = reportClientLog;
-reportClientLog('APP_PAGE_SCRIPT_EXEC', {
-  hasSessionCookie: String(typeof document !== 'undefined' && document.cookie ? document.cookie : '').includes('pc_monitor_session'),
-  visibility: typeof document !== 'undefined' ? document.visibilityState : 'unknown'
-});
-
-if (typeof document !== 'undefined') {
-  document.addEventListener('visibilitychange', () => {
-    reportClientLog('VISIBILITY_CHANGE', { state: document.visibilityState });
-  });
-}
-if (typeof window !== 'undefined') {
-  window.addEventListener('pageshow', (e) => {
-    reportClientLog('PAGE_SHOW', { persisted: e.persisted });
-  });
-  window.addEventListener('pagehide', (e) => {
-    reportClientLog('PAGE_HIDE', { persisted: e.persisted });
-  });
-  window.addEventListener('online', () => { reportClientLog('NETWORK_ONLINE'); });
-  window.addEventListener('offline', () => { reportClientLog('NETWORK_OFFLINE'); });
-}
-
 // State and History Buffer
 const MAX_POINTS = 30;
 const loadedDashboardRevision = document.querySelector('meta[name="pc-monitor-ui-revision"]')?.content;
@@ -844,7 +799,8 @@ let pollController = null;
 let reconnectTimer = null;
 let leaseHeartbeatTimer = null;
 let desktopClientVisible = true;
-function dashboardClientVisible() { return desktopClientVisible && document.visibilityState === 'visible'; }
+let dashboardPageActive = true;
+function dashboardClientVisible() { return dashboardPageActive && desktopClientVisible && document.visibilityState === 'visible'; }
 let leaseHeartbeatInFlight = false;
 let monitoringLeaseId = null;
 let dashboardSessionStarting = false;
@@ -856,15 +812,40 @@ let profileRequestPending = false;
 const supportedMonitoringProfiles = new Set(['dashboard', 'cpu-detail', 'gpu-detail', 'network-detail', 'storage-detail', 'processes']);
 const reconnectBanner = document.getElementById('reconnectBanner');
 let authRedirecting = false;
+let reconnectAttempt = 0;
+const dashboardRequests = new Set();
+// One bounded request path for monitoring startup/heartbeats/fallback, including bodies.
+async function dashboardFetch(url, options = {}) {
+  const controller = new AbortController();
+  const parent = options.signal;
+  const abort = () => controller.abort();
+  parent?.addEventListener('abort', abort, { once: true });
+  if (parent?.aborted) controller.abort();
+  dashboardRequests.add(controller);
+  const timer = setTimeout(abort, 10000);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const body = await response.text();
+    return { ok: response.ok, status: response.status, headers: response.headers, json: async () => JSON.parse(body) };
+  } finally {
+    clearTimeout(timer); parent?.removeEventListener('abort', abort); dashboardRequests.delete(controller);
+  }
+}
+function scheduleDashboardReconnect() {
+  if (authRedirecting || window.pcMonitorUninstalling || !dashboardClientVisible()) return;
+  clearTimeout(reconnectTimer); reconnectTimer = null;
+  reconnectBanner.style.display = 'block';
+  if (navigator.onLine === false) { reconnectBanner.textContent = 'Offline. Reconnect this device to resume Rovarin.'; return; }
+  const delay = Math.min(15000, 1000 * 2 ** Math.min(reconnectAttempt++, 4));
+  reconnectBanner.textContent = 'Cannot reach your PC. Check Rovarin and Tailscale. Retrying in ' + delay / 1000 + 's…';
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (monitoringLeaseId) connectStream(); else startDashboardSession();
+  }, delay);
+}
+
 
 function redirectToLogin(reason = 'unspecified') {
-  reportClientLog('REDIRECT_TO_LOGIN', {
-    reason,
-    stack: (new Error().stack || '').slice(0, 500),
-    page: typeof currentAppPage !== 'undefined' ? currentAppPage : 'unknown',
-    leaseId: typeof monitoringLeaseId !== 'undefined' ? monitoringLeaseId : null,
-    profile: typeof appliedMonitoringProfile !== 'undefined' ? appliedMonitoringProfile : null
-  });
   if (authRedirecting) return;
   authRedirecting = true;
   try { sessionStorage.removeItem('rovarin.cachedApps.v1'); } catch (_) {}
@@ -889,6 +870,7 @@ function connectStream() {
 
   source.onopen = () => {
     if (eventSource !== source) return;
+    reconnectAttempt = 0;
     reconnectBanner.style.display = 'none';
     stopPolling();
     window.dispatchEvent(new CustomEvent('pc-monitor-stream-state', { detail: { connected: true } }));
@@ -913,7 +895,7 @@ function connectStream() {
   };
 
   source.onerror = () => {
-    reportClientLog('SSE_ERROR', { readyState: source.readyState });
+
     if (eventSource !== source) return;
     source.close();
     eventSource = null;
@@ -923,8 +905,7 @@ function connectStream() {
     const sampleState = document.getElementById('cpuDetailSampleState');
     if (cpuDetailActive && sampleState) sampleState.textContent = 'Connection interrupted · keeping the latest CPU samples';
     startPolling();
-    clearTimeout(reconnectTimer);
-    reconnectTimer = setTimeout(connectStream, 4000);
+    scheduleDashboardReconnect();
   };
 }
 
@@ -941,6 +922,7 @@ function stopLeaseHeartbeat() {
 }
 
 function closeDashboardConnections() {
+  for (const controller of dashboardRequests) controller.abort();
   stopPolling();
   clearTimeout(reconnectTimer);
   reconnectTimer = null;
@@ -953,13 +935,13 @@ async function acquireMonitoringLease() {
   if (window.pcMonitorUninstalling) return false;
   if (monitoringLeaseId) return true;
   try {
-    const res = await fetch('/api/monitoring/lease', {
+    const res = await dashboardFetch('/api/monitoring/lease', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
       body: JSON.stringify({ action: 'acquire' })
     });
-    reportClientLog('ACQUIRE_LEASE_RESPONSE', { status: res.status, ok: res.ok });
+
     if (res.status === 401) { redirectToLogin('acquire-lease-401'); return false; }
     if (!res.ok) return false;
     const data = await res.json();
@@ -977,7 +959,7 @@ async function heartbeatMonitoringLease() {
   if (!monitoringLeaseId || !dashboardClientVisible() || leaseHeartbeatInFlight) return;
   leaseHeartbeatInFlight = true;
   try {
-    const res = await fetch('/api/monitoring/lease', {
+    const res = await dashboardFetch('/api/monitoring/lease', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
@@ -1024,7 +1006,7 @@ function setMonitoringProfile(profile = 'dashboard') {
     if (monitoringLeaseId !== leaseId || desiredMonitoringProfile !== profile) return false;
     if (appliedMonitoringProfile === profile) return true;
     try {
-      const res = await fetch('/api/monitoring/lease', {
+      const res = await dashboardFetch('/api/monitoring/lease', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
@@ -1071,8 +1053,8 @@ function updatePageHistoryControls() {
 }
 const pageScrollPositions = new Map();
 function showAppPage(pageId, recordHistory = true) {
-  const nextPage = ['processesPage', 'appsPage', 'maintenancePage', 'diagnosticsPage'].includes(pageId) ? pageId : 'dashboardPage';
-  reportClientLog('PAGE_SWITCH', { from: currentAppPage, to: nextPage });
+  const nextPage = ['processesPage', 'appsPage', 'maintenancePage', 'powerPage', 'diagnosticsPage'].includes(pageId) ? pageId : 'dashboardPage';
+
   if (recordHistory && appPageHistory[appPageHistoryIndex] !== nextPage) {
     appPageHistory.splice(appPageHistoryIndex + 1);
     appPageHistory.push(nextPage);
@@ -1084,7 +1066,7 @@ function showAppPage(pageId, recordHistory = true) {
     pageScrollPositions.set(currentAppPage, window.scrollY || document.documentElement.scrollTop || 0);
   }
   currentAppPage = nextPage;
-  const sectionTitle = { dashboardPage: 'Dashboard', processesPage: 'Processes', appsPage: 'Applications', maintenancePage: 'Maintenance', diagnosticsPage: 'Settings' }[nextPage];
+  const sectionTitle = { dashboardPage: 'Dashboard', processesPage: 'Processes', appsPage: 'Applications', maintenancePage: 'Maintenance', powerPage: 'Power', diagnosticsPage: 'Settings' }[nextPage];
   document.getElementById('appSectionTitle').textContent = sectionTitle;
   document.title = 'Rovarin · ' + sectionTitle;
   document.querySelectorAll('.app-page').forEach(page => {
@@ -1103,7 +1085,7 @@ function showAppPage(pageId, recordHistory = true) {
   if (nextPage === 'diagnosticsPage') settingsButton.setAttribute('aria-current', 'page');
   else settingsButton.removeAttribute('aria-current');
 
-  const restoredY = pageScrollPositions.get(nextPage) || 0;
+  const restoredY = nextPage === 'diagnosticsPage' ? 0 : (pageScrollPositions.get(nextPage) || 0);
   if (typeof window.scrollTo === 'function') window.scrollTo(0, restoredY);
   const container = document.querySelector('.dashboard-container');
   if (container && container.scrollTop !== undefined) container.scrollTop = restoredY;
@@ -1118,6 +1100,8 @@ const phoneChromeQuery = matchMedia('(max-width: 699px)');
 const phoneScrollPane = document.querySelector('.dashboard-container');
 const phonePageSurface = document.querySelector('.phone-page-surface');
 const phoneMenu = document.querySelector('.native-app-bar');
+const dashboardOverview = document.querySelector('.liquid-overview');
+const overviewSettings = document.getElementById('liquidOverviewSettings');
 function isPhoneSurface() {
   return phoneChromeQuery.matches && !document.documentElement.classList.contains('native-shell');
 }
@@ -1141,6 +1125,12 @@ window.addEventListener('pageshow', () => {
 function syncPhoneSurface() {
   // Keep navigation outside the scrolling content on every presentation.
   phonePageSurface.insertBefore(phoneMenu.closest('.phone-header'), phoneScrollPane);
+  // Keep the same Settings control/listener in the mobile capsule, rather than
+  // letting a separate overview row scroll through its rounded edges.
+  if (overviewSettings && dashboardOverview) {
+    const parent = isPhoneSurface() ? phoneMenu : dashboardOverview;
+    if (overviewSettings.parentElement !== parent) parent.appendChild(overviewSettings);
+  }
   const backdrop = document.getElementById('sidebarBackdrop');
   // Fixed overlays must not inherit the scrolling page's transformed bounds.
   if (isPhoneSurface()) document.body.insertBefore(backdrop, phonePageSurface);
@@ -1175,6 +1165,7 @@ function handlePhoneDrawerTouchMove(event) {
   if (!swipe || event.touches.length !== 1 || event.touches[0].identifier !== swipe.id) { finishPhoneDrawerDrag(); return; }
   const point = event.touches[0];
   let dx = point.clientX - swipe.x, dy = point.clientY - swipe.y;
+  let claimedNow = false;
   if (window.getSelection()?.toString()) { finishPhoneDrawerDrag(); return; }
   if (!swipe.horizontal) {
     // Keep observing while yielding to native vertical scrolling. Use the
@@ -1190,6 +1181,15 @@ function handlePhoneDrawerTouchMove(event) {
     if (!(swipe.open ? dx < 0 : dx > 0) || Math.abs(dx) < 12 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
     swipe.x = swipe.intentX; swipe.y = swipe.intentY;
     swipe.horizontal = true;
+    claimedNow = true;
+    swipe.width = document.getElementById('appSidebar').getBoundingClientRect().width;
+    swipe.baseOffset = new DOMMatrixReadOnly(getComputedStyle(phonePageSurface).transform).m41;
+    // Ordinary vertical motion stays passive; blocking starts only after
+    // horizontal intent. Safari may retain an already-committed native scroll.
+    document.removeEventListener('touchmove', handlePhoneDrawerTouchMove);
+    document.addEventListener('touchmove', handlePhoneDrawerTouchMove, { passive: false });
+    document.removeEventListener('touchend', handlePhoneDrawerTouchEnd);
+    document.addEventListener('touchend', handlePhoneDrawerTouchEnd, { passive: false });
     // A gesture-scoped use of the existing drawer scroll lock stops competing
     // scrolling where the browser permits it; never adjust scroll positions.
     document.documentElement.classList.add('phone-navigation-locked');
@@ -1198,7 +1198,7 @@ function handlePhoneDrawerTouchMove(event) {
     paintPhoneDrawer();
     document.body.classList.add('phone-drawer-dragging');
   }
-  if (event.cancelable) event.preventDefault();
+  if (!claimedNow && event.cancelable) event.preventDefault();
   swipe.offset = Math.max(0, Math.min(swipe.width, swipe.baseOffset + dx));
   const now = performance.now();
   swipe.velocity = (point.clientX - swipe.lastX) / Math.max(16, now - swipe.lastTime);
@@ -1240,13 +1240,12 @@ function handlePhoneDrawerTouchStart(event) {
   const point = event.touches[0];
   // Preserve system edge navigation; the rest of the content is a drag surface.
   if (point.clientX < 16 || point.clientX > innerWidth - 16) return;
-  const width = document.getElementById('appSidebar').getBoundingClientRect().width;
-  const baseOffset = new DOMMatrixReadOnly(getComputedStyle(phonePageSurface).transform).m41;
+  const width = 0, baseOffset = 0;
   phoneDrawerSwipe = { x: point.clientX, y: point.clientY, intentX: point.clientX, intentY: point.clientY,
     card: target.closest('button.maint-action-card'), id: point.identifier, open, horizontal: false,
     width, baseOffset, offset: baseOffset, lastX: point.clientX, lastTime: performance.now(), velocity: 0 };
-  document.addEventListener('touchmove', handlePhoneDrawerTouchMove, { passive: false });
-  document.addEventListener('touchend', handlePhoneDrawerTouchEnd, { passive: false });
+  document.addEventListener('touchmove', handlePhoneDrawerTouchMove, { passive: true });
+  document.addEventListener('touchend', handlePhoneDrawerTouchEnd, { passive: true });
   document.addEventListener('touchcancel', handlePhoneDrawerTouchCancel, { passive: true });
 }
 document.addEventListener('touchstart', handlePhoneDrawerTouchStart, { passive: true });
@@ -1603,7 +1602,13 @@ document.getElementById('nativeSettingsButton')?.addEventListener('click', () =>
   showAppPage('diagnosticsPage');
   if (matchMedia('(max-width: 699px)').matches) setSidebarOpen(false);
   requestAnimationFrame(() => {
-    document.querySelector('.temperature-settings')?.scrollIntoView({ block: 'start' });
+    document.getElementById('monitorSettings')?.focus({ preventScroll: true });
+  });
+});
+document.getElementById('liquidOverviewSettings')?.addEventListener('click', () => {
+  showAppPage('diagnosticsPage');
+  if (matchMedia('(max-width: 699px)').matches) setSidebarOpen(false);
+  requestAnimationFrame(() => {
     document.getElementById('monitorSettings')?.focus({ preventScroll: true });
   });
 });
@@ -1638,7 +1643,10 @@ async function releaseMonitoringLease() {
 async function startDashboardSession() {
   if (window.pcMonitorUninstalling) return;
   if (dashboardSessionStarting || !dashboardClientVisible()) return;
-  reportClientLog('START_DASHBOARD_SESSION');
+
+  clearTimeout(reconnectTimer); reconnectTimer = null;
+  reconnectBanner.textContent = 'Connecting to your PC…';
+  reconnectBanner.style.display = 'block';
   dashboardSessionStarting = true;
   try {
     const acquired = await acquireMonitoringLease();
@@ -1648,6 +1656,7 @@ async function startDashboardSession() {
       return;
     }
     await fetchInitialMetrics();
+    if (!monitoringLeaseId || !dashboardClientVisible() || authRedirecting) return;
     connectStream();
     startLeaseHeartbeat();
     const runDeferredStartup = () => {
@@ -1668,14 +1677,15 @@ async function startDashboardSession() {
     }
   } finally {
     dashboardSessionStarting = false;
+    if (!monitoringLeaseId) scheduleDashboardReconnect();
   }
 }
 
 async function fetchInitialMetrics() {
   try {
     const headers = monitoringLeaseId ? { 'X-Monitor-Lease': monitoringLeaseId } : {};
-    const res = await fetch('/api/metrics', { headers, credentials: 'same-origin' });
-    reportClientLog('INITIAL_METRICS_RESPONSE', { status: res.status, ok: res.ok });
+    const res = await dashboardFetch('/api/metrics', { headers, credentials: 'same-origin' });
+
     if (res.status === 401) {
       redirectToLogin('initial-metrics-401');
       return;
@@ -1710,7 +1720,7 @@ function startPolling() {
     pollController = controller;
     try {
       const headers = monitoringLeaseId ? { 'X-Monitor-Lease': monitoringLeaseId } : {};
-      const res = await fetch('/api/metrics', { headers, credentials: 'same-origin', signal: controller.signal });
+      const res = await dashboardFetch('/api/metrics', { headers, credentials: 'same-origin', signal: controller.signal });
       if (res.status === 401) { redirectToLogin('poll-metrics-401'); return; }
       if (res.ok) {
         reconnectBanner.style.display = 'none';
@@ -1772,6 +1782,10 @@ function handleDashboardVisibility() {
   else { checkDashboardUpdate(); startDashboardSession(); }
 }
 document.addEventListener('visibilitychange', handleDashboardVisibility);
+window.addEventListener('offline', () => { closeDashboardConnections(); scheduleDashboardReconnect(); });
+window.addEventListener('online', () => {
+  if (dashboardClientVisible() && !authRedirecting) { reconnectAttempt = 0; startDashboardSession(); }
+});
 // Native host visibility is an additional client condition, never authorization.
 // Browsers/iPhones keep the normal document visibility behavior unchanged.
 window.addEventListener('pc-monitor-desktop-visibility', event => {
@@ -1780,6 +1794,7 @@ window.addEventListener('pc-monitor-desktop-visibility', event => {
   handleDashboardVisibility();
 });
 window.addEventListener('pagehide', () => {
+  dashboardPageActive = false;
   if (cpuDetailDialog?.open) {
     suppressCpuProfileRestore = true;
     cpuDetailActive = false;
@@ -1789,6 +1804,7 @@ window.addEventListener('pagehide', () => {
   releaseMonitoringLease();
 });
 window.addEventListener('pageshow', () => {
+  dashboardPageActive = true;
   suppressCpuProfileRestore = false;
   if (dashboardClientVisible()) { checkDashboardUpdate(); startDashboardSession(); }
 });

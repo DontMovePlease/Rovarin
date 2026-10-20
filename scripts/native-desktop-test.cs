@@ -150,6 +150,76 @@ internal static class NativeDesktopTest
         File.WriteAllText(Path.Combine(data,"vm-phase.txt"),"PASS: native bootstrap; actual UAC cancellation; approved installer; owner enrollment; protected write denied; verified checkbox; Clear DNS via service; reopen; revocation");
         Console.WriteLine("PASS actual VM native maintenance bootstrap, cancellation, enrollment, protected write refusal and revocation");
     }
+    static async Task GlassCapture(string name) {
+        await Task.Delay(650);
+        Check(await Condition("document.documentElement.scrollWidth<=innerWidth+1"),"Native glass horizontal overflow: "+name);
+        using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-glass-"+name+".png")))
+            await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+    }
+    static async Task GlassParity(string pin, JavaScriptSerializer json) {
+        await Wait("document.getElementById('liquidStyles').media==='all' && parseFloat(getComputedStyle(document.getElementById('pinInput')).letterSpacing)<=6", "Native PIN glass CSS/spacing");
+        await GlassCapture("lock");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('pinInput').value="+json.Serialize(pin)+";document.getElementById('unlockBtn').click()");
+        await Wait("typeof showAppPage==='function' && document.documentElement.classList.contains('native-shell') && !!window.RovarinGlass", "Native glass login/bootstrap",30);
+        await View.CoreWebView2.ExecuteScriptAsync("RovarinGlass.setQuality('full')");
+        await Wait("document.documentElement.classList.contains('liquid-ready') && RovarinGlass.diagnostics().contexts===1", "Native WebGL renderer",30);
+        await Wait("eventSource?.readyState===1", "Native SSE connection",30);
+        form.WindowState=FormWindowState.Normal;
+        form.Size=new System.Drawing.Size(1440,900);
+        await View.CoreWebView2.ExecuteScriptAsync("setSidebarOpen(false);showAppPage('dashboardPage')");
+        await GlassCapture("dashboard-desktop");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('sidebarToggle').click()");
+        await Wait("document.body.classList.contains('sidebar-expanded')", "Native sidebar expansion");
+        await GlassCapture("sidebar-expanded");
+        foreach(string page in new[]{"processesPage","appsPage","maintenancePage","powerPage","diagnosticsPage"}) {
+            await View.CoreWebView2.ExecuteScriptAsync("setSidebarOpen(false);showAppPage("+json.Serialize(page)+")");
+            await GlassCapture(page);
+        }
+        await View.CoreWebView2.ExecuteScriptAsync("showAppPage('powerPage');document.querySelector('[data-power-action=restart]').click()");
+        await Wait("document.getElementById('powerConfirm').open", "Native glass confirmation");
+        Check(await Condition("document.getElementById('powerPin').hidden && !document.getElementById('powerPin').required && document.querySelector('label[for=powerPin]').hidden"),"Trusted native power confirmation must not repeat PIN");
+        await Wait("(()=>{const r=document.getElementById('powerConfirm').getBoundingClientRect();return Math.abs(r.left+r.width/2-innerWidth/2)<2 && Math.abs(r.top+r.height/2-innerHeight/2)<2})()", "Native dialog centering");
+        await GlassCapture("dialog");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('powerCancel').click();showAppPage('diagnosticsPage')");
+        // Finish the real on-demand report before measuring a static page.
+        await Wait("!document.getElementById('copyDiagnostics').disabled", "Native diagnostics settled for idle measurement",45);
+        // Preserve the existing dashboard profile; graphics creates no telemetry work.
+        await View.CoreWebView2.ExecuteScriptAsync("window.__qaGraphicsReasons=[];void import('/liquid-glass.js').then(m=>{const original=m.GlassRenderer.prototype.invalidate;m.GlassRenderer.prototype.invalidate=function(duration){window.__qaGraphicsReasons.push({at:performance.now(),frame:this.frames,stack:new Error().stack});if(__qaGraphicsReasons.length>12)__qaGraphicsReasons.shift();return original.call(this,duration);};window.__qaGraphicsTraceReady=true;})");
+        await Wait("window.__qaGraphicsTraceReady===true", "Native graphics trace ready");
+        await View.CoreWebView2.ExecuteScriptAsync("window.__qaMutations=[];new MutationObserver(rs=>{for(const r of rs){if(r.type==='attributes')__qaMutations.push({at:performance.now(),tag:r.target.tagName,id:r.target.id,attribute:r.attributeName,old:r.oldValue,value:r.target.getAttribute(r.attributeName),visible:r.target.checkVisibility?.()});}if(__qaMutations.length>16)__qaMutations.splice(0,__qaMutations.length-16)}).observe(document.body,{subtree:true,attributes:true,attributeOldValue:true,attributeFilter:['hidden','class','style','open']})");
+        var receipts=new System.Collections.Generic.List<object>();
+        foreach(string quality in new[]{"full","balanced","minimal"}) {
+            await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('graphicsQuality').value="+json.Serialize(quality)+";document.getElementById('graphicsQuality').dispatchEvent(new Event('change'))");
+            await Wait("RovarinGlass.diagnostics().quality==="+json.Serialize(quality)+" && RovarinGlass.diagnostics().idle", "Native quality selection");
+            await Task.Delay(1500);
+            string before=await View.CoreWebView2.ExecuteScriptAsync("RovarinGlass.diagnostics().frames");
+            var process=Process.GetCurrentProcess();var cpu=process.TotalProcessorTime;var start=DateTime.UtcNow;
+            await Task.Delay(3000);process.Refresh();
+            string after=await View.CoreWebView2.ExecuteScriptAsync("RovarinGlass.diagnostics().frames");
+            Check(before==after,"Idle native renderer continues drawing: "+quality+" "+before+" -> "+after+"; "+await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({graphics:RovarinGlass.diagnostics(),reasons:window.__qaGraphicsReasons,mutations:window.__qaMutations})"));
+            string graphics=await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify(RovarinGlass.diagnostics())");
+            receipts.Add(new {quality=quality,shellCpuOneCorePercent=(process.TotalProcessorTime-cpu).TotalMilliseconds/(DateTime.UtcNow-start).TotalMilliseconds*100,shellWorkingSetMiB=process.WorkingSet64/1048576.0,graphics=json.DeserializeObject(json.Deserialize<string>(graphics))});
+            await GlassCapture(quality);
+        }
+        await View.CoreWebView2.ExecuteScriptAsync("RovarinGlass.setQuality('full')");
+        await Wait("RovarinGlass.diagnostics().contexts===1 && RovarinGlass.diagnostics().idle", "Full restore");
+        form.WindowState=FormWindowState.Minimized;
+        await Task.Delay(750);View.CoreWebView2.Resume();
+        // Force an invalidation while hidden: native event must independently gate it.
+        await View.CoreWebView2.ExecuteScriptAsync("window.dispatchEvent(new Event('resize'));window.__qaHiddenFrames=RovarinGlass.diagnostics().frames");
+        await Task.Delay(1000);
+        Check(await Condition("RovarinGlass.diagnostics().idle && RovarinGlass.diagnostics().frames===window.__qaHiddenFrames"),"Minimized native graphics did not suspend");
+        Invoke("OpenWindow");await Task.Delay(750);
+        await Wait("RovarinGlass.diagnostics().idle", "Native graphics restore");
+        form.Close();await Task.Delay(600);View.CoreWebView2.Resume();
+        await View.CoreWebView2.ExecuteScriptAsync("window.dispatchEvent(new Event('resize'));window.__qaHiddenFrames=RovarinGlass.diagnostics().frames");
+        await Task.Delay(1000);
+        Check(await Condition("RovarinGlass.diagnostics().idle && RovarinGlass.diagnostics().frames===window.__qaHiddenFrames"),"Tray-hidden native graphics did not suspend");
+        Invoke("OpenWindow");form.Size=new System.Drawing.Size(980,740);
+        await View.CoreWebView2.ExecuteScriptAsync("showAppPage('dashboardPage')");await GlassCapture("dashboard-compact");
+        File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-glass-results.json"),json.Serialize(new{native=true,webViewVersion=View.CoreWebView2.Environment.BrowserVersionString,qualityMeasurements=receipts,minimized="PASS",trayHidden="PASS",screenshots="actual production WinForms/WebView2, isolated test state"}));
+        Console.WriteLine("PASS actual WinForms/WebView2 glass: six views, expanded sidebar, cancelled dialog, three qualities, zero idle frames, minimize/tray suspension and restore");
+    }
     [STAThread] static int Main() {
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
         var assembly = Assembly.LoadFrom(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Rovarin.exe"));
@@ -159,7 +229,9 @@ internal static class NativeDesktopTest
         var package = json.Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"package.json")));
         string currentVersion = json.Serialize((string)package["version"]);
         var saved = json.Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","data","config.json")));
-        string pin = (string)saved["pin"];
+        string pin;
+        if(saved.ContainsKey("pin")) pin=(string)saved["pin"];
+        else {var credential=(System.Collections.Generic.Dictionary<string,object>)saved["pinCredential"];pin=System.Text.Encoding.UTF8.GetString(System.Security.Cryptography.ProtectedData.Unprotect(Convert.FromBase64String((string)credential["protected"]),System.Text.Encoding.UTF8.GetBytes("Rovarin.Pin.v1"),System.Security.Cryptography.DataProtectionScope.CurrentUser));}
         form.Shown += async delegate {
             try {
                 var deadline=DateTime.UtcNow.AddSeconds(45);
@@ -181,6 +253,9 @@ internal static class NativeDesktopTest
                     await MaintenanceSettings(pin,json); result=0; Invoke("ExitShell"); return;
                 }
                 await Task.Delay(200);
+                if (Environment.GetEnvironmentVariable("ROVARIN_NATIVE_GLASS_ONLY")=="1") {
+                    await GlassParity(pin,json); result=0; Invoke("ExitShell"); return;
+                }
                 Check(form.Width==360 && form.Height>=320 && form.Height<480,"PIN window not sized around the shared card");
                 Check(form.FormBorderStyle==FormBorderStyle.None && !form.ControlBox && form.ClientSize==form.Size,"Lock window has an outer native frame");
                 bool dwmCorners=(bool)window.GetField("lockUsesDwmCorners",flags).GetValue(form);
@@ -462,7 +537,7 @@ internal static class NativeDesktopTest
                 Console.WriteLine("PASS Midnight Glass phone 320x568/375x812/390x844/430x932: branded header, safe areas, stable scroll, push/reverse drawer, pages, settings, dialogs, touch targets and solid data surfaces (WebView2, not physical iOS)");
                 form.Size=new System.Drawing.Size(390,844);
                 await View.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia", "{\"features\":[{\"name\":\"prefers-reduced-motion\",\"value\":\"reduce\"},{\"name\":\"prefers-contrast\",\"value\":\"more\"}]}");
-                await Wait("matchMedia('(prefers-reduced-motion: reduce)').matches && matchMedia('(prefers-contrast: more)').matches && getComputedStyle(document.querySelector('.phone-page-surface')).transitionDuration==='0s' && getComputedStyle(document.querySelector('.native-app-bar')).backdropFilter==='none' && getComputedStyle(document.documentElement).getPropertyValue('--text-secondary').trim()==='#c4d2e2'", "Accessible motion/contrast glass fallback missing");
+                await Wait("matchMedia('(prefers-reduced-motion: reduce)').matches && matchMedia('(prefers-contrast: more)').matches && getComputedStyle(document.querySelector('.phone-page-surface')).transitionDuration==='0s' && getComputedStyle(document.querySelector('.native-app-bar')).backdropFilter==='none' && getComputedStyle(document.documentElement).getPropertyValue('--text-secondary').trim()===(document.documentElement.classList.contains('liquid-theme')?'#dce7f8':'#c4d2e2')", "Accessible motion/contrast glass fallback missing");
                 await View.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia", "{\"features\":[{\"name\":\"prefers-reduced-transparency\",\"value\":\"reduce\"}]}");
                 if(await Condition("matchMedia('(prefers-reduced-transparency: reduce)').matches")) {
                     await Wait("getComputedStyle(document.querySelector('.native-app-bar')).backdropFilter==='none' && getComputedStyle(document.documentElement).getPropertyValue('--surface-glass').trim()==='#172232'", "Reduced-transparency material must be solid");

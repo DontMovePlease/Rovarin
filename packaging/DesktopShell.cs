@@ -500,7 +500,13 @@ internal sealed class DesktopWindow : Form
             try { handoff = json.Deserialize<Dictionary<string, object>>(await RunHelperAsync("installed-update.ps1", 20000)); }
             catch { }
             if (handoff == null || !Convert.ToBoolean(handoff["launched"])) {
-                try { await NativeRequestAsync("/api/desktop/updates", new { action = "cancel" }); } catch { }
+                try {
+                    // The detached worker can launch Setup even if its short-lived
+                    // parent acknowledgement is lost. Recover only server-observed
+                    // launch state; never start another installer or bypass verification.
+                    var observed = await NativeRequestAsync("/api/desktop/updates", new { action = "cancel" });
+                    if (observed.ContainsKey("installerLaunched") && Convert.ToBoolean(observed["installerLaunched"])) { PostUpdate(observed); return; }
+                } catch { }
                 throw new IOException("Installer launch unconfirmed.");
             }
             // Inno closes this shell via existing IPC when upgrade actually begins.
@@ -641,12 +647,13 @@ internal sealed class DesktopWindow : Form
             var environment = await CoreWebView2Environment.CreateAsync(null, DesktopShell.ProfileDirectory);
             await view.EnsureCoreWebView2Async(environment);
             var core = view.CoreWebView2;
-            // Native proof stays in C#: scoped to same-origin removal requests, never frontend JavaScript.
+            // Native proof stays in C#: scoped to same-origin removal/power requests, never frontend JavaScript.
             core.AddWebResourceRequestedFilter(origin + "/api/apps/*", CoreWebView2WebResourceContext.All);
+            core.AddWebResourceRequestedFilter(origin + "/api/power/*", CoreWebView2WebResourceContext.All);
             core.WebResourceRequested += delegate(object sender, CoreWebView2WebResourceRequestedEventArgs args) {
                 Uri target;
                 if (!Uri.TryCreate(args.Request.Uri, UriKind.Absolute, out target) || target.GetLeftPart(UriPartial.Authority) != origin) return;
-                if (target.AbsolutePath != "/api/apps/removal-security" && target.AbsolutePath != "/api/apps/uninstall" && target.AbsolutePath != "/api/apps/leftovers/delete") return;
+                if (target.AbsolutePath != "/api/apps/removal-security" && target.AbsolutePath != "/api/apps/uninstall" && target.AbsolutePath != "/api/apps/leftovers/delete" && target.AbsolutePath != "/api/power/status" && target.AbsolutePath != "/api/power/run") return;
                 if (!String.IsNullOrEmpty(desktopCredential) && desktopCredential.Length == 44) args.Request.Headers.SetHeader("X-PC-Monitor-Desktop", desktopCredential);
             };
             core.Settings.AreDevToolsEnabled = false;

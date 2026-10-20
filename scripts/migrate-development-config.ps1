@@ -47,8 +47,22 @@ try {
     $bytes = [IO.File]::ReadAllBytes($source)
     # Validate recoverable JSON without displaying it; normal readConfig continues
     # to reject the linked source. Migration is an explicit local-only exception.
-    try { $saved = [Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { throw 'Invalid source JSON; original retained.' }
-    if ($saved.pin -isnot [string] -or $saved.pin -cnotmatch '^(\d{6}|\d{12})$') { throw 'Invalid saved PIN; original retained.' }
+    [Text.Encoding]::UTF8.GetString($bytes) | & $node -e "try{require('./pin-manager').validateConfig(JSON.parse(require('fs').readFileSync(0,'utf8').replace(/^\uFEFF/,'')))}catch{process.stderr.write('Invalid saved configuration; original retained.');process.exit(1)}"
+    if ($LASTEXITCODE -ne 0) { throw 'Invalid saved PIN; original retained.' }
+    $backup = Join-Path $directory 'config.before-development-migration.json'
+    foreach ($file in @($backup, $target)) {
+        $stream = [IO.File]::Open($file, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+    }
+    & $node -e "require('./pin-manager').readConfig(process.argv[1]);process.stdout.write('Safe migrated configuration verified.');" $target
+    if ($LASTEXITCODE -ne 0) { throw 'Destination failed the unchanged config safety validator.' }
+    if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($target)) -cne [Convert]::ToBase64String($bytes)) { throw 'Copy verification failed.' }
+    [IO.File]::WriteAllText($marker, '{"schema":1}', (New-Object Text.UTF8Encoding($false)))
+} finally { $held.Dispose() }
+# Only retire the exact old product config after the protected copy is verified.
+Remove-Item -LiteralPath $source -Force
+Write-Output 'Development config migrated without changing PIN/settings. Backup retained privately outside sync.'
+) -and $saved.pinCredential.scheme -cne 'scrypt-dpapi-v1') { throw 'Invalid saved PIN; original retained.' }
     $backup = Join-Path $directory 'config.before-development-migration.json'
     foreach ($file in @($backup, $target)) {
         $stream = [IO.File]::Open($file, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)

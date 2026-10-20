@@ -14,7 +14,7 @@ async function testNativeDesktopSecurity() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rovarin-native-security-'));
   let child, url, captured = '';
   try {
-    for (const name of ['server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(directory,name));
+    for (const name of ['power-controls.js','server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(directory,name));
     fs.mkdirSync(path.join(directory,'scripts'));
     for (const helper of ['native-trust.ps1','dashboard-runtime.ps1']) fs.copyFileSync(path.join(root,'scripts',helper),path.join(directory,'scripts',helper));
     const configFile = path.join(directory,'config.json');
@@ -119,15 +119,16 @@ async function testLocalPinManagement() {
   try {
     const fresh = pins.loadConfig(file);
     assert.match(fresh.pin, /^\d{6}$/);
-    assert.match(fs.readFileSync(path.join(root, 'pin-manager.js'), 'utf8'), /crypto\.randomInt\(0, 1000000\)/);
+    assert.match(fs.readFileSync(path.join(root, 'pin-manager.js'), 'utf8'), /crypto\.randomInt\(0, 10 \*\* length\)/);
     assert(!pins.validPin('1234')); assert(!pins.validPin('1234567')); assert(!pins.validPin(123456));
     assert(!pins.validPin('123456\n')); assert(!pins.validPin('123456789012\n')); assert(!pins.validPin(' 123456'));
     const legacy = { pin: '123456789012', unrelated: { retained: true } };
-    pins.writeConfig(file, legacy); assert.deepStrictEqual(pins.loadConfig(file), legacy);
+    pins.writeConfig(file, legacy); assert.strictEqual(pins.loadConfig(file).pin,legacy.pin);assert.deepStrictEqual(pins.loadConfig(file).unrelated,legacy.unrelated);
+    if(process.platform==='win32'){const stored=JSON.parse(fs.readFileSync(file,'utf8'));assert(!Object.hasOwn(stored,'pin'));assert(!fs.readFileSync(file,'utf8').includes(legacy.pin));assert.strictEqual(stored.pinCredential.scheme,'scrypt-dpapi-v1');}
     fs.writeFileSync(file, '{broken');
     assert.throws(() => pins.loadConfig(file)); assert.strictEqual(fs.readFileSync(file, 'utf8'), '{broken');
     pins.writeConfig(file, legacy);
-    for (const name of ['server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root, name), path.join(directory, name));
+    for (const name of ['power-controls.js','server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root, name), path.join(directory, name));
     fs.mkdirSync(path.join(directory,'public'));
     fs.copyFileSync(path.join(root,'public/login.html'),path.join(directory,'public/login.html'));
     let output = '', url;
@@ -190,6 +191,41 @@ async function testLocalPinManagement() {
     if (child && child.exitCode === null) { child.kill(); await new Promise(resolve => child.once('exit', resolve)); }
     fs.rmSync(directory, { recursive: true, force: true, maxRetries:10, retryDelay:100 });
   }
+}
+
+
+async function testPinPersistence() {
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),'rovarin-auth-persistence-')),file=path.join(directory,'config.json');let child,base,output='';
+ const fixturePin=pins.generatePin(undefined,12),sources=['power-controls.js','server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js','app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js','update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json'];
+ const copySources=()=>{for(const name of sources)fs.copyFileSync(path.join(root,name),path.join(directory,name));fs.cpSync(path.join(root,'public'),path.join(directory,'public'),{recursive:true});};
+ const stop=async()=>{if(child&&child.exitCode===null){const exited=new Promise(r=>child.once('exit',r));child.kill();await exited;}};
+ const start=async()=>{let log='';base=null;const env={...process.env,PORT:'0'};delete env.PC_MONITOR_PIN;child=spawn(process.execPath,['server.js'],{cwd:directory,env,windowsHide:true,stdio:['ignore','pipe','pipe']});const take=b=>{log+=b;output+=b;};child.stdout.on('data',take);child.stderr.on('data',take);for(let i=0;i<200;i++){const found=log.match(/Localhost access: http:\/\/127\.0\.0\.1:(\d+)/);if(found){base='http://127.0.0.1:'+found[1];return;}if(child.exitCode!==null)break;await new Promise(r=>setTimeout(r,100));}throw Error('Protected fixture startup failed');};
+ const call=(route,body,cookie)=>fetch(base+route,{method:body?'POST':'GET',headers:{Origin:base,'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},body:body&&JSON.stringify(body)});
+ const login=async()=>{const r=await call('/api/login',{pin:fixturePin});assert.equal(r.status,200);return r.headers.getSetCookie().find(x=>x.startsWith('pc_monitor_session=')).split(';')[0];};
+ try {
+  copySources();pins.writeConfig(file,{pin:fixturePin,retained:{value:'unchanged'}});const representation=JSON.stringify(JSON.parse(fs.readFileSync(file,'utf8')).pinCredential);
+  if(process.platform==='win32'){assert(!fs.readFileSync(file,'utf8').includes(fixturePin));assert(representation);}
+  if(process.platform==='win32'){const original=fs.readFileSync(file),record=JSON.parse(original);record.pinCredential.hash='0'.repeat(64);fs.writeFileSync(file,JSON.stringify(record));assert.throws(()=>pins.loadConfig(file), 'corrupt credentials fail closed without regeneration');assert.equal(fs.readFileSync(file,'utf8'),JSON.stringify(record));fs.writeFileSync(file,original);}
+  await start();const cookie=await login();const parallel=await Promise.all([login(),login(),login()]);assert.equal(new Set(parallel).size,3);
+  assert.equal((await call('/api/apps/removal-security',{requirePhoneRemovalPin:true},cookie)).status,200);
+  assert.equal((await call('/api/apps/removal-security',{requirePhoneRemovalPin:false,pin:fixturePin},cookie)).status,200);
+  assert.equal((await call('/api/maintenance/status',null,cookie)).status,200);
+  assert.equal(pins.readConfig(file).pin,fixturePin);assert.deepEqual(pins.readConfig(file).retained,{value:'unchanged'});
+  assert.equal(JSON.stringify(JSON.parse(fs.readFileSync(file,'utf8')).pinCredential),representation,'ordinary settings/maintenance reads retain credential representation');
+  const unavailable=file+'.held';fs.renameSync(file,unavailable);
+  try{for(let i=0;i<6;i++){const r=await call('/api/login',{pin:fixturePin});assert.equal(r.status,503,'storage failure is not incorrect PIN or lockout');assert.equal((await r.json()).code,'credential-unavailable');}}finally{fs.renameSync(unavailable,file);}
+  const restoredCookie=await login();
+  const html=await (await call('/')).text(),asset=html.match(/src="(\/login\.js\?v=[^"]+)"/)[1];
+  const gzip=await fetch(base+asset,{headers:{'Accept-Encoding':'gzip'}});assert.equal(gzip.headers.get('content-encoding'),'gzip');assert(gzip.headers.get('cache-control').includes('immutable'));assert(!gzip.headers.has('set-cookie'));const tag=gzip.headers.get('etag');const originalBody=await gzip.text();
+  const notModified=await fetch(base+asset,{headers:{'If-None-Match':tag}});assert.equal(notModified.status,304);assert.equal(await notModified.text(),'');
+  const noGzip=await fetch(base+asset,{headers:{'Accept-Encoding':'gzip;q=0'}});assert(!noGzip.headers.has('content-encoding'));assert.equal(await noGzip.text(),originalBody);
+  fs.appendFileSync(path.join(directory,'public/login.js'),'\n// owned revision fixture\n');
+  const changed=await fetch(base+asset,{headers:{'If-None-Match':tag}});assert.equal(changed.status,200);assert.notEqual(changed.headers.get('etag'),tag);assert(!changed.headers.get('cache-control').includes('immutable'),'obsolete revision cannot be cached forever');
+  const credentialBytes=fs.readFileSync(file);await stop();copySources();assert.deepEqual(fs.readFileSync(file),credentialBytes,'rebuilding source/payload never replaces user config');await start();
+  assert.equal((await call('/api/monitoring/status',null,restoredCookie)).status,401,'restart does not persist reusable bearer tokens');
+  await login();assert.equal(pins.readConfig(file).pin,fixturePin);assert.deepEqual(fs.readFileSync(file),credentialBytes,'same credential persists across real restart/rebuild');
+  assert(!output.includes(fixturePin));console.log('PASS protected 12-digit PIN, concurrent real logins, settings/maintenance preservation, unavailable storage 503 without lockout, rebuild/restart persistence and session revocation; gzip/q=0/ETag/revision-safe caching');
+ } finally {await stop();fs.rmSync(directory,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
 }
 
 const root = path.resolve(__dirname, '..');
@@ -300,7 +336,7 @@ async function testSessionsLeasesAndSse() {
     assert(match[1].endsWith(`?v=${uiRevision}`), 'every dashboard stylesheet/script must be automatically versioned');
     const asset = await request(match[1], { cookie: firstCookie });
     assert.strictEqual(asset.status, 200);
-    assert.strictEqual(asset.headers.get('cache-control'), 'no-store');
+    assert.strictEqual(asset.headers.get('cache-control'), 'private, max-age=31536000, immutable');assert(!asset.headers.has('set-cookie'),'public assets never carry session/legacy cookies');
     assert.match(asset.headers.get('content-type'), match[1].includes('.css?') ? /text\/css/ : /javascript/);
   }
   assert.match(dashboardHtml, /Rovarin Dashboard/);
@@ -545,6 +581,7 @@ async function main() {
     testRecoveryPinRefresh();
     await testLoginInteraction();
     await testLocalPinManagement();
+    await testPinPersistence();
     await testNativeDesktopSecurity();
     pin = String(crypto.randomInt(100000000000, 999999999999));
     await startServer();
@@ -563,7 +600,7 @@ async function main() {
 async function testLoginInteraction() {
   const elements = Object.fromEntries(['pinInput','unlockBtn','errMsg'].map(id => [id,{value:'',textContent:'',disabled:false,events:{},addEventListener(name,fn){this.events[name]=fn;},focus(){}}]));
   const requests=[]; let respond; let navigations=0;
-  const context=vm.createContext({document:{getElementById:id=>elements[id],querySelector:()=>({content:'6'})},localStorage:{removeItem(){}},window:{location:{replace(){navigations++;}}},fetch:(_url,options)=>{requests.push(JSON.parse(options.body));return new Promise(resolve=>{respond=resolve;});}});
+  const context=vm.createContext({AbortController,setTimeout,clearTimeout,document:{documentElement:{dataset:{}},getElementById:id=>elements[id],querySelector:()=>({content:'6'})},localStorage:{removeItem(){}},window:{addEventListener(){},location:{replace(){navigations++;}}},fetch:(_url,options)=>{requests.push(JSON.parse(options.body));return new Promise(resolve=>{respond=resolve;});}});
   vm.runInContext(fs.readFileSync(path.join(root,'public/login.js'),'utf8'),context);
   // Real typing fires keydown then input; pasting fires a single input event.
   const flush=()=>new Promise(resolve=>setImmediate(resolve));
@@ -605,36 +642,35 @@ async function testLoginInteraction() {
   await fail();
   assert.strictEqual(elements.pinInput.value,'','the retried PIN is cleared after another failure');
   type('999999');
-  assert.strictEqual(requests.length,4,'the same six-digit value must not auto-submit twice');
+  assert.strictEqual(requests.length,5,'deliberately re-entering the same PIN after rejection must submit again');
   elements.unlockBtn.events.click();
-  assert.strictEqual(requests.length,5,'Enter/button still submits a repeated value manually');
+  assert.strictEqual(requests.length,5,'Enter/button cannot duplicate the newly pending retry');
   await fail();
   type('123456');
   assert.strictEqual(requests.length,6,'a new current six-digit PIN auto-submits once');
   respond({ok:true,status:200,json:async()=>({success:true})});await flush();
-  assert.strictEqual(navigations,1);
+  assert.strictEqual(navigations,1);assert.strictEqual(elements.unlockBtn.disabled,true,'successful login stays acknowledged during navigation');assert.strictEqual(elements.unlockBtn.textContent,'Unlocked!');
   for(const mode of ['12','manual','invalid']) {
     const legacyElements=Object.fromEntries(['pinInput','unlockBtn','errMsg'].map(id=>[id,{value:'',textContent:'',disabled:false,events:{},addEventListener(name,fn){this.events[name]=fn;},focus(){}}]));
     const legacyRequests=[];let legacyRespond,legacyNavigations=0;
-    const legacyContext=vm.createContext({document:{getElementById:id=>legacyElements[id],querySelector:()=>({content:mode})},localStorage:{removeItem(){}},window:{location:{replace(){legacyNavigations++;}}},fetch:(_url,options)=>{legacyRequests.push(JSON.parse(options.body));return new Promise(resolve=>legacyRespond=resolve);}});
+    const legacyContext=vm.createContext({AbortController,setTimeout,clearTimeout,document:{documentElement:{dataset:{}},getElementById:id=>legacyElements[id],querySelector:()=>({content:mode})},localStorage:{removeItem(){}},window:{addEventListener(){},location:{replace(){legacyNavigations++;}}},fetch:(_url,options)=>{legacyRequests.push(JSON.parse(options.body));return new Promise(resolve=>legacyRespond=resolve);}});
     vm.runInContext(fs.readFileSync(path.join(root,'public/login.js'),'utf8'),legacyContext);
     for(const digit of '123456789012') {
       legacyElements.pinInput.value+=digit;legacyElements.pinInput.events.input({});
       assert.strictEqual(legacyRequests.length,0,'legacy/unknown entry never consumes a failed attempt, including at digit six');
     }
     assert.strictEqual(legacyElements.pinInput.value,'123456789012');
-    legacyElements.pinInput.events.keydown({key:'Enter'});assert.strictEqual(legacyRequests.length,1);
+    if(mode==='manual')legacyElements.unlockBtn.events.click();else legacyElements.pinInput.events.keydown({key:'Enter'});assert.strictEqual(legacyRequests.length,1);
     assert.strictEqual(legacyRequests[0].pin,'123456789012');
     legacyRespond({ok:true,status:200,json:async()=>({success:true})});await flush();assert.strictEqual(legacyNavigations,1);
     legacyElements.pinInput.value='123456789012';legacyElements.pinInput.events.input({});assert.strictEqual(legacyRequests.length,1);
-    legacyElements.unlockBtn.events.click();assert.strictEqual(legacyRequests.length,2);
-    legacyRespond({ok:true,status:200,json:async()=>({success:true})});await flush();
+    legacyElements.unlockBtn.events.click();assert.strictEqual(legacyRequests.length,1,'success cannot create another login while navigation is pending');
   }
   console.log('PASS six-digit typing/paste auto-submit, guarded retries; legacy/unknown modes consume zero attempts while typing and support Enter/button');
   // Presentation-only visual viewport lifecycle. No auth mocks are relaxed.
   const events = () => ({ listeners: new Map(), addEventListener(type, fn) { if (!this.listeners.has(type)) this.listeners.set(type,new Set()); this.listeners.get(type).add(fn); }, removeEventListener(type,fn) { this.listeners.get(type)?.delete(fn); }, dispatch(type) { for(const fn of this.listeners.get(type)||[]) fn(); } });
   const styles=new Map(),classes=new Set(['login-page']);
-  const rootElement={style:{setProperty:(key,value)=>styles.set(key,value),removeProperty:key=>styles.delete(key)},classList:{contains:key=>classes.has(key),remove:key=>classes.delete(key),toggle(key,on){if(on)classes.add(key);else classes.delete(key);}}};
+  const rootElement={dataset:{},style:{setProperty:(key,value)=>styles.set(key,value),removeProperty:key=>styles.delete(key)},classList:{contains:key=>classes.has(key),remove:key=>classes.delete(key),toggle(key,on){if(on)classes.add(key);else classes.delete(key);}}};
   const viewport=Object.assign(events(),{height:844,offsetTop:0});
   const phoneWindow=Object.assign(events(),{visualViewport:viewport,innerWidth:390,innerHeight:844,location:{replace(){}}});
   const phoneContext=vm.createContext({document:{documentElement:rootElement,getElementById:id=>elements[id]},localStorage:{removeItem(){}},window:phoneWindow,fetch(){throw Error('Viewport must not make requests');}});
@@ -845,4 +881,4 @@ function testMobileOnboarding() {
   console.log('PASS one-time phone onboarding, platform steps, native/desktop suppression, standalone detection and Tailscale copy');
 }
 
-(process.argv[2] === '--pin-recovery-only' ? Promise.resolve().then(testRecoveryPinRefresh) : process.argv[2] === '--native-desktop-only' ? testNativeDesktopSecurity() : main()).catch(err => { console.error(err.stack || err.message); console.error(output.slice(-1600)); process.exitCode = 1; });
+(process.argv[2] === '--login-only' ? Promise.resolve().then(testLoginInteraction) : process.argv[2] === '--pin-lifecycle-only' ? testPinPersistence() : process.argv[2] === '--pin-recovery-only' ? Promise.resolve().then(testRecoveryPinRefresh) : process.argv[2] === '--native-desktop-only' ? testNativeDesktopSecurity() : main()).catch(err => { console.error(err.stack || err.message); console.error(output.slice(-1600)); process.exitCode = 1; });

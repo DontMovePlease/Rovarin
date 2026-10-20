@@ -1,77 +1,42 @@
+// Main application styles enhance the lock screen without blocking PIN setup.
+const loginBaseStyles=document.getElementById('loginBaseStyles');
+if(loginBaseStyles){const enable=()=>{loginBaseStyles.media='all';};loginBaseStyles.addEventListener('load',enable,{once:true});if(loginBaseStyles.sheet)enable();}
 const pinInput = document.getElementById('pinInput');
 const unlockBtn = document.getElementById('unlockBtn');
 const errMsg = document.getElementById('errMsg');
 try { localStorage.removeItem('auth_pin'); } catch (_) {}
 try { sessionStorage.removeItem('rovarin.cachedApps.v1'); } catch (_) {}
 let loginPending = false;
+let loginSucceeded = false;
 let autoSubmittedPin = null;
+let loginController = null;
 // Length mode only, rendered by the server; absent/unknown metadata fails to manual entry.
-const sixDigitPinMode = document.querySelector?.('meta[name="rovarin-pin-mode"]')?.content === '6';
-
-function reportClientLog(event, detail = {}) {
-  try {
-    if (typeof window === 'undefined' || !window.location || !window.location.origin) return;
-    const payload = JSON.stringify({
-      event,
-      url: window.location.href,
-      visibility: typeof document !== 'undefined' ? document.visibilityState : 'unknown',
-      detail
-    });
-    console.log('[Rovarin Login Log]', event, detail);
-    fetch('/api/debug/client-log', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      keepalive: true,
-      body: payload
-    }).catch(() => {
-      if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
-        navigator.sendBeacon('/api/debug/client-log', new Blob([payload], { type: 'application/json' }));
-      }
-    });
-  } catch (_) {}
-}
-reportClientLog('LOGIN_PAGE_MOUNT', {
-  hasSessionCookie: String(document.cookie || '').includes('pc_monitor_session'),
-  hasAuthPinCookie: String(document.cookie || '').includes('auth_pin')
-});
-
-if (typeof document !== 'undefined' && typeof document.addEventListener === 'function' && typeof window !== 'undefined' && window.location && window.location.origin) {
-  document.addEventListener('visibilitychange', () => {
-    reportClientLog('LOGIN_VISIBILITY_CHANGE', { state: document.visibilityState });
-  });
-}
-if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && window.location && window.location.origin) {
-  window.addEventListener('pageshow', (e) => {
-    reportClientLog('LOGIN_PAGE_SHOW', { persisted: e.persisted });
-  });
-}
+let sixDigitPinMode = document.querySelector?.('meta[name="rovarin-pin-mode"]')?.content === '6';
 
 async function attemptLogin() {
   const pin = pinInput.value.trim();
-  if (!pin || loginPending) return;
+  if (!pin || loginPending || loginSucceeded) return;
   loginPending = true;
   errMsg.textContent = '';
   unlockBtn.disabled = true;
   unlockBtn.textContent = 'Verifying...';
-  reportClientLog('LOGIN_SUBMIT_START', { pinLength: pin.length });
 
+
+  const controller = new AbortController();
+  loginController = controller;
+  const timeout = setTimeout(() => controller.abort(), 12000);
   try {
     const response = await fetch('/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
+      signal: controller.signal,
       body: JSON.stringify({ pin })
     });
     const data = await response.json();
-    reportClientLog('LOGIN_SUBMIT_RESPONSE', {
-      status: response.status,
-      ok: response.ok,
-      success: data && data.success,
-      code: data && data.code,
-      error: data && data.error
-    });
+    if (controller.signal.aborted) return;
     if (response.ok && data.success) {
+      loginSucceeded = true;
       unlockBtn.textContent = 'Unlocked!';
       try { pinInput.blur(); } catch (_) {}
       if (typeof window.cleanupLoginViewport === 'function') {
@@ -85,24 +50,44 @@ async function attemptLogin() {
         document.body?.classList?.remove('login-keyboard', 'login-page');
         window.scrollTo(0, 0);
       } catch (_) {}
-      reportClientLog('LOGIN_NAVIGATING_TO_ROOT');
+
       window.location.replace('/');
       return;
     }
-    errMsg.textContent = response.status === 429
-      ? `Too many attempts. Try again in ${Number(response.headers.get('Retry-After')) || 60} seconds.`
-      : 'Incorrect PIN. Please try again.';
-    if (pinInput.value.trim() === pin) pinInput.value = '';
+    if(response.status===401&&data.code==='pin-mode-changed'&&['6','12'].includes(data.pinMode)){
+      sixDigitPinMode=data.pinMode==='6';
+      errMsg.textContent='Your PIN uses '+data.pinMode+' digits. Enter the full PIN, then tap Unlock.';
+      pinInput.focus();return;
+    }
+    if (response.status === 429) {
+      errMsg.textContent = `Too many attempts. Try again in ${Number(response.headers.get('Retry-After')) || 60} seconds.`;
+    } else if (response.status === 401) {
+      errMsg.textContent = 'Incorrect PIN. Please try again.';
+    } else if(data.code==='credential-unavailable'){
+      errMsg.textContent='Rovarin cannot read its saved sign-in settings on this PC. Your PIN was not changed. Try again once Rovarin is ready.';
+    } else {
+      autoSubmittedPin = null;
+      errMsg.textContent = 'Rovarin is temporarily unavailable. Check that it is running on your PC, then try again.';
+    }
+    if ([401,429].includes(response.status) && pinInput.value.trim() === pin) pinInput.value = '';
     pinInput.focus();
   } catch (_) {
-    errMsg.textContent = 'Connection error. Check Tailscale.';
+    autoSubmittedPin = null;
+    errMsg.textContent = controller.signal.aborted
+      ? 'Rovarin did not respond. Check that your PC is online and Tailscale is connected, then try again.'
+      : 'Could not reach Rovarin. Check your PC and Tailscale connection, then try again.';
   } finally {
+    clearTimeout(timeout);
+    if (loginController === controller) loginController = null;
     loginPending = false;
-    unlockBtn.disabled = false;
-    unlockBtn.textContent = 'Unlock Dashboard';
+    autoSubmittedPin = null;
+    unlockBtn.disabled = loginSucceeded;
+    if(!loginSucceeded)unlockBtn.textContent = 'Unlock Dashboard';
   }
 }
 
+window.addEventListener('pagehide', () => loginController?.abort());
+document.documentElement.dataset.loginReady = 'true';
 unlockBtn.addEventListener('click', attemptLogin);
 pinInput.addEventListener('keydown', event => {
   if (event.key === 'Enter') attemptLogin();
@@ -128,11 +113,18 @@ pinInput.addEventListener('input', () => {
       root.classList.remove('login-keyboard');
       return;
     }
-    root.style.setProperty('--login-viewport-height', viewport.height + 'px');
-    root.style.setProperty('--login-viewport-top', viewport.offsetTop + 'px');
-    root.classList.toggle('login-keyboard', viewport.height < window.innerHeight * .8);
+    // WebKit can report a zero viewport while opening/resuming. Never collapse
+    // the only visible login surface; keep the last usable size/CSS fallback.
+    const height = Number(viewport.height);
+    if (document.hidden || !Number.isFinite(height) || height <= 0) return;
+    const top = Math.max(0, Math.min(Number(viewport.offsetTop) || 0, Math.max(0, window.innerHeight - height)));
+    root.style.setProperty('--login-viewport-height', height + 'px');
+    root.style.setProperty('--login-viewport-top', top + 'px');
+    root.classList.toggle('login-keyboard', height < window.innerHeight * .8);
   };
+  let viewportFrame = null;
   const detach = () => {
+    if (viewportFrame !== null) { window.cancelAnimationFrame(viewportFrame); viewportFrame = null; }
     viewport.removeEventListener('resize', updateViewport);
     viewport.removeEventListener('scroll', updateViewport);
     window.removeEventListener('resize', updateViewport);
@@ -144,7 +136,9 @@ pinInput.addEventListener('input', () => {
     viewport.addEventListener('scroll', updateViewport);
     window.addEventListener('resize', updateViewport);
     updateViewport();
+    if (typeof window.requestAnimationFrame === 'function') viewportFrame = window.requestAnimationFrame(() => { viewportFrame = null; updateViewport(); });
   };
+  document.addEventListener?.('visibilitychange', () => { if (document.hidden) detach(); else attach(); });
   window.addEventListener('pagehide', detach);
   window.addEventListener('pageshow', attach);
   attach();

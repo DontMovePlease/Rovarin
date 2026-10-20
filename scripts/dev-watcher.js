@@ -5,7 +5,7 @@ const path = require('path');
 const { spawn, execFile } = require('child_process');
 
 const WATCHED_SERVER_FILES = new Set([
-  'server.js', 'diagnostics.js', 'maintenance-service.js',
+  'power-controls.js', 'scripts/power-control.ps1', 'server.js', 'diagnostics.js', 'maintenance-service.js',
   'server-lifecycle.js',
   'pin-manager.js',
   'process-termination.js', 'app-manager.js', 'leftover-manager.js',
