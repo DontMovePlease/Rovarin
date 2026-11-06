@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
 
 
 <img src="docs/images/icon.png" width="64" height="64" alt="Rovarin icon">
@@ -15,7 +15,7 @@
 ![Source available](https://img.shields.io/badge/license-PolyForm_Noncommercial-617184)
 
 
-[**Download for Windows**](https://github.com/DontMovePlease/Rovarin/releases/download/v0.5.0/RovarinSetup.exe) · [Release notes](https://github.com/DontMovePlease/Rovarin/releases) · [Website](https://rovarinofficial.com/) · [Report a bug](https://github.com/DontMovePlease/Rovarin/issues/new/choose)
+[**Download for Windows**](https://github.com/DontMovePlease/Rovarin/releases/download/v0.6.0/RovarinSetup.exe) · [Release notes](https://github.com/DontMovePlease/Rovarin/releases) · [Website](https://rovarinofficial.com/) · [Report a bug](https://github.com/DontMovePlease/Rovarin/issues/new/choose)
 
 
 </div>
@@ -33,7 +33,9 @@ Rovarin is a Windows PC monitoring and system-management app. Check CPU, GPU, me
 <sub>Rovarin v0.5.0 — The Liquid Glass Update.</sub>
 
 
-## v0.5.0 — The Liquid Glass Update
+## v0.6.0 — The Personalization Update
+
+Create and confirm your own six-digit PIN in native setup, change it in Settings, or use local Windows-owner Recovery. Simplified is the default desktop theme; the original Liquid Glass appearance remains selectable. Theme and graphics quality are separate preferences.
 
 Rovarin has a new astral-inspired Liquid Glass interface across Windows and mobile: translucent surfaces, optical highlights and refraction on supported graphics, with adaptive Auto, Full, Balanced and inexpensive Minimal modes.
 
@@ -109,7 +111,7 @@ Current version: 0.5.0 Experimental Alpha
 2. Run it under the Windows account that will use Rovarin. The unsigned installer may trigger SmartScreen; inspect the source/release and checksum before deciding whether to run it. No signing or reputation guarantee is claimed.
 3. Choose whether to start Rovarin with Windows. This is enabled by default and runs the backend quietly at sign-in, without a Windows service or scheduled task.
 4. Optional **Enhanced CPU Temperature** installs the signed PawnIO driver through Windows UAC. You may skip it; Rovarin remains usable without CPU temperature.
-5. Leave **Launch Rovarin** checked. Setup displays your newly generated PIN. Keep it private, then choose **Finish / Open Rovarin** and sign in.
+5. Leave **Launch Rovarin** checked and complete the local PIN setup. Keep your PIN private. Existing installations retain their current PIN.
 
 
 Normal Desktop and Start Menu shortcuts are named **Rovarin** and open Rovarin.exe. You do not need the repository's developer .bat files.
@@ -156,12 +158,20 @@ The address uses your PC’s detected Tailscale IPv4 address and active Rovarin 
 If Tailscale is missing or disconnected, Setup explains the next step. You can finish and use Rovarin locally first. Do not forward this HTTP port through a router or expose it publicly.
 
 
+### Custom PINs — v0.6.0 development
+
+This source branch adds the Personalization Update; the public download links still point to published releases. New installations use a single **Create your PIN** screen in the native Windows app. Choose and confirm six digits, including leading zeros. Remote browsers cannot enroll a PC. Existing PINs, settings and desktop trust survive upgrades; supported legacy PIN lengths continue working until changed.
+
+Use native **Settings → Security → Change PIN**, verify your current PIN, and choose a new six-digit PIN. Other devices must sign in again. For a forgotten PIN, open **Rovarin Setup and PIN Recovery** from Windows Start and choose **Reset PIN**. Source users can open the same utility with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1`. No PIN is passed on the command line.
+
+Recovery is available to the Windows account that owns the CurrentUser-DPAPI credential. It also retains the existing local view/copy capability. This does not protect against other programs already running as that same Windows user. Missing, corrupt or inaccessible credential material is never silently replaced; restore valid local data rather than treating an existing installation as fresh.
+
 ## PIN, desktop behavior and recovery
 
 
-- Fresh PINs have six cryptographically random digits. Existing twelve-digit PINs remain supported on upgrade.
+- Published v0.5.0 uses generated six-digit PINs and retains supported legacy PINs. v0.6.0 development uses native six-digit user enrollment as described above. Startup never silently replaces credentials.
 - Valid sessions last up to 90 days, so normal use does not require daily login. Sessions are in memory; a backend restart requires sign-in again.
-- **Settings → Security → Lock** revokes access. Local native Settings also provides **Generate New PIN**, which signs out all devices.
+- **Settings → Security → Lock** revokes access. Published v0.5.0 native Settings provides **Generate New PIN**; v0.6.0 development uses **Change PIN** with current-PIN verification. PIN changes sign out all devices.
 - PIN prompts on the native desktop are on by default. You may explicitly disable them for this Windows account; other devices still require the PIN. Native sign-in uses Windows-protected trust and ordinary revocable sessions, not unauthenticated APIs.
 - Forgotten PIN? Open **Rovarin Setup and PIN Recovery** from the Start Menu. Recovery is local only; there is no remote PIN recovery endpoint.
 - Alt+F4/system close hides to the tray. **Exit Desktop App** or the native top-right X closes only the shell. The backend remains available remotely. Minimized/hidden clients stop requesting dashboard telemetry.
@@ -199,7 +209,7 @@ Tailscale reachability is not authentication. Rovarin currently serves HTTP; Tai
 **Security findings:** use [private vulnerability reporting](https://github.com/DontMovePlease/Rovarin/security/advisories/new), not a public issue containing exploit details. Include the affected version, impact and a minimal reproduction without credentials. Security review covers this experimental candidate; there is no guaranteed response time or established older-version support.
 
 
-The installer contains application/runtime files and required third-party assets/licenses. It does **not** contain a developer PIN, local configuration, credentials, private Tailscale address, logs, runtime state or AGENTS.md. Each fresh installation generates its own configuration and PIN.
+The installer contains application/runtime files and required third-party assets/licenses. It does **not** contain a developer PIN, local configuration, credentials, private Tailscale address, logs, runtime state or AGENTS.md. Published installers provision per-user credentials; v0.6.0 development instead prepares native user enrollment. Neither includes a developer credential.
 
 
 ## Upgrade or uninstall
@@ -211,7 +221,7 @@ The installer contains application/runtime files and required third-party assets
 Run a newer installer over the existing installation to preserve your PIN and preferences. Use **Windows Settings → Apps → Installed apps → Rovarin → Uninstall** for normal removal.
 
 
-Uninstall preserves settings by default. Explicit **Full removal** also removes Rovarin's PIN/configuration and preferences, so reinstall generates a new PIN. Shared PawnIO and Tailscale are not removed. Installed copies also offer an authenticated, PIN-confirmed remote uninstall flow; source checkouts cannot use it.
+Uninstall preserves settings by default. Explicit **Full removal** also removes Rovarin's PIN/configuration and preferences, so reinstall requires fresh setup under that version's PIN workflow. Shared PawnIO and Tailscale are not removed. Installed copies also offer an authenticated, PIN-confirmed remote uninstall flow; source checkouts cannot use it.
 
 
 ## Testing status and feedback
@@ -226,6 +236,14 @@ Still outstanding: broader clean Windows Home/Pro and standard/admin coverage, p
 Please [report reproducible bugs](https://github.com/DontMovePlease/Rovarin/issues/new/choose) with your Windows version, Rovarin version, steps and a reviewed **Diagnostics → Copy report**. Remove private addresses and other personal details. Never post PINs, cookies or credentials. Share security vulnerabilities through [private reporting](https://github.com/DontMovePlease/Rovarin/security/advisories/new).
 
 
+## Desktop themes in v0.6.0 development
+
+Simplified is the default desktop theme and creates no graphics renderer. Settings > Appearance offers the original v0.5.0 Liquid Glass materials/background as an optional theme. Theme and Auto/Full/Balanced/Minimal graphics quality are separate per-device preferences. Changes apply immediately and persist; Simplified releases glass graphics resources. Mobile styling/gestures remain shared and unchanged.
+
+## Experimental Linux development
+
+The planned v0.6.0 prerelease includes a separate portable Linux preview; the public Windows download above remains v0.5.0 until publication. Extract the Linux archive, install/use Node.js 24.x, then run `node linux/rovarin.js setup` and `node linux/rovarin.js start` from its folder. Open the printed browser address; Ctrl+C stops it and the same start command restarts it. See [Linux instructions](linux/README.md) for supported monitoring/Processes/Diagnostics, Windows-only limitations and manual removal. The new shared-theme Linux archive passed fresh clean Ubuntu acceptance; it does not rely on acceptance of the older archive. physical iPhone-over-Tailscale, broader GPU/temperature hardware and live disallowed-client rejection remain unverified.
+
 ## Inspect, build or modify
 
 
@@ -236,8 +254,10 @@ The current source is available for inspection and noncommercial modifications. 
 <summary>Development, testing and contributions</summary>
 
 
-On Windows with a supported Node LTS installed, run `npm run dev` from the source checkout. Leave its watcher running while editing; do not also start the normal native/background launcher. Configuration/PIN and mutable development state remain private and untracked. Marked checkouts use the protected per-checkout Local AppData directory. Browser access to the printed localhost address is available for development, with ordinary authentication. After building the packaging payload, `Desktop Dashboard.bat` builds/opens the native source preview.
+On Windows with a supported Node LTS installed, run `npm run dev` from the source checkout. Leave its watcher running while editing; do not also start the normal native/background launcher. Configuration/PIN and mutable development state remain private and untracked. Schema-2 checkouts use the unsynced per-checkout directory under `%USERPROFILE%\.rovarin-development`; schema 1 retains explicit legacy AppData compatibility. Browser access to the printed localhost address is available for development, with ordinary authentication. After building the packaging payload, `Desktop Dashboard.bat` builds/opens the native source preview.
 
+
+Browser regressions use optional external Playwright tooling, not an application dependency. If `playwright` is not locally resolvable, set `ROVARIN_PLAYWRIGHT_PATH` to the absolute directory of an existing Playwright package for that test session. Then run `node scripts/system-management-ui-smoke-test.js` and `node scripts/mobile-auth-smoke-test.js`. Their default Windows browser is installed Microsoft Edge; the optional WebKit run additionally requires matching WebKit browser binaries.
 
 | Location | Responsibility |
 | --- | --- |

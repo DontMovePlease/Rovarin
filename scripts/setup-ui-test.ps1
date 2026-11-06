@@ -28,6 +28,12 @@ $uiStart=$sourceText.IndexOf('Add-Type -AssemblyName System.Windows.Forms', $sou
 $uiEnd=$sourceText.IndexOf('try {$form.ShowDialog() | Out-Null}')
 if($uiStart -lt 0 -or $uiEnd -le $uiStart){throw 'Setup UI boundaries changed.'}
 Invoke-Expression $sourceText.Substring($uiStart,$uiEnd-$uiStart)
+# Shown/Activated refresh is real product behavior; this layout-only harness
+# must replace its reader before displaying the form, never query a user's PIN.
+function Update-SetupPin {
+    $script:pin='000000'; $pinField.Text='000 000'; $copy.Enabled=$true; return $true
+}
+
 try {
     $form.Opacity=0;$form.Show();[Windows.Forms.Application]::DoEvents()
     foreach($fontSize in @(11,14)){

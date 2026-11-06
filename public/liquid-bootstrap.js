@@ -2,6 +2,20 @@
   'use strict';
   // Decorative resources must never gate PIN handlers, first paint or app bootstrap.
   const root = document.documentElement;
+  const THEME_KEY='rovarin.desktopTheme';
+  let theme='simplified';
+  try { const saved=localStorage.getItem(THEME_KEY); if(['simplified','liquid'].includes(saved))theme=saved; } catch {}
+  root.dataset.desktopTheme=theme;
+  function chooseTheme(value){
+    if(!['simplified','liquid'].includes(value))return;
+    root.dataset.desktopTheme=value;
+    try{localStorage.setItem(THEME_KEY,value);}catch{}
+    window.dispatchEvent(new Event('rovarin-theme-change'));
+  }
+  document.addEventListener('DOMContentLoaded',()=>{
+    const select=document.getElementById('desktopTheme');
+    if(select){select.value=theme;select.addEventListener('change',e=>chooseTheme(e.target.value));}
+  },{once:true});
   const stylesheet = document.getElementById('liquidStyles');
   const enableStyles = () => { if (stylesheet) stylesheet.media = 'all'; };
   if (stylesheet) {

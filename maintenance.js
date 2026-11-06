@@ -166,14 +166,16 @@ function runAction(actionId, onProgress, onComplete, options = {}) {
     if (finished) return;
     finished = true;
     // Partial completion is not full success, including older helper results.
-    if (detailedResult?.code === 'partially-completed') success = false;
+    if (detailedResult?.code === 'partially-completed' || detailedResult?.code === 'locked-files-only') success = false;
     currentTask.status = detailedResult?.code === 'uac-cancelled'
       ? 'cancelled'
-      : detailedResult?.code === 'partially-completed'
+      : (detailedResult?.code === 'partially-completed' || detailedResult?.code === 'locked-files-only')
         ? 'partially-completed'
-        : success ? 'completed' : 'failed';
+        : detailedResult?.code === 'verification-unavailable'
+          ? 'unverified'
+          : success ? 'completed' : 'failed';
     currentTask.result = { success, summary, detailedResult };
-    appendLog(currentTask, summary, success ? 'success' : 'error');
+    appendLog(currentTask, summary, currentTask.status === 'unverified' ? 'warn' : success ? 'success' : 'error');
     addToHistory(currentTask, success, summary);
     isRunning = false;
     if (onComplete) onComplete(currentTask);
@@ -366,14 +368,25 @@ async function executeCleanTemp(task, finish) {
         }
       }
     } catch (e) {
-      appendLog(task, `Note: Could not scan ${tDir} (${e.message})`, 'warn');
+      appendLog(task, `Note: Could not scan ${tDir} (${e.message})`, 'info');
     }
   }
 
   const mbFreed = (totalBytes / (1024 * 1024)).toFixed(1);
   if (!scannedDirs) return finish(false, 'Temporary folders could not be read; no cleanup was performed.', {code:'scan-unavailable',deletedCount:0,bytesFreed:0,skippedCount:totalSkipped});
-  const summary = `Successfully cleaned ${totalDeleted} temporary items freeing ${mbFreed} MB (${totalSkipped} locked/in-use files safely skipped).`;
-  finish(true, summary, { deletedCount: totalDeleted, bytesFreed: totalBytes, skippedCount: totalSkipped });
+
+  if (totalDeleted === 0 && totalSkipped === 0) {
+    const summary = 'Temporary folders were already clean; nothing needed to be removed.';
+    return finish(true, summary, { code: 'already-clean', deletedCount: 0, bytesFreed: 0, skippedCount: 0 });
+  }
+
+  if (totalDeleted === 0 && totalSkipped > 0) {
+    const summary = `No temporary files could be removed (${totalSkipped} locked/in-use ${totalSkipped === 1 ? 'file' : 'files'} safely skipped).`;
+    return finish(false, summary, { code: 'locked-files-only', deletedCount: 0, bytesFreed: 0, skippedCount: totalSkipped });
+  }
+
+  const summary = `Cleaned ${totalDeleted} temporary ${totalDeleted === 1 ? 'item' : 'items'} freeing ${mbFreed} MB${totalSkipped > 0 ? ` (${totalSkipped} locked/in-use ${totalSkipped === 1 ? 'file' : 'files'} safely skipped)` : ''}.`;
+  finish(true, summary, { code: 'cleaned', deletedCount: totalDeleted, bytesFreed: totalBytes, skippedCount: totalSkipped });
 }
 
 // 2. Empty Recycle Bin

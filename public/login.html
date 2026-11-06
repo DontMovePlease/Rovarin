@@ -7,13 +7,14 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#0c1420">
   <title>Unlock Rovarin</title>
+  <meta name="rovarin-pin-setup" content="false">
   <meta name="rovarin-pin-mode" content="manual">
   <meta name="application-name" content="Rovarin">
   <meta name="apple-mobile-web-app-title" content="Rovarin">
   <link id="loginBaseStyles" rel="stylesheet" href="/app.css" media="print">
   <style>
     /* Critical login paint is independent of the application/decorative styles. */
-    :root { color-scheme:dark; --surface-glass-strong:linear-gradient(150deg,#1d2c3e,#101b29); --glass-border:rgba(191,218,241,.19); --tint-primary:rgba(102,199,255,.12); --accent-primary:#66c7ff; --text-primary:#eaf1f8; }
+    :root { --font-system:system-ui,-apple-system,'Segoe UI',sans-serif; color-scheme:dark; --surface-glass-strong:linear-gradient(150deg,#1d2c3e,#101b29); --glass-border:rgba(191,218,241,.19); --tint-primary:rgba(102,199,255,.12); --accent-primary:#66c7ff; --text-primary:#eaf1f8; }
     * { box-sizing:border-box; }
     html,body { margin:0; min-height:100%; background:#0c1420; color:#eaf1f8; font-family:system-ui,-apple-system,'Segoe UI',sans-serif; }
 
@@ -97,13 +98,19 @@
       color: var(--state-danger);
       font-size: 14px;
       margin-top: 12px;
-      min-height: 20px;
+      /* Reserve the actual text line box, including fractional font metrics. */
+      line-height: 1.45;
+      min-height: 1.45em;
     }
     /* Scoped to this login document; navigation restores the normal app layout. */
     html.login-page, .login-page body {
       height: 100%; min-height: 0; overflow: hidden; overscroll-behavior: none;
     }
     .login-page body { position: fixed; inset: 0; padding: 0; }
+    /* Keep wallpaper on unlocked pages only; the PIN card retains its glass. */
+    html.liquid-theme.login-page body { background-color: #0c1420; background-image: none; }
+    html.liquid-theme.login-page body::before,
+    html.liquid-theme.login-page:not(.native-shell) body::before { content: none; }
     /* Match the shared mobile chrome selector's specificity. Login owns its
        scroll lock and has one fixed viewport surface, rather than nested fixed boxes. */
     html.login-page:not(.native-shell) body {
@@ -122,14 +129,17 @@
       .login-page .login-container { height: var(--login-viewport-height, 100dvh); }
     }
     .login-page .pin-input, .login-page .login-btn { touch-action: manipulation; }
-    .native-shell.login-page body { background: #101b29; }
+    /* The compact native window IS the card; no second rectangular backdrop. */
+    html.native-shell.login-page, html.native-shell.login-page body { background: transparent; }
     .native-shell.login-page .login-container { padding: 0; }
-    .native-shell.login-page .login-card { max-width: none; flex-shrink: 0; box-shadow: none; }
-    .native-shell.login-page .error-msg { min-height: 41px; }
+    .native-shell.login-page .login-card { flex-shrink: 0; max-width: none; min-height: 100%; padding: 28px 22px; }
+    .native-shell.login-page .login-icon { width: 56px; height: 56px; margin-bottom: 16px; }
+    .login-starting .pin-input { opacity: .55; }
+    .login-starting .error-msg { color: var(--text-secondary); }
+    .login-starting .login-btn:disabled { opacity: .8; }
     /* Only the native host creates these controls. Mobile layout is unchanged. */
     .lock-window-drag, .lock-window-controls { display: none; }
     .native-shell.login-page .login-card { position: relative; }
-    .native-shell.native-lock-dwm.login-page .login-card { border-radius: 8px; }
     .native-shell.login-page .lock-window-drag {
       display: block; position: absolute; inset: 0 0 auto; height: 112px;
       app-region: drag; -webkit-app-region: drag; user-select: none;
@@ -179,12 +189,14 @@
       </div>
       <h2 style="font-size: 22px; font-weight: 700; margin-bottom: 6px;">Rovarin</h2>
       <p style="color: #94a3b8; font-size: 14px; margin-bottom: 8px;">Your PC in your pocket.</p>
-      <input type="password" id="pinInput" class="pin-input" pattern="[0-9]{6}|[0-9]{12}" inputmode="numeric" placeholder="••••••" maxlength="12" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="go" aria-label="Rovarin PIN (6 digits, or legacy 12 digits)">
+      <input type="password" id="pinInput" class="pin-input" pattern="[0-9]{6}|[0-9]{8}|[0-9]{12}" inputmode="numeric" placeholder="••••••" maxlength="12" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="go" aria-label="Rovarin PIN (6, 8 or 12 digits)">
       <button id="unlockBtn" class="login-btn">Unlock Dashboard</button>
       <div id="errMsg" class="error-msg" role="status" aria-live="polite"></div>
     </div>
   </div>
+  <link id="pinFlowStyles" rel="stylesheet" href="/pin-lifecycle.css" media="print">
   <script src="/login.js" defer></script>
+  <script src="/pin-lifecycle.js" defer></script>
   <script async src="/liquid-bootstrap.js"></script>
 </body>
 </html>

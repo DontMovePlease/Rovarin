@@ -19,7 +19,7 @@
   }
   form.addEventListener('submit', async event => {
     event.preventDefault();
-    if (busy || accepted || !/^(?:\d{6}|\d{12})$/.test(pin.value)) return;
+    if (busy || accepted || !/^(?:\d{6}|\d{8}|\d{12})$/.test(pin.value)) return;
     const policy = removeData.checked ? 'Your PIN and Rovarin settings will be erased.' : 'Your PIN and settings will be preserved for reinstall.';
     if (!window.confirm(`Uninstall Rovarin from this PC? Remote access will stop. ${policy} PawnIO and Tailscale remain installed.`)) return;
     busy = true; button.disabled = true;

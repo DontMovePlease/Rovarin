@@ -7,7 +7,52 @@ function Get-RovarinDataDirectory([string]$ApplicationDir) {
 }
 
 function Get-DashboardListener([int]$Port, [int]$ServerPid) {
-    return (& netstat.exe -ano -p tcp 2>$null | Select-String ":$Port\s+.*LISTENING\s+$ServerPid\s*$" | Select-Object -First 1)
+    # Ask Windows for listeners only. Human-readable netstat state text can
+    # incorrectly omit this PC's healthy listener; HTTP alone is not ownership.
+    if (-not ('Rovarin.RuntimeListener' -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+namespace Rovarin {
+    public static class RuntimeListener {
+        [DllImport("iphlpapi.dll")]
+        private static extern uint GetExtendedTcpTable(IntPtr table, ref int size,
+            [MarshalAs(UnmanagedType.Bool)] bool sorted, int family, int tableClass, uint reserved);
+        public static bool IsOwned(int port, int processId) {
+            if (port < 1 || port > 65535 || processId < 1) return false;
+            // AF_INET + TCP_TABLE_OWNER_PID_LISTENER: each returned row is a
+            // listener, independent of the row's human-readable state label.
+            int size = 0;
+            uint result = GetExtendedTcpTable(IntPtr.Zero, ref size, false, 2, 3, 0);
+            if (result != 122) throw new Win32Exception((int)result);
+            for (int attempt = 0; attempt < 3; attempt++) {
+                if (size < 4 || size > 16 * 1024 * 1024) throw new InvalidOperationException("Invalid TCP table size.");
+                int capacity = size;
+                IntPtr table = Marshal.AllocHGlobal(capacity);
+                try {
+                    result = GetExtendedTcpTable(table, ref size, false, 2, 3, 0);
+                    if (result == 122) continue; // Table grew between the two API calls.
+                    if (result != 0) throw new Win32Exception((int)result);
+                    int count = Marshal.ReadInt32(table);
+                    // MIB_TCPTABLE_OWNER_PID: DWORD count, then six-DWORD rows.
+                    if (count < 0 || 4L + 24L * count > capacity) throw new InvalidOperationException("Invalid TCP table rows.");
+                    for (int index = 0; index < count; index++) {
+                        int row = 4 + index * 24;
+                        int rawPort = Marshal.ReadInt32(table, row + 8);
+                        int localPort = ((rawPort & 255) << 8) | ((rawPort >> 8) & 255);
+                        if (localPort == port && Marshal.ReadInt32(table, row + 20) == processId) return true;
+                    }
+                    return false;
+                } finally { Marshal.FreeHGlobal(table); }
+            }
+            throw new InvalidOperationException("TCP table did not settle.");
+        }
+    }
+}
+"@
+    }
+    return [Rovarin.RuntimeListener]::IsOwned($Port, $ServerPid)
 }
 
 function Test-DashboardHttpResponsive([int]$Port) {
@@ -48,7 +93,17 @@ function Get-DashboardRuntime([string]$ProjectDir) {
         }
         if (Test-Path -LiteralPath $stateFile) {
             $data = Get-Content -LiteralPath $stateFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-            if ($data.pid -notmatch '^[1-9]\d*$' -or ($serverPid -and $serverPid -ne $data.pid)) { return @{ state='unsafe'; reason='Runtime/PID ownership mismatch.' } }
+            if ($data.pid -notmatch '^[1-9]\d*$') { return @{ state='unsafe'; reason='Invalid runtime PID.' } }
+            if ($serverPid -and $serverPid -ne $data.pid) {
+                # Interrupted generations can disagree after both owners exited.
+                # Recover only dead records; never choose between live processes.
+                $owners = @()
+                try {
+                    $owners = @(Get-Process -Id $serverPid,([int]$data.pid) -ErrorAction SilentlyContinue)
+                    if (-not @($owners | Where-Object { -not $_.HasExited }).Count) { return @{ state='none' } }
+                } finally { foreach ($ownerProcess in $owners) { $ownerProcess.Dispose() } }
+                return @{ state='unsafe'; reason='Runtime/PID ownership mismatch.' }
+            }
             $serverPid = [int]$data.pid
             $port = if ($data.actualPort) { [int]$data.actualPort } else { [int]$data.preferredPort }
             if ($port -lt 1 -or $port -gt 65535) { return @{ state='unsafe'; reason='Invalid runtime port.' } }
@@ -78,7 +133,13 @@ function Get-DashboardRuntime([string]$ProjectDir) {
             }
         }
         if (-not (Get-DashboardListener $port $serverPid)) { return @{ state='starting'; pid=$serverPid; port=$port } }
-        return @{ state='owned'; pid=$serverPid; port=$port; healthy=(Test-DashboardHttpResponsive $port) }
+        $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$serverPid" -OperationTimeoutSec 2 -ErrorAction Stop
+        $expectedServer = Join-Path $applicationDir 'server.js'
+        if (-not $processInfo.CommandLine -or $processInfo.CommandLine -notmatch ('(?:^|\s)"?' + [regex]::Escape($expectedServer) + '"?\s*$')) { return @{ state='unsafe'; reason='Server script ownership mismatch.' } }
+        $node = if (Test-Path -LiteralPath (Join-Path $applicationDir 'installation.json')) { Join-Path (Split-Path -Parent $applicationDir) 'runtime\node.exe' } else { (Get-Command node.exe -ErrorAction Stop).Source }
+        $fingerprint = & $node (Join-Path $applicationDir 'server-lifecycle.js') --runtime-fingerprint
+        if ($LASTEXITCODE -ne 0 -or [string]$fingerprint -notmatch '^[a-f0-9]{64}$') { return @{ state='unsafe'; reason='Backend identity unavailable.' } }
+        return @{ state='owned'; pid=$serverPid; port=$port; healthy=(Test-DashboardHttpResponsive $port); stale=($data.sourceFingerprint -cne [string]$fingerprint) }
     } catch { return @{ state='unsafe'; reason='Runtime ownership could not be verified.' } }
     finally { if ($candidate) { $candidate.Dispose() } }
 }

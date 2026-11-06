@@ -18,7 +18,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function removeOwnedFixture(temp) {
   assert(path.resolve(temp).startsWith(path.resolve(os.tmpdir()) + path.sep));
   assert(!fs.lstatSync(temp).isSymbolicLink(),'fixture root must not redirect');
-  await fs.promises.rm(temp,{recursive:true,force:true,maxRetries:10,retryDelay:100});
+  await fs.promises.rm(temp,{recursive:true,force:true,maxRetries:30,retryDelay:200});
   assert(!fs.existsSync(temp),'disposable fixture cleanup must complete');
 }
 async function testFixtureCleanup() {
@@ -75,6 +75,8 @@ async function testPackagedRuntime() {
     {windowsHide:true,encoding:'utf8',timeout:10000}));
     assert.strictEqual(ownership.state,'unsafe','unrelated live Node cannot be adopted as an installed server');
   } finally {fs.unlinkSync(foreignOwner);}
+  // Explicitly initialize only this disposable runtime fixture; production startup never invents a PIN.
+  const fixturePins=require('../pin-manager');fixturePins.writeConfig(path.join(temp,'data/config.json'),{pin:fixturePins.generatePin()});
   const node = path.join(temp, 'runtime/node.exe');
   let child, base, output, startupOwned = false;
   const blockers = [];
@@ -237,8 +239,32 @@ async function testPackagedRuntime() {
     assert.strictEqual(setup.actualPort, state.actualPort);
     const windowHandle = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${state.pid}).MainWindowHandle`], { windowsHide: true, timeout: 5000, encoding: 'utf8' });
     assert.strictEqual(Number(windowHandle.trim()), 0);
-    const listeners = execFileSync('netstat.exe', ['-ano', '-p', 'tcp'], { windowsHide: true, timeout: 5000, encoding: 'utf8' });
-    assert.strictEqual(listeners.split(/\r?\n/).filter(line => new RegExp(':' + state.actualPort + '\\s+.*LISTENING\\s+' + state.pid + '\\s*$').test(line)).length, 1);
+    // Count native listener-only TCP rows: netstat misses healthy listeners on
+    // some Windows hosts. Keep the exact-one and PID/port assertions intact.
+    const listeners = execFileSync('powershell.exe', ['-NoProfile','-NonInteractive','-Command', `Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class PreviewListenerCount {
+ [DllImport("iphlpapi.dll")] static extern uint GetExtendedTcpTable(IntPtr p,ref int size,bool sorted,int family,int table,uint reserved);
+ public static int Count(int port,int pid) {
+  int size=0; uint status=GetExtendedTcpTable(IntPtr.Zero,ref size,false,2,3,0);
+  if(status!=122)throw new Exception("TCP sizing failed");
+  IntPtr data=Marshal.AllocHGlobal(size);
+  try {
+   status=GetExtendedTcpTable(data,ref size,false,2,3,0);if(status!=0)throw new Exception("TCP enumeration failed");
+   int rows=Marshal.ReadInt32(data),count=0;
+   for(int i=0;i<rows;i++) {
+    IntPtr row=IntPtr.Add(data,4+i*24);
+    int raw=Marshal.ReadInt32(row,8),localPort=((raw&255)<<8)|((raw>>8)&255);
+    if(localPort==port && Marshal.ReadInt32(row,20)==pid)count++;
+   }
+   return count;
+  } finally {Marshal.FreeHGlobal(data);}
+ }
+}
+'@
+[PreviewListenerCount]::Count(${state.actualPort},${state.pid})`], {windowsHide:true,timeout:10000,encoding:'utf8'});
+    assert.strictEqual(Number(listeners.trim()), 1, 'exactly one native listener belongs to the fixture PID/port');
     await idle(cookie);
     console.log('PASS real hidden startup launcher via isolated shortcut, successive 7331–7333 conflicts, actual-port Setup/Diagnostics, duplicate reuse and exactly one owned listener (not a Windows sign-in test)');
   } finally {
@@ -301,10 +327,47 @@ async function testMigrationPreflight() {
     const helper=fs.readFileSync(script,'utf8');
     assert(!/Remove-Item[^\n]*registration|Stop-Process|taskkill/i.test(helper),'migration preflight cannot delete registration or stop arbitrary processes');
     console.log('PASS migration fresh/current/stale registration, bounded process checks, partial/ambiguous/live/query-failure refusal, config preservation and no registry/process mutation');
-  }finally{await fs.promises.rm(fixture,{recursive:true,force:true,maxRetries:10,retryDelay:100});}
+  }finally{await fs.promises.rm(fixture,{recursive:true,force:true,maxRetries:30,retryDelay:200});}
+}
+
+async function testBundledNodeSecurityPin() {
+  const source = fs.readFileSync(path.join(root, 'packaging/build.ps1'), 'utf8');
+  const version = '24.22.1', expected = 'd702daa815eabbff763c7d3808e235cf031cf2ca70211b56847bc72f51e240e5';
+  assert(source.includes("$nodeVersion = '" + version + "'"));
+  assert(source.includes("$nodeHash = '" + expected + "'"));
+  assert(source.includes('Verified-Binary "node-v$nodeVersion-win-x64.exe" "https://nodejs.org/dist/v$nodeVersion/win-x64/node.exe" $nodeHash'));
+  assert(source.includes('$manifest = @{nodeVersion=$nodeVersion;'));
+  assert(source.includes('"Node-v$nodeVersion-LICENSE"') && source.includes('Node license hash mismatch.'));
+  assert(!source.includes("Verified-Binary 'node.exe'") && !source.includes('24.21.0'), 'old generic cache cannot supply new runtime/license');
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'packaging/payload-manifest.json')));
+  assert.strictEqual(manifest.nodeVersion, version);
+  const binary = path.join(payload, 'runtime/node.exe');
+  assert.strictEqual(hash(binary), expected, 'actual payload must contain patched bytes');
+  assert.strictEqual(hash(path.join(payload, 'runtime/LICENSE')), '5888dbb9a1d2b18f2c3e6c5f6af1b39de658372b402a0577b002777f14c62ace');
+  if (process.platform !== 'win32') return;
+  assert.strictEqual(execFileSync(binary, ['--version'], {encoding:'utf8',windowsHide:true}).trim(), 'v'+version);
+  const fn = source.slice(source.indexOf('function Verified-Binary('), source.indexOf('# Pin the binary'));
+  assert(fn.includes('hash mismatch') && fn.includes('Get-AuthenticodeSignature'), 'exercise existing fail-closed verifier');
+  const fixture=fs.mkdtempSync(path.join(os.tmpdir(),'rovarin-node-cache-'));
+  try {
+    fs.writeFileSync(path.join(fixture,'node.exe'), 'obsolete generic cache');
+    fs.writeFileSync(path.join(fixture,'node-v'+version+'-win-x64.exe'), 'invalid versioned cache');
+    const quote=value=>"'"+value.replace(/'/g,"''")+"'";
+    const script=path.join(fixture,'check.ps1');
+    fs.writeFileSync(script, "$ErrorActionPreference='Stop'\n$env:PSModulePath=Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\Modules'\n$cache="+quote(fixture)+"\n"+fn+"\n"+
+      "function Invoke-WebRequest { throw 'Unexpected download' }\n"+
+      "try { Verified-Binary 'node-v"+version+"-win-x64.exe' 'https://nodejs.org/dist/v"+version+"/win-x64/node.exe' '"+expected+"' 'OpenJS Foundation'; throw 'Accepted invalid cache' } catch { if($_.Exception.Message -notlike '*hash mismatch*'){throw} }\n"+
+      "$sig=Get-AuthenticodeSignature -LiteralPath "+quote(binary)+"; if($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'OpenJS Foundation'){throw 'Invalid publisher'}\n"+
+      "$cache="+quote(path.dirname(binary))+"\n"+
+      "try { Verified-Binary 'node.exe' 'unused' '"+expected+"' 'Unexpected Publisher'; throw 'Accepted wrong publisher' } catch { if($_.Exception.Message -notlike '*publisher verification failed*'){throw} }\n");
+    execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-File',script],{windowsHide:true,timeout:30000,encoding:'utf8'});
+    assert.strictEqual(fs.readFileSync(path.join(fixture,'node.exe'),'utf8'),'obsolete generic cache','old cache retained');
+  } finally { await removeOwnedFixture(fixture); }
+  console.log('PASS patched Node actual version/hash/license/publisher; versioned cache rejects stale bytes and wrong publisher');
 }
 
 async function main() {
+  await testBundledNodeSecurityPin();
   await testMigrationPreflight();
   await testFixtureCleanup();
   execFileSync(process.execPath,[path.join(__dirname,'config-access-smoke-test.js')],{stdio:'inherit',timeout:15000});
@@ -601,6 +664,8 @@ async function main() {
     const app = path.join(temp, 'app'); fs.mkdirSync(app);
     for (const name of ['power-controls.js','server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','cpu-temperature-provider.js','temperature-manager.js','maintenance.js','process-stats.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(app,name));
     fs.writeFileSync(path.join(app,'installation.json'),'{}');
+    fs.mkdirSync(path.join(temp,'data'),{recursive:true});
+    const fixturePins=require('../pin-manager');fixturePins.writeConfig(path.join(temp,'data/config.json'),{pin:fixturePins.generatePin()});
     let output = '', base;
     child = spawn(process.execPath, [path.join(app,'server.js')], {cwd:app, env:{...process.env,PORT:'0',PC_MONITOR_PIN:''},windowsHide:true,stdio:['ignore','pipe','pipe']});
     await new Promise((resolve,reject) => {
@@ -692,4 +757,4 @@ async function testEnhancedExisting() {
   } finally { await removeOwnedFixture(temp); }
 }
 
-(process.argv[2]==='--migration-only' ? testMigrationPreflight() : process.argv[2]==='--enhanced-only' ? testEnhancedExisting() : main().then(testEnhancedExisting).then(testPackagedRuntime).then(()=>require('./native-desktop-test')(__dirname.replace(/[\\/]scripts$/,''),payload))).catch(error=>{console.error(error);process.exitCode=1;});
+(process.argv[2]==='--native-only' ? require('./native-desktop-test')(root,payload) : process.argv[2]==='--runtime-only' ? testPackagedRuntime() : process.argv[2]==='--node-runtime-only' ? testBundledNodeSecurityPin() : process.argv[2]==='--migration-only' ? testMigrationPreflight() : process.argv[2]==='--enhanced-only' ? testEnhancedExisting() : main().then(testEnhancedExisting).then(testPackagedRuntime).then(()=>require('./native-desktop-test')(__dirname.replace(/[\\/]scripts$/,''),payload))).catch(error=>{console.error(error);process.exitCode=1;});

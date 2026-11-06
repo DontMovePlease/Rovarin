@@ -51,6 +51,7 @@
 }
 
 /* One shared UI: the native host adds only a presentation class. */
+[hidden] { display: none !important; }
 * { scrollbar-width: none; }
 *::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .native-app-bar { display: none; }
@@ -68,7 +69,6 @@
 }
 .native-app-identity { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; letter-spacing: .15px; }
 .native-app-identity > svg { width: 19px; height: 19px; color: var(--accent-blue); }
-.native-history { display: flex; gap: 2px; app-region: no-drag; -webkit-app-region: no-drag; }
 .native-navigation-button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 7px; background: transparent; color: var(--text-primary); cursor: pointer; app-region: no-drag; -webkit-app-region: no-drag; }
 .native-navigation-button > svg { width: 18px; height: 18px; }
 .native-navigation-button:disabled { opacity: .25; cursor: default; }
@@ -155,8 +155,8 @@ body {
 }
 
 .pc-details-footer .host-name { gap: 6px; font-size: 13px; flex-wrap: wrap; }
-.pc-details-footer .platform-badge { font-size: 10px; }
-.pc-details-footer .os-details { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; font-size: 11px; }
+.pc-details-footer .platform-badge { font-size: 11.5px; }
+.pc-details-footer .os-details { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; font-size: 12px; }
 .pc-details-footer .host-info { overflow-wrap: anywhere; }
 
 .host-name {
@@ -168,7 +168,7 @@ body {
 }
 
 .platform-badge {
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
   padding: 2px 7px;
   border-radius: 6px;
@@ -197,7 +197,7 @@ body {
   background: rgba(16, 185, 129, 0.15);
   border: 1px solid rgba(16, 185, 129, 0.3);
   border-radius: 20px;
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 700;
   color: #34d399;
   letter-spacing: 0.5px;
@@ -219,7 +219,7 @@ body {
 }
 
 .updated-time {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--text-muted);
   font-family: var(--font-mono);
 }
@@ -240,6 +240,80 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.health-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.health-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: var(--radius-sm, 8px);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.04));
+  color: var(--text-muted, #8ea0b4);
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.health-toggle-btn:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  color: var(--text-primary, #e6edf5);
+  border-color: var(--glass-rim, rgba(255, 255, 255, 0.16));
+}
+
+.health-toggle-btn svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.health-card.is-collapsed {
+  padding: 8px 16px;
+  border-radius: var(--radius-lg, 16px);
+  min-height: auto;
+}
+
+.health-card.is-collapsed .health-header {
+  margin-bottom: 0;
+}
+
+.health-card.is-collapsed .health-icon-box {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.health-card.is-collapsed .health-icon-box svg {
+  width: 16px;
+  height: 16px;
+}
+
+.health-card.is-collapsed .health-toggle-btn {
+  width: 26px;
+  height: 26px;
+}
+
+.health-card.is-collapsed .health-toggle-btn svg {
+  transform: rotate(-90deg);
+}
+
+.health-card.is-collapsed .health-checklist {
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
 }
 
 .health-title-group {
@@ -313,43 +387,43 @@ body {
 .health-check-item .indicator.warning { background: var(--accent-amber); box-shadow: 0 0 6px var(--accent-amber); }
 .health-check-item .indicator.critical { background: var(--accent-rose); box-shadow: 0 0 6px var(--accent-rose); }
 
-/* Grid of Metrics */
+/* Overview responds to its available content width, including the native rail. */
+#dashboardPage { container: dashboard / inline-size; min-width: 0; }
 .metrics-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 14px;
-  grid-template-areas:
-    "cpu"
-    "gpu"
-    "ram"
-    "storage"
-    "network";
+  display: grid; grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "cpu" "gpu" "ram" "storage" "network";
+  align-items: start; gap: 12px; min-width: 0;
 }
-
 .overview-cpu-card { grid-area: cpu; }
 .overview-gpu-card { grid-area: gpu; }
 .overview-ram-card { grid-area: ram; }
 .overview-storage-card { grid-area: storage; }
 .overview-network-card { grid-area: network; }
-
-@media (min-width: 600px) {
-  .metrics-grid {
-    grid-template-columns: 1fr 1fr;
+@container dashboard (min-width: 340px) {
+  html:not(.native-shell) #dashboardPage .metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas: "cpu gpu" "ram ram" "storage storage" "network network";
   }
 }
-
-/* Overview layout: the four primary hardware cards share a compact 2×2
-   rhythm on larger screens. Network remains a secondary full-width row. */
-@media (min-width: 600px) {
-  .metrics-grid {
-    grid-template-areas:
-      "cpu gpu"
-      "ram storage"
-      "network network";
-    align-items: stretch;
+@container dashboard (min-width: 620px) {
+  html.native-shell #dashboardPage .metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas: "cpu gpu" "ram storage" "network network";
   }
-
-  .overview-secondary-card { padding-block: 13px; }
+}
+@container dashboard (min-width: 1100px) {
+  html.native-shell #dashboardPage .metrics-grid,
+  html:not(.native-shell) #dashboardPage .metrics-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-areas: "cpu gpu ram" "storage network network";
+  }
+}
+@container dashboard (min-width: 1400px) {
+  html.native-shell #dashboardPage .metrics-grid,
+  html:not(.native-shell) #dashboardPage .metrics-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-areas: "cpu gpu ram storage" "network network network network";
+  }
 }
 
 /* Metric Card */
@@ -420,7 +494,7 @@ body {
 }
 
 .card-badge {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   padding: 2px 7px;
   border-radius: 6px;
@@ -464,7 +538,7 @@ body {
 }
 
 .val-sub {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--text-secondary);
   margin-top: 2px;
 }
@@ -512,14 +586,14 @@ body {
 }
 
 .chip-title {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   font-weight: 500;
   text-transform: uppercase;
 }
 
 .chip-value {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
   font-family: var(--font-mono);
@@ -996,26 +1070,23 @@ body {
   .header-bar { padding: 10px 12px; gap: 10px; border-radius: 18px; }
   .host-info { min-width: 0; }
   .host-name { flex-wrap: wrap; font-size: 15px; overflow-wrap: anywhere; }
-  .os-details { font-size: 11px; overflow-wrap: anywhere; }
+  .os-details { font-size: 12px; overflow-wrap: anywhere; }
   .live-badge-group { flex-shrink: 0; }
-  .live-pill { padding: 3px 8px; font-size: 10px; }
-  .updated-time { font-size: 10px; }
+  .live-pill { padding: 3px 8px; font-size: 11px; }
+  .updated-time { font-size: 11px; }
   #logoutButton { min-height: 44px; }
   .page-nav { margin-bottom: 0; }
   .page-nav-button { min-height: 44px; }
 
   #dashboardPage { display: grid; gap: 10px; min-width: 0; }
   #dashboardPage .health-card { padding: 12px 13px; border-radius: 18px; }
+  #dashboardPage .health-card.is-collapsed { padding: 8px 12px; min-height: auto; }
+  #dashboardPage .health-card.is-collapsed .health-header { margin-bottom: 0; }
+  #dashboardPage .health-card.is-collapsed .health-checklist { display: none !important; }
   #dashboardPage .health-header { margin-bottom: 8px; gap: 8px; }
   #dashboardPage .health-icon-box { width: 32px; height: 32px; flex-shrink: 0; }
   #dashboardPage .health-check-item { padding: 6px 8px; font-size: 12px; }
-  #dashboardPage .metrics-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-areas: "cpu gpu" "ram storage" "network network";
-    align-items: stretch;
-    gap: 10px;
-    min-width: 0;
-  }
+  #dashboardPage .metrics-grid { gap: 10px; }
   #dashboardPage .metric-card { padding: 12px 13px; gap: 7px; border-radius: 18px; min-width: 0; }
   #dashboardPage .card-top { flex-wrap: wrap; gap: 6px; }
   #dashboardPage .card-title-group { gap: 6px; }
@@ -1025,7 +1096,7 @@ body {
   #dashboardPage .overview-hardware-card .card-badge { max-width: 100%; overflow-wrap: anywhere; }
   #dashboardPage .val-large { font-size: 28px; }
   #dashboardPage .val-unit { font-size: 13px; }
-  #dashboardPage .val-sub { font-size: 12px; overflow-wrap: anywhere; }
+  #dashboardPage .val-sub { font-size: 12.5px; overflow-wrap: anywhere; }
   #dashboardPage .detail-chips-row { gap: 6px; }
   #dashboardPage .detail-chip { min-width: 90px; padding: 6px 7px; }
   #dashboardPage .overview-hardware-card .detail-chip { min-width: 0; flex-basis: 100%; }
@@ -1048,52 +1119,55 @@ body {
 /* Compact shared overview; detail dialogs retain their larger presentation. */
 .header-controls { display: flex; align-items: center; gap: 10px; }
 .page-nav { margin-bottom: 0; }
-.temperature-explanation { color: var(--text-muted); font-size: 11px; }
+.temperature-explanation { color: var(--text-muted); font-size: 12px; }
 .temperature-explanation summary { cursor: pointer; padding: 2px 0; }
 .temperature-explanation[open] p { padding-top: 4px; }
 .host-details { grid-column: 1 / -1; border: 1px solid var(--border-card); border-radius: 12px; background: var(--bg-subtle); }
 .host-details > summary { cursor: pointer; padding: 8px 12px; color: var(--text-secondary); font-size: 12px; }
-.host-details > summary span { float: right; font-size: 10px; color: var(--text-muted); }
+.host-details > summary span { float: right; font-size: 11.5px; color: var(--text-muted); }
 .host-details > .system-specs-card { margin: 0; border: 0; background: transparent; }
 .native-shell .header-bar { padding: 2px 10px; border-radius: 10px; min-height: 36px; }
 .native-shell #logoutButton { min-height: 28px; padding-inline: 10px; }
 .native-shell .header-controls { gap: 6px; }
 .native-shell .live-badge-group { flex-direction: row; align-items: center; gap: 8px; }
-.native-shell .live-pill { padding: 3px 8px; font-size: 10px; }
-.native-shell .updated-time { font-size: 9px; }
+.native-shell .live-pill { padding: 3px 8px; font-size: 11px; }
+.native-shell .updated-time { font-size: 10.5px; }
 .native-shell .native-settings-button { width: 30px; height: 30px; }
 .native-shell .native-settings-button svg { width: 18px; height: 18px; }
-.native-shell .page-nav { padding: 2px; }
-.native-shell .page-nav-button { min-height: 30px; font-size: 12px; padding-inline: 13px; }
-.native-shell #dashboardPage { display: grid; gap: 8px; }
-.native-shell #dashboardPage .health-card { padding: 9px 12px; border-radius: 14px; }
-.native-shell #dashboardPage .health-header { margin-bottom: 4px; }
-.native-shell #dashboardPage .health-icon-box { width: 28px; height: 28px; }
-.native-shell #dashboardPage .health-check-item { padding: 4px 7px; font-size: 11px; }
-.native-shell #dashboardPage .metrics-grid { gap: 8px; }
-.native-shell #dashboardPage .metric-card { padding: 9px 11px; gap: 4px; border-radius: 14px; }
-.native-shell #dashboardPage .card-title-group { gap: 6px; }
-.native-shell #dashboardPage .card-title-group svg { width: 16px; height: 16px; }
-.native-shell #dashboardPage .card-label { font-size: 11px; }
-.native-shell #dashboardPage .card-badge { font-size: 10px; }
-.native-shell #dashboardPage .val-large { font-size: 29px; }
-.native-shell #dashboardPage .val-unit { font-size: 12px; }
-.native-shell #dashboardPage .val-sub { font-size: 10px; line-height: 1.35; }
-.native-shell #dashboardPage .chart-container { height: 30px; }
-.native-shell #dashboardPage .detail-chips-row { gap: 5px; }
-.native-shell #dashboardPage .detail-chip { min-width: 0; padding: 4px 6px; }
-.native-shell #dashboardPage .chip-title { font-size: 9px; }
-.native-shell #dashboardPage .chip-value { font-size: 12px; }
-.native-shell #dashboardPage .core-bar-track { height: 17px; }
+.native-shell .page-nav { padding: 4px; }
+.native-shell .page-nav-button { min-height: 38px; font-size: 13px; padding-inline: 12px; }
+.native-shell #dashboardPage { display: grid; gap: 12px; }
+.native-shell #dashboardPage .health-card { padding: 14px 16px; border-radius: 18px; }
+.native-shell #dashboardPage .health-card.is-collapsed { padding: 8px 14px; min-height: auto; }
+.native-shell #dashboardPage .health-card.is-collapsed .health-header { margin-bottom: 0; }
+.native-shell #dashboardPage .health-card.is-collapsed .health-checklist { display: none !important; }
+.native-shell #dashboardPage .health-header { margin-bottom: 6px; }
+.native-shell #dashboardPage .health-icon-box { width: 30px; height: 30px; }
+.native-shell #dashboardPage .health-check-item { padding: 6px 9px; font-size: 12px; }
+.native-shell #dashboardPage .metrics-grid { gap: 12px; }
+.native-shell #dashboardPage .metric-card { padding: 14px 16px; gap: 6px; border-radius: 18px; }
+.native-shell #dashboardPage .card-title-group { gap: 7px; }
+.native-shell #dashboardPage .card-title-group svg { width: 18px; height: 18px; }
+.native-shell #dashboardPage .card-label { font-size: 13px; font-weight: 600; text-transform: none; letter-spacing: -0.01em; color: #f1f5f9; }
+.native-shell #dashboardPage .card-badge { font-size: 12px; }
+.native-shell #dashboardPage .val-large { font-size: 34px; }
+.native-shell #dashboardPage .val-unit { font-size: 13px; }
+.native-shell #dashboardPage .val-sub { font-size: 12.5px; line-height: 1.4; color: var(--text-muted); }
+.native-shell #dashboardPage .chart-container { height: 38px; }
+.native-shell #dashboardPage .detail-chips-row { gap: 6px; }
+.native-shell #dashboardPage .detail-chip { min-width: 0; padding: 5px 8px; }
+.native-shell #dashboardPage .chip-title { font-size: 12px; }
+.native-shell #dashboardPage .chip-value { font-size: 13px; }
+.native-shell #dashboardPage .core-bar-track { height: 16px; }
 .native-shell #dashboardPage .core-bars-grid { gap: 4px; }
-.native-shell #dashboardPage .cpu-detail-open-button { min-height: 28px; font-size: 10px; padding: 0 9px; }
-.native-shell #dashboardPage .drives-list { gap: 9px; }
+.native-shell #dashboardPage .cpu-detail-open-button { min-height: 32px; font-size: 11px; padding: 0 10px; }
+.native-shell #dashboardPage .drives-list { gap: 10px; }
 .native-shell #dashboardPage .drive-item { padding: 0; }
 .native-shell #dashboardPage .drive-top { margin-bottom: 4px; }
-.native-shell #dashboardPage .drive-stats { font-size: 10px; }
-.native-shell #dashboardPage .overview-network-card { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(200px, 1.5fr) minmax(100px, .8fr) minmax(130px, 1fr); align-items: center; gap: 8px; }
+.native-shell #dashboardPage .drive-stats { font-size: 12px; }
+.native-shell #dashboardPage .overview-network-card { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(200px, 1.5fr) minmax(100px, .8fr) minmax(130px, 1fr); align-items: center; gap: 10px; }
 .native-shell #dashboardPage .overview-network-card .card-top { flex-direction: column; align-items: flex-start; gap: 5px; }
-.native-shell #netDownSpeed, .native-shell #netUpSpeed { font-size: 14px !important; }
+.native-shell #netDownSpeed, .native-shell #netUpSpeed { font-size: 15px !important; }
 .native-shell .processes-page { height: calc(100dvh - 132px); min-height: 0; display: flex; flex-direction: column; padding: 14px; border-radius: 14px; }
 .native-shell .processes-heading h1 { font-size: 23px; }
 .native-shell .processes-toolbar { margin: 10px 0 7px; }
@@ -1168,7 +1242,6 @@ body.sidebar-expanded { --sidebar-width: 176px; }
   .app-sidebar span { opacity: 1; transform: none; }
   .native-app-bar { padding-top: max(0px, calc(var(--app-safe-top) + var(--phone-chrome-clearance, 0px))); }
   .native-app-bar button { min-height: 44px; min-width: 44px; }
-  .native-history { display: none; }
   .processes-page { height: calc(100dvh - 64px - env(safe-area-inset-top)); }
 }
 @media (prefers-reduced-motion: reduce) { .app-sidebar.page-nav, .app-sidebar span, .sidebar-backdrop, .dashboard-container { transition: none !important; } }
@@ -1317,7 +1390,6 @@ body.sidebar-expanded { --sidebar-width: 176px; }
     background: var(--surface-glass-strong); border: 1px solid var(--glass-border);
     border-radius: 22px; box-shadow: var(--glass-shadow); backdrop-filter: none; -webkit-backdrop-filter: none;
   }
-  html:not(.native-shell) .native-history { display: none; }
   html:not(.native-shell) .sidebar-toggle {
     width: 48px; height: 48px; border-radius: 50%; background: #172334;
     border: 1px solid #ffffff24; box-shadow: 0 3px 12px #0003;
@@ -1437,7 +1509,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   html:not(.native-shell) .sidebar-toggle:active { transform: scale(.985); background: var(--tint-primary); }
   html:not(.native-shell) .app-sidebar.page-nav { background: var(--surface-glass-strong); border-right: 1px solid var(--glass-border); }
   .health-header { flex-wrap: wrap; gap: 10px; }
-  .health-status-badge { font-size: 10px; }
+  .health-status-badge { font-size: 11.5px; }
   .val-sub { overflow-wrap: anywhere; }
   .specs-copy-button { width: 44px; height: 44px; }
   .processes-sort button, .processes-kill { min-height: 44px; }
@@ -1449,9 +1521,6 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .mobile-onboarding-dismiss { min-height: 48px; }
   /* Moving sticky phone chrome uses the existing dark material, without a
      second backdrop-filter sampling/compositing boundary during swipes. */
-}
-@media (max-width: 359px) {
-  #dashboardPage .metrics-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "cpu" "gpu" "ram" "storage" "network"; }
 }
 @media (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
   :root {
@@ -1546,3 +1615,100 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
  #monitorSettings .diagnostics-toolbar button { flex: 1 1 140px; }
 }
 @media (prefers-reduced-motion: reduce) { #monitorSettings button { transition: none; } }
+
+/* Dashboard density: natural card heights, readable controls, no resize script. */
+#dashboardPage { width: 100%; max-width: 1600px; margin-inline: auto; align-self: stretch; box-sizing: border-box; }
+#dashboardPage .metric-card { min-width: 0; min-height: 0; align-self: start; }
+#dashboardPage .metric-card > * { min-width: 0; }
+/* The same temperature and warning text already appears in the GPU header. */
+#dashboardPage .gpu-temperature-repeat { display: none; }
+#dashboardPage .card-top { flex-wrap: wrap; gap: 6px; }
+#dashboardPage .card-badge { max-width: 100%; overflow-wrap: anywhere; }
+#dashboardPage .drive-top { flex-wrap: wrap; gap: 4px 8px; }
+#dashboardPage .drive-stats { overflow-wrap: anywhere; }
+#dashboardPage .memory-statistics { min-width: 0; }
+#dashboardPage .memory-statistics > summary { cursor: pointer; min-height: 44px; display: list-item; align-content: center; color: var(--text-secondary); font-size: 13px; }
+#dashboardPage .memory-statistics .detail-chips-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding-top: 6px; }
+#dashboardPage .memory-statistics .detail-chip { min-width: 0; }
+#dashboardPage .health-title-group { min-width: 0; }
+#dashboardPage .health-header-actions { flex-shrink: 0; }
+#dashboardPage .health-card.is-collapsed .health-header { flex-wrap: nowrap; margin-bottom: 0; }
+#dashboardPage .health-card.is-collapsed .health-icon-box { flex-shrink: 0; }
+
+/* Native card contents share rows; telemetry and history remain visible. */
+.native-shell #dashboardPage .overview-gpu-card,
+.native-shell #dashboardPage .overview-ram-card { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; }
+.native-shell #dashboardPage :is(.overview-gpu-card,.overview-ram-card) > :is(.card-top,.progress-bar-container) { grid-column: 1 / -1; }
+.native-shell #dashboardPage .overview-gpu-card > :is(.detail-chips-row,.overview-history) { grid-column: 1 / -1; }
+.native-shell #dashboardPage :is(#gpuNameText,#ramSubText) { align-self: center; margin-top: 0; }
+.native-shell #dashboardPage .memory-statistics > summary { min-height: 34px; }
+.native-shell #dashboardPage .overview-network-card {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  align-items: start; gap: 8px;
+}
+.native-shell #dashboardPage .overview-network-card > .overview-history { grid-column: 1 / -1; }
+.native-shell #dashboardPage .overview-network-card > .detail-chips-row { margin-top: 0 !important; }
+.native-shell #dashboardPage .overview-network-card .detail-chip { min-width: 0; }
+@container dashboard (min-width: 620px) {
+  .native-shell #dashboardPage .overview-network-card { grid-template-columns: minmax(100px, .9fr) minmax(180px, 1.5fr) minmax(100px, .9fr) minmax(140px, 1.3fr); }
+  .native-shell #dashboardPage .overview-network-card > .overview-history { grid-column: auto; }
+}
+@media (max-width: 699px), (hover: none) and (pointer: coarse) {
+  html:not(.native-shell) #dashboardPage #ramFreeBadge,
+  html:not(.native-shell) #dashboardPage #latencyBadge,
+  html:not(.native-shell) #dashboardPage .gpu-temperature-repeat,
+  html:not(.native-shell) #dashboardPage .overview-core-loads,
+  html:not(.native-shell) #dashboardPage #cpuModelText { display: none; }
+  html:not(.native-shell) #dashboardPage .overview-gpu-card > .detail-chips-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  html:not(.native-shell) #dashboardPage .health-toggle-btn { min-width: 44px; min-height: 44px; }
+}
+@media (max-width: 399px) {
+  html:not(.native-shell) #dashboardPage .health-card.is-collapsed .health-icon-box { display: none; }
+}
+
+/* Mobile/tablet overview: shared-width summaries avoid an empty RAM/storage row. */
+@media (hover: hover) and (pointer: fine) and (min-width: 1000px) {
+  @container dashboard (min-width: 620px) and (max-width: 1099px) {
+    html:not(.native-shell) #dashboardPage .metrics-grid { grid-template-areas: "cpu gpu" "ram storage" "network network"; }
+  }
+}
+@media (max-width: 999px), (hover: none) and (pointer: coarse) {
+  html:not(.native-shell) #dashboardPage .health-title-group { flex: 1; }
+  html:not(.native-shell) #dashboardPage .health-title-group > div:last-child { min-width: 0; }
+  html:not(.native-shell) #dashboardPage .health-header-actions { flex-shrink: 1; min-width: 0; max-width: 52%; }
+  html:not(.native-shell) #dashboardPage .health-status-badge { min-width: 0; white-space: normal; text-align: center; }
+  html:not(.native-shell) #dashboardPage .health-toggle-btn { flex-shrink: 0; }
+  html:not(.native-shell) #dashboardPage :is(.overview-cpu-card,.overview-gpu-card) { gap: 3px; }
+  html:not(.native-shell) #dashboardPage .overview-cpu-card .cpu-detail-open-button { min-height: 44px; padding: 4px 6px; gap: 6px; font-size: 12px; }
+  html:not(.native-shell) #dashboardPage .overview-gpu-card #gpuNameText { margin-top: 0; }
+  html:not(.native-shell) #dashboardPage .overview-cpu-card #cpuTempBadge.sensor-na {
+    background: none; border: 0; padding: 0; font-size: 11px; font-weight: 400;
+  }
+  html:not(.native-shell) #dashboardPage .overview-cpu-card .temperature-explanation summary { font-size: 11px; }
+  html:not(.native-shell) #dashboardPage .overview-gpu-card .detail-chips-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  html:not(.native-shell) #dashboardPage .overview-gpu-card .detail-chip {
+    display: flex; flex-direction: row; align-items: baseline; justify-content: space-between;
+    gap: 4px; padding: 0; border: 0; background: none; box-shadow: none;
+  }
+  html:not(.native-shell) #dashboardPage .overview-gpu-card .gpu-temperature-repeat { display: none; }
+  html:not(.native-shell) #dashboardPage .overview-gpu-card .chip-title { font-size: 11px; text-transform: none; }
+  html:not(.native-shell) #dashboardPage .overview-gpu-card .chip-value { font-size: 12px; }
+  html:not(.native-shell) #dashboardPage .overview-ram-card { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; row-gap: 3px; column-gap: 8px; }
+  html:not(.native-shell) #dashboardPage .overview-ram-card > :is(.card-top,.progress-bar-container) { grid-column: 1 / -1; }
+  html:not(.native-shell) #dashboardPage #ramSubText { align-self: center; margin-top: 0; }
+  html:not(.native-shell) #dashboardPage .overview-ram-card .memory-statistics { align-self: start; }
+  html:not(.native-shell) #dashboardPage .overview-storage-card .drives-list { gap: 6px; }
+  html:not(.native-shell) #dashboardPage .overview-storage-card .drive-item { padding: 6px 8px; }
+  html:not(.native-shell) #dashboardPage .overview-storage-card .drive-top { margin-bottom: 4px; gap: 2px 8px; }
+  html:not(.native-shell) #dashboardPage .overview-storage-card .drive-stats { font-size: 12px; }
+  html:not(.native-shell) #dashboardPage .overview-storage-card .progress-bar-container { height: 4px; }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  @container dashboard (min-width: 340px) {
+    html:not(.native-shell) #dashboardPage .metrics-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-areas: "cpu gpu" "ram ram" "storage storage" "network network";
+    }
+  }
+}

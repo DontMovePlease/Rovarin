@@ -7,9 +7,8 @@ try {
     . (Join-Path $PSScriptRoot 'dashboard-runtime.ps1')
     $runtime = Get-DashboardRuntime $appDir
     if ($runtime.state -ne 'owned' -or -not $runtime.healthy) { throw 'not-ready' }
-    if (-not (Test-Path -LiteralPath (Join-Path $dataDir 'onboarding-complete.json'))) {
-        & (Join-Path $PSScriptRoot 'setup.ps1') -Automatic -Hosted *>&1 | Out-Null
-    }
+    # PIN enrollment belongs to the canonical native Glass UI. The local
+    # Recovery utility remains explicitly available from the Start menu.
     # Setup can take arbitrarily long. Revalidate after the user dismisses it.
     $runtime = Get-DashboardRuntime $appDir
     if ($runtime.state -ne 'owned' -or -not $runtime.healthy) { throw 'not-ready' }

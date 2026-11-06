@@ -108,7 +108,7 @@ async function testBinding() {
   let active;
   async function launch(port, expectFailure = false) {
     let output = '';
-    const child = spawn(process.execPath, ['server.js'], { cwd: directory, env: { ...process.env, PORT: String(port), PC_MONITOR_PIN: '123456789012' }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [path.join(directory,'server.js')], { cwd: directory, env: { ...process.env, PORT: String(port), PC_MONITOR_PIN: '123456789012' }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     children.add(child);
     return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Port test startup timed out: ' + output)), 15000);
@@ -120,6 +120,7 @@ async function testBinding() {
   }
   try {
     for (const name of ['power-controls.js', 'server.js', 'diagnostics.js', 'maintenance-service.js', 'server-lifecycle.js', 'pin-manager.js', 'process-termination.js', 'app-manager.js','leftover-manager.js', 'enhanced-support.js', 'uninstall-manager.js', 'update-manager.js', 'maintenance.js', 'temperature-manager.js', 'cpu-temperature-provider.js', 'process-stats.js', 'package.json']) fs.copyFileSync(path.join(__dirname, '..', name), path.join(directory, name));
+    require('../pin-manager').writeConfig(path.join(directory,'config.json'),{pin:'123456789012'}); // Explicit disposable fixture, never startup provisioning.
     await new Promise(resolve => blocker.listen(0, '0.0.0.0', resolve));
     const preferred = blocker.address().port;
     active = await launch(preferred);
@@ -147,6 +148,13 @@ async function testBinding() {
       assert.strictEqual(runtime.port, active.port);
       assert.strictEqual(runtime.pid, active.child.pid);
       assert.strictEqual(runtime.healthy, true);
+      assert.strictEqual(runtime.stale, false, 'current backend content is reused');
+      const moduleFile=path.join(directory,'process-stats.js'),original=fs.readFileSync(moduleFile);
+      fs.appendFileSync(moduleFile,'\n// Isolated backend freshness fixture\n');
+      const changed=JSON.parse(execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-Command',`. '${helper}'; Get-DashboardRuntime '${dir}' | ConvertTo-Json -Compress`],{timeout:10000,windowsHide:true,encoding:'utf8'}));
+      assert.strictEqual(changed.stale,true,'content edits are detected without changing credentials');
+      fs.writeFileSync(moduleFile,original);
+
       const { inspectExistingDashboard } = require('./dev-watcher');
       const owner = await inspectExistingDashboard(directory);
       assert.strictEqual(owner.state, 'owned'); assert.strictEqual(owner.port, active.port);

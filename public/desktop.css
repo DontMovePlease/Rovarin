@@ -3,11 +3,21 @@
    phone UI is unaffected. Presentation only: the same DOM, app.js, SSE stream,
    monitoring leases, authentication, and adaptive sampling are reused as-is. */
 
+@media (min-width: 700px) {
+  /* Architectural cool-slate satin background fallback for desktop */
+  html.liquid-theme body {
+    background-color: #070d18;
+    background-image: radial-gradient(ellipse at 22% 18%, rgba(44, 78, 118, 0.22), transparent 54%),
+                      radial-gradient(ellipse at 82% 72%, rgba(36, 62, 98, 0.24), transparent 58%),
+                      linear-gradient(135deg, #060b14 0%, #0b1626 42%, #0e1d30 52%, #08111e 100%);
+  }
+}
+
 @media (min-width: 1024px) {
-  /* Wider horizontal gutters only; top/bottom rhythm stays as on phone. */
+  /* Wider horizontal gutters only; top/bottom rhythm stays calm and balanced. */
   body {
-    padding-left: 30px;
-    padding-right: 30px;
+    padding-left: 28px;
+    padding-right: 28px;
   }
 
   .dashboard-container {
@@ -36,7 +46,6 @@
     width: min(860px, calc(100vw - 28px));
     max-width: 860px;
   }
-
 }
 
 @media (min-width: 1280px) {
@@ -44,36 +53,280 @@
     max-width: 1360px;
   }
 
-  /* Keep the four primary hardware cards in the same compact 2×2 rhythm as
-     the base Overview layout. The secondary Network card owns the row below. */
+}
+
+/* Native surfaces retain the shared glass palette. Geometry is owned here. */
+.native-shell .native-app-bar {
+  background: #0c1420;
+  border: 0;
+  border-bottom: 1px solid rgba(198, 228, 252, 0.14);
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.native-shell .native-app-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #e8f0fa;
+}
+.native-shell .native-app-identity > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}
+.native-shell .cpu-detail-panel,
+.native-shell .maint-modal,
+.native-shell .maint-toast {
+  background: var(--surface-glass-strong);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Desktop floating overlay sidebar: strongly frosted glass with light-catching perimeter,
+   soft depth shadow, and stationary dashboard content. */
+@media (min-width: 700px) {
+  body {
+    --sidebar-width: 56px;
+  }
+  body.sidebar-expanded {
+    --sidebar-width: 182px;
+  }
+  .native-shell body {
+    padding: 0;
+  }
+  .native-shell .native-app-bar {
+    margin: 0;
+    width: 100%;
+  }
+  .sidebar-phone-brand {
+    display: none;
+  }
+
+  /* Overlay floating sidebar — floats above content, never shifts layout */
+  .app-sidebar.page-nav {
+    left: 8px;
+    top: calc(var(--app-bar-height) + 8px);
+    bottom: 8px;
+    z-index: 55;
+    width: var(--sidebar-width);
+    padding: 8px 6px;
+    box-sizing: border-box;
+    border: 1px solid rgba(206, 233, 255, 0.22);
+    border-radius: 20px;
+    background: linear-gradient(165deg, rgba(20, 34, 54, 0.86), rgba(10, 18, 32, 0.92));
+    box-shadow: 0 16px 42px rgba(2, 6, 16, 0.55), 0 3px 10px rgba(2, 6, 16, 0.35), inset 0 1px 0 rgba(242, 252, 255, 0.22);
+    backdrop-filter: blur(28px) saturate(1.25);
+    -webkit-backdrop-filter: blur(28px) saturate(1.25);
+    gap: 6px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    transition: width 230ms cubic-bezier(0.25, 1, 0.5, 1), box-shadow 230ms ease, border-color 230ms ease, background 230ms ease;
+  }
+
+  /* Fixed resting gutter: dashboard container remains completely stationary on hover/expansion */
+  .dashboard-container,
+  .native-shell .dashboard-container {
+    margin-left: 72px;
+    width: calc(100% - 72px);
+    border: 0;
+    border-radius: 0;
+    transition: none;
+  }
+
+  /* Refined navigation items: tactile glass pill on active, clean hover */
+  .app-sidebar .page-nav-button,
+  .native-shell .app-sidebar .page-nav-button {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 12px;
+    width: 100%;
+    min-height: 42px;
+    padding: 8px 12px;
+    border-radius: 12px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid transparent;
+    overflow: hidden;
+    white-space: nowrap;
+    transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+  }
+  .app-sidebar .page-nav-button > svg {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    stroke-width: 1.8;
+  }
+  .app-sidebar .page-nav-button:hover:not(.is-active) {
+    background: rgba(210, 236, 255, 0.08);
+    border-color: rgba(205, 234, 255, 0.12);
+    color: #f8fafc;
+  }
+  .app-sidebar .page-nav-button.is-active,
+  html.liquid-theme .app-sidebar .page-nav-button.is-active {
+    color: #f1f7ff;
+    background: linear-gradient(135deg, rgba(139, 222, 237, 0.20), rgba(154, 174, 242, 0.10));
+    border: 1px solid rgba(186, 234, 250, 0.32);
+    box-shadow: inset 0 1px 0 rgba(242, 252, 255, 0.24), 0 4px 12px rgba(2, 7, 18, 0.26);
+  }
+  .app-sidebar .page-nav-button.is-active > svg {
+    color: var(--accent-primary);
+  }
+
+  /* Desktop Dashboard layout & typography rhythm (glass materials owned by liquid-glass.css) */
+  #dashboardPage {
+    gap: 16px;
+  }
   .metrics-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .metric-card,
+  .health-card,
+  .system-specs-card {
+    padding: 18px 22px;
+    border-radius: 22px;
+  }
+  .card-top {
+    margin-bottom: 8px;
+  }
+  .card-label {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-transform: none;
+    color: #f1f5f9;
+  }
+  .val-large {
+    font-size: 38px;
+    font-weight: 700;
+    line-height: 1;
+    color: #f8fafc;
+    letter-spacing: -0.02em;
+  }
+  .val-unit {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text-muted);
+  }
+  .val-sub {
+    font-size: 13px;
+    font-weight: 450;
+    color: var(--text-secondary);
+    line-height: 1.45;
+  }
+  .detail-chips-row {
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .detail-chip {
+    padding: 7px 10px;
+    border-radius: 11px;
+  }
+  .chip-title {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: none;
+    margin-bottom: 2px;
+  }
+  .chip-value {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .chart-container {
+    height: 44px;
+    margin-top: 8px;
+  }
+  /* Health card layout */
+  .health-header {
+    margin-bottom: 10px;
+  }
+  .health-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .health-toggle-btn {
+    width: 28px;
+    height: 28px;
+  }
+  .health-card.is-collapsed {
+    padding: 8px 18px;
+    min-height: auto;
+  }
+  .health-card.is-collapsed .health-header {
+    margin-bottom: 0;
+  }
+  .health-card.is-collapsed .health-checklist {
+    display: none !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .health-checklist {
+    gap: 6px;
+  }
+  .health-check-item {
+    padding: 7px 11px;
+    font-size: 12px;
+    border-radius: 11px;
+    color: #dce7f5;
+  }
+  .drive-item {
+    padding: 8px 11px;
+    border-radius: 11px;
+  }
+  .host-details {
+    border: 1px solid rgba(202, 228, 252, 0.14);
+    border-radius: 16px;
+    background: linear-gradient(145deg, rgba(182, 216, 248, 0.06), rgba(118, 154, 204, 0.02));
+    box-shadow: inset 0 1px 0 rgba(238, 250, 255, 0.09);
   }
 }
 
-/* The same palette, restrained native chrome and dense desktop data. */
-.native-shell .native-app-bar { background: var(--chrome-background); backdrop-filter: none; -webkit-backdrop-filter: none; }
-.native-shell .app-sidebar.page-nav { background: linear-gradient(180deg, #142030, #0d1622); }
-.native-shell .cpu-detail-panel, .native-shell .maint-modal, .native-shell .maint-toast { background: var(--surface-glass-strong); backdrop-filter: none; -webkit-backdrop-filter: none; }
-.native-shell .metric-card, .native-shell .health-card, .native-shell .system-specs-card { box-shadow: inset 0 1px 0 rgba(225,241,255,.06), 0 3px 10px #0002; }
-
-/* Keep the desktop brand slot so navigation buttons stay in place. */
-.native-shell .sidebar-phone-brand svg { visibility: hidden; }
 @media (hover: hover) and (pointer: fine) and (min-width: 700px) {
-  .native-shell body.desktop-sidebar-hover { --sidebar-width: 176px; }
-  .native-shell .desktop-sidebar-hover .app-sidebar span { opacity: 1; transform: translateX(0); }
-  .native-shell .desktop-sidebar-hover .sidebar-phone-brand span { display: block; }
+  body.desktop-sidebar-hover {
+    --sidebar-width: 182px;
+  }
+  .desktop-sidebar-hover .app-sidebar.page-nav,
+  .sidebar-expanded .app-sidebar.page-nav {
+    transition: width 290ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 290ms ease, border-color 290ms ease, background 290ms ease;
+  }
+  .desktop-sidebar-hover .app-sidebar.page-nav {
+    box-shadow: 0 22px 54px rgba(1, 5, 14, 0.68), 0 4px 14px rgba(1, 5, 14, 0.42), inset 0 1px 0 rgba(244, 253, 255, 0.28);
+    border-color: rgba(214, 238, 255, 0.28);
+  }
+  .app-sidebar span {
+    display: inline;
+    opacity: 0;
+    transform: translateX(-6px);
+    transition: opacity 160ms ease, transform 200ms ease;
+  }
+  .desktop-sidebar-hover .app-sidebar span,
+  .sidebar-expanded .app-sidebar span {
+    opacity: 1;
+    transform: translateX(0);
+    transition: opacity 260ms cubic-bezier(0.16, 1, 0.3, 1) 30ms, transform 280ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
 }
 
-/* One continuous desktop chrome surface, matching the native window controls. */
-.native-shell .native-app-bar { background: var(--chrome-background); border: 0; border-radius: 0; box-shadow: none; }
-.native-shell .app-sidebar.page-nav { background: var(--chrome-background); }
-
-/* A softer desktop rail edge without moving its navigation targets. */
-@media (min-width: 700px) {
-  .native-shell .app-sidebar.page-nav { border-radius: 0 16px 16px 0; border-right-color: rgba(164,180,198,.10); box-shadow: 4px 0 14px rgba(0,0,0,.12); transition-duration: .22s; }
-}
-
-@media (min-width: 700px) {
-  .native-shell .dashboard-container { transition-duration: .22s; }
+/* Keep native chrome branded; mobile retains a clear current-section label. */
+.desktop-brand, .mobile-brand { display: none; }
+.app-identity-copy { display: flex; flex-direction: column; min-width: 0; }
+.native-shell .app-identity-copy { display: none; }
+.native-shell .desktop-brand { display: inline; }
+.native-shell .native-app-bar { box-sizing: border-box; padding-right: 132px; }
+@media (max-width:699px) {
+  html:not(.native-shell) .mobile-brand { display: block; color: var(--text-secondary); font-size: 10px; font-weight: 500; letter-spacing: .055em; line-height: 1.15; }
+  html:not(.native-shell) .app-identity-copy { gap: 1px; }
 }

@@ -4,11 +4,14 @@ const {spawn,execFileSync}=require('child_process');
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 module.exports=async function testNativeDesktop(root,payload,options={}){
   if(process.platform!=='win32')return;
-  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'rovarin-native-'));
+  // Use one canonical path across Node, PowerShell and native fixture processes.
+  const temporaryRoot=fs.realpathSync.native(os.tmpdir());
+  const temp=fs.mkdtempSync(path.join(temporaryRoot,'rovarin-native-'));
   fs.cpSync(payload,temp,{recursive:true});
   const app=path.join(temp,'app'),data=path.join(temp,'data');fs.mkdirSync(data);
   const pins = require('../pin-manager'); const testConfig = path.join(data,'config.json');
-  pins.writeConfig(testConfig,{...pins.loadConfig(testConfig),...(process.env.ROVARIN_NATIVE_TEST_PIN_LENGTH==='12'?{pin:pins.generatePin(undefined,12)}:{}),autoCheckUpdates:false});
+  if(options.pinLifecycleOnly)pins.prepareEnrollment(testConfig,true);
+  else pins.writeConfig(testConfig,{...pins.loadConfig(testConfig),...(process.env.ROVARIN_NATIVE_TEST_PIN_LENGTH==='12'?{pin:pins.generatePin(undefined,12)}:{}),autoCheckUpdates:false});
   fs.writeFileSync(path.join(data,'onboarding-complete.json'),'{"completed":true}');
   let child,desktop,base,retain=false;
   const launch=(file,args,options={})=>spawn(file,args,{windowsHide:true,stdio:['ignore','pipe','pipe'],...options});
@@ -19,10 +22,11 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     if(options.currentSource){
       // Local shell QA without rebuilding or touching the installer payload.
       fs.cpSync(path.join(root,'public'),path.join(app,'public'),{recursive:true});
-      for (const name of ['power-controls.js','server.js','diagnostics.js','pin-manager.js','update-manager.js','app-manager.js','leftover-manager.js','process-termination.js','process-stats.js','maintenance.js','maintenance-service.js']) fs.copyFileSync(path.join(root,name),path.join(app,name));
-      for(const name of ['terminate-process.ps1','app-manager.ps1','app-uninstall.cs','app-metadata.cs','process-tree.ps1','process-tree.cs','process-display.ps1','application-display.ps1'])fs.copyFileSync(path.join(root,'scripts',name),path.join(app,'scripts',name));
+      for (const name of ['power-controls.js','server.js','server-lifecycle.js','diagnostics.js','pin-manager.js','update-manager.js','app-manager.js','leftover-manager.js','process-termination.js','process-stats.js','maintenance.js','maintenance-service.js']) fs.copyFileSync(path.join(root,name),path.join(app,name));
+      for(const name of ['setup.ps1','desktop-host.ps1','dashboard-runtime.ps1','start.ps1','stop.ps1','terminate-process.ps1','app-manager.ps1','app-uninstall.cs','app-metadata.cs','process-tree.ps1','process-tree.cs','process-display.ps1','application-display.ps1'])fs.copyFileSync(path.join(root,'scripts',name),path.join(app,'scripts',name));
       fs.copyFileSync(path.join(root,'scripts/native-trust.ps1'),path.join(app,'scripts/native-trust.ps1'));
       let shell=path.join(root,'packaging/DesktopShell.cs');
+      assert(fs.readFileSync(shell,'utf8').includes('Replace("Unlock Dashboard", "Connecting\u2026")'),'Native startup text must retain valid UTF-8');
       if(options.maintenanceSettingsOnly){
         // Unelevated disposable setup surrogate: exercise native process launch and
         // build-bound integrity without registering/elevating anything on the host.
@@ -52,12 +56,34 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     let output='';child.stdout.on('data',x=>output+=x);child.stderr.on('data',x=>output+=x);
     for(let i=0;i<150;i++){const match=output.match(/Localhost access: http:\/\/127\.0\.0\.1:(\d+)/);if(match){base=`http://127.0.0.1:${match[1]}`;break}await pause(100)}
     assert(base,'Native fixture backend failed');
+    if(options.pinLifecycleOnly){const pending=JSON.parse(execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(app,'scripts/setup.ps1'),'-CheckOnly'],{windowsHide:true,timeout:30000,encoding:'utf8'}));assert.strictEqual(pending.setupRequired,true,'Local Recovery must recognize pending setup without revealing a PIN');}
     const remoteLogin=await fetch(base+'/').then(r=>r.text());
     assert(/class="[^"\n]*\blogin-page\b/.test(remoteLogin),'Canonical login document missing');
     assert(!remoteLogin.includes('id="lock-window-minimize"')&&!remoteLogin.includes('id="lock-window-exit"')&&!remoteLogin.includes('class="lock-window-controls"'),'Web/mobile login must not contain native window controls');
     execFileSync(compiler,['/nologo','/target:exe','/platform:x64',`/win32manifest:${path.join(root,'packaging/desktop.manifest')}`,'/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll',`/r:${path.join(app,'Microsoft.Web.WebView2.Core.dll')}`,`/r:${path.join(app,'Microsoft.Web.WebView2.WinForms.dll')}`,`/out:${path.join(app,'NativeDesktopTest.exe')}`,path.join(root,'scripts/native-desktop-test.cs')],{windowsHide:true,timeout:15000});
     fs.copyFileSync(path.join(app,'Rovarin.exe.config'),path.join(app,'NativeDesktopTest.exe.config'));
-    console.log(await wait(launch(path.join(app,'NativeDesktopTest.exe'),[],{cwd:app,env:{...process.env,ROVARIN_NATIVE_MAINTENANCE_ONLY:options.maintenanceSettingsOnly?'1':'',ROVARIN_NATIVE_GLASS_ONLY:options.glassOnly?'1':''}})));
+    if(!options.recoveryOnly)console.log(await wait(launch(path.join(app,'NativeDesktopTest.exe'),[],{cwd:app,env:{...process.env,ROVARIN_NATIVE_PIN_ONLY:options.pinLifecycleOnly?'1':'',ROVARIN_NATIVE_PIN_LAYOUT_ONLY:options.pinLayoutOnly?'1':'',ROVARIN_NATIVE_MAINTENANCE_ONLY:options.maintenanceSettingsOnly?'1':'',ROVARIN_NATIVE_GLASS_ONLY:options.glassOnly?'1':'',ROVARIN_NATIVE_DASHBOARD_ONLY:options.dashboardOnly?'1':''}})));
+    if(options.pinLayoutOnly)return;
+    if(options.pinLifecycleOnly || options.recoveryOnly){
+      for(const file of ['native-pin-enrollment.png','native-pin-change.png'])if(fs.existsSync(path.join(app,file)))fs.copyFileSync(path.join(app,file),path.join(root,'packaging/cache/custom-pin-v060',file));
+      const recoveryPin=pins.generatePin(pins.readConfig(testConfig).pin);
+      const source=fs.readFileSync(path.join(root,'scripts/setup.ps1'),'utf8');
+      let fixture=source.replace('trap {',"trap { [Console]::Error.WriteLine('RECOVERY_FIXTURE_ERROR: '+$_.Exception.Message);").replaceAll('[Windows.Forms.MessageBox]::Show','[RecoveryTestDialogs]::Show');
+      const prefix=`Add-Type -AssemblyName System.Windows.Forms\nAdd-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition 'public static class RecoveryTestDialogs { public static System.Windows.Forms.DialogResult Show(params object[] args) { return System.Windows.Forms.DialogResult.OK; } }'\n`;
+      fixture=fixture.replace(/(param\([^\n]*\)\r?\n)/,'$1'+prefix).replace('$dialog.AcceptButton=$save',`$dialog.AcceptButton=$save\n        $dialog.Add_Shown({$baseFont=$dialog.Font.Size;$last=1.0;foreach($factor in @(1.0,1.25,1.5,2.0)){$ratio=$factor/$last;$dialog.Scale((New-Object Drawing.SizeF($ratio,$ratio)));$dialog.Font=New-Object Drawing.Font('Segoe UI',($baseFont*$factor));$dialog.PerformLayout();$layout.PerformLayout();[Windows.Forms.Application]::DoEvents();foreach($box in $inputs){$layout.ScrollControlIntoView($box);if($box.Left -lt 0 -or $box.Right -gt $layout.ClientSize.Width){throw 'Scaled Recovery input clipped'}};$layout.ScrollControlIntoView($save);if($save.Bottom -gt $layout.ClientSize.Height -or $save.Height -lt 40){throw 'Scaled Recovery Save unavailable'};[void]$dialog.SelectNextControl($inputs[0],$true,$true,$true,$true);if(-not $inputs[1].Focused){throw 'Recovery confirmation Tab order failed'};[Console]::WriteLine(('PASS Recovery geometry/font stress '+($factor*100)+'%; actual Windows DPI='+$dialog.DeviceDpi));$last=$factor};$dialog.Scale((New-Object Drawing.SizeF((1/$last),(1/$last))));$dialog.Font=New-Object Drawing.Font('Segoe UI',$baseFont);$layout.AutoScrollPosition=New-Object Drawing.Point(0,0);$inputs[0].Text='${recoveryPin}';$inputs[1].Text='${recoveryPin}';$dialog.PerformLayout();$layout.PerformLayout();if($save.Bottom -gt $layout.ClientSize.Height){throw 'Recovery Save button clipped'};$bitmap=New-Object Drawing.Bitmap($dialog.Width,$dialog.Height);try{$dialog.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle(0,0,$dialog.Width,$dialog.Height)));$bitmap.Save((Join-Path $appDir 'native-pin-recovery.png'))}finally{$bitmap.Dispose()};$save.PerformClick()})`)
+        .replace('try {$form.ShowDialog() | Out-Null}', '$form.Add_Shown({$regenerate.PerformClick();$form.Close()})\ntry {$form.ShowDialog() | Out-Null}');
+      // Never write the fixture PIN: replace it at runtime over captured stdin.
+      fixture=fixture.replaceAll(recoveryPin,'$fixtureRecoveryPin');
+      const target=path.join(app,'scripts/setup-recovery-fixture.ps1');
+      fs.writeFileSync(target,fixture.replaceAll("'$fixtureRecoveryPin'",'$fixtureRecoveryPin').replace('Add-Type -AssemblyName System.Windows.Forms\n','$fixtureRecoveryPin=[Console]::In.ReadLine()\nAdd-Type -AssemblyName System.Windows.Forms\n'));
+      const recovery=launch('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',target],{cwd:app,stdio:['pipe','pipe','pipe']});
+      recovery.stdin.end(recoveryPin+'\n');console.log(await wait(recovery,90000));
+      fs.copyFileSync(path.join(app,'native-pin-recovery.png'),path.join(root,'packaging/cache/custom-pin-v060/native-pin-recovery.png'));
+      assert.strictEqual(pins.readConfig(testConfig).pin,recoveryPin,'Actual local Recovery reset form did not commit');
+      console.log('PASS existing Windows Forms Recovery Reset PIN button, dialog and same-owner DPAPI commit (informational message boxes auto-acknowledged by test adapter)');
+      return;
+    }
+    if(options.dashboardOnly){const out=path.join(root,'packaging/cache/dashboard-layout/native');fs.mkdirSync(out,{recursive:true});for(const file of fs.readdirSync(app).filter(f=>/^native-dashboard-.*\.(png|json)$/.test(f)))fs.copyFileSync(path.join(app,file),path.join(out,file));return;}
     if(options.glassOnly){for(const file of fs.readdirSync(app).filter(f=>/^native-glass-.*\.(png|json)$/.test(f)))fs.copyFileSync(path.join(app,file),path.join(root,'packaging/cache',file));return;}
     if(options.maintenanceSettingsOnly){fs.copyFileSync(path.join(app,'native-maintenance-settings.png'),path.join(root,'packaging/cache/native-maintenance-settings.png'));return;}
     for(const file of ['native-lock.png','login-mobile.png','login-keyboard.png','processes-polish.png']) fs.copyFileSync(path.join(app,file),path.join(root,'packaging/cache',file));
@@ -109,11 +135,11 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     // A failed launch may have started an owned replacement; the fixed lifecycle
     // still verifies executable/script identity before stopping any such fixture.
     try{execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(app,'scripts/stop.ps1')],{windowsHide:true,timeout:20000})}catch{retain=true;}
-    if(!retain){assert(path.resolve(temp).startsWith(path.resolve(os.tmpdir())+path.sep));for(let i=0;i<20;i++){try{fs.rmSync(temp,{recursive:true,force:true});break}catch(error){if(i===19)throw error;await pause(300)}}}
+    if(!retain){assert(path.resolve(temp).startsWith(path.resolve(temporaryRoot)+path.sep));for(let i=0;i<20;i++){try{fs.rmSync(temp,{recursive:true,force:true});break}catch(error){if(i===19)throw error;await pause(300)}}}
   }
 };
 
-if(require.main===module && process.argv.includes('--glass')){
+if(require.main===module && (process.argv.includes('--pin-layout')||process.argv.includes('--glass')||process.argv.includes('--dashboard')||process.argv.includes('--pin')||process.argv.includes('--recovery'))){
   const root=path.resolve(__dirname,'..');
-  module.exports(root,path.join(root,'packaging/payload'),{currentSource:true,glassOnly:true}).catch(error=>{console.error(error);process.exitCode=1;});
+  module.exports(root,path.join(root,'packaging/payload'),{currentSource:true,pinLayoutOnly:process.argv.includes('--pin-layout'),recoveryOnly:process.argv.includes('--recovery'),pinLifecycleOnly:process.argv.includes('--pin'),glassOnly:process.argv.includes('--glass'),dashboardOnly:process.argv.includes('--dashboard')}).catch(error=>{console.error(error);process.exitCode=1;});
 }

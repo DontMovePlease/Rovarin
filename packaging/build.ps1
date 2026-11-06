@@ -15,10 +15,17 @@ function Verified-Binary($name,$url,$hash,$publisher) {
     if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch $publisher) { throw "$name publisher verification failed." }
     return $file
 }
-$node = Verified-Binary 'node.exe' 'https://nodejs.org/dist/v24.21.0/win-x64/node.exe' 'ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32' 'OpenJS Foundation'
+# Pin the binary and license to the same reviewed security release. Leave the
+# previous generic cache untouched; it must never supply a different version.
+$nodeVersion = '24.22.1'
+$nodeHash = 'd702daa815eabbff763c7d3808e235cf031cf2ca70211b56847bc72f51e240e5'
+$node = Verified-Binary "node-v$nodeVersion-win-x64.exe" "https://nodejs.org/dist/v$nodeVersion/win-x64/node.exe" $nodeHash 'OpenJS Foundation'
+if ((& $node --version).Trim() -cne ('v'+$nodeVersion) -or $LASTEXITCODE -ne 0) { throw 'Unexpected bundled Node version.' }
 $pawn = Verified-Binary 'PawnIO_setup.exe' 'https://github.com/namazso/PawnIO.Setup/releases/download/2.2.0/PawnIO_setup.exe' '1f519a22e47187f70a1379a48ca604981c4fcf694f4e65b734aaa74a9fba3032' 'namazso.eu'
 if ([Diagnostics.FileVersionInfo]::GetVersionInfo($pawn).FileVersion -ne '2.2.0.0') { throw 'Unexpected PawnIO version.' }
-if (-not (Test-Path -LiteralPath (Join-Path $cache 'Node-LICENSE'))) { Invoke-WebRequest 'https://raw.githubusercontent.com/nodejs/node/v24.21.0/LICENSE' -OutFile (Join-Path $cache 'Node-LICENSE') }
+$nodeLicense = Join-Path $cache "Node-v$nodeVersion-LICENSE"
+if (-not (Test-Path -LiteralPath $nodeLicense)) { Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/nodejs/node/v$nodeVersion/LICENSE" -OutFile $nodeLicense }
+if ((Get-FileHash -LiteralPath $nodeLicense -Algorithm SHA256).Hash.ToLowerInvariant() -cne '5888dbb9a1d2b18f2c3e6c5f6af1b39de658372b402a0577b002777f14c62ace') { throw 'Node license hash mismatch.' }
 # Required redistribution sources must be present before packaging, including
 # synchronized checkouts where missing archives otherwise silently disappear.
 $monitorVendor = Join-Path $repo 'vendor\LibreHardwareMonitor\0.9.6'
@@ -96,7 +103,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Rovarin launcher compilation failed.' }
 [IO.File]::WriteAllText((Join-Path $app 'Rovarin.exe.config'), '<configuration><startup><supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.8" /></startup></configuration>')
 [IO.File]::WriteAllText((Join-Path $app 'installation.json'), '{"schema":1,"channel":"windows-x64","data":"../data"}')
 Copy-Item -LiteralPath $node -Destination (Join-Path $runtime 'node.exe')
-Copy-Item -LiteralPath (Join-Path $cache 'Node-LICENSE') -Destination (Join-Path $runtime 'LICENSE')
+Copy-Item -LiteralPath $nodeLicense -Destination (Join-Path $runtime 'LICENSE')
 Copy-Item -LiteralPath $pawn -Destination (Join-Path $app 'vendor\PawnIO\2.2.0\PawnIO_setup.exe')
 # The official binary's terms are proprietary and explicitly permit unchanged
 # installer redistribution. Do not mislabel it as the GPL source edition.
@@ -118,7 +125,7 @@ The untouched upstream installer internally contains edition choices; Rovarin
 never invokes those choices and does not extract/distribute unsigned drivers.
 '@
 [IO.File]::WriteAllText((Join-Path $app 'vendor\PawnIO\2.2.0\NOTICE.txt'), $pawnNotice)
-$manifest = @{nodeVersion='24.21.0'; innoVersion='7.1.0'; pawnIoVersion='2.2.0.0'; files=@()}
+$manifest = @{nodeVersion=$nodeVersion; innoVersion='7.1.0'; pawnIoVersion='2.2.0.0'; files=@()}
 Get-ChildItem -LiteralPath $payload -File -Recurse | Sort-Object FullName | ForEach-Object {
     $manifest.files += @{path=$_.FullName.Substring($payload.Length+1).Replace('\','/'); sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
 }

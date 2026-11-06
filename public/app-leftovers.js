@@ -21,7 +21,7 @@
   }
   async function dismiss(){if(pending)return;const id=preview?.id;preview=null;pin.value='';dialog.close();if(id&&!jobId)try{await post('cancel',{scanId:id});}catch(_){};}
   cancel.addEventListener('click',dismiss);dialog.addEventListener('cancel',e=>{e.preventDefault();dismiss();});dialog.addEventListener('close',()=>{pin.value='';});
-  get('appLeftoversForm').addEventListener('submit',async e=>{e.preventDefault();if(pending||!preview?.candidates.length||(window.RovarinRemovalSecurity.requirePin&&!/^(?:\d{6}|\d{12})$/.test(pin.value)))return;
+  get('appLeftoversForm').addEventListener('submit',async e=>{e.preventDefault();if(pending||!preview?.candidates.length||(window.RovarinRemovalSecurity.requirePin&&!/^(?:\d{6}|\d{8}|\d{12})$/.test(pin.value)))return;
     const body={scanId:preview.id,...(window.RovarinRemovalSecurity.requirePin?{pin:pin.value}:{}),confirmation:'delete-leftovers'};pin.value='';error.textContent='';setPending(true);
     try{const data=await post('delete',body);jobId=data.jobId;preview=null;approval.hidden=true;remove.hidden=true;title.textContent='Deleting leftovers…';summary.textContent='Rechecking every approved folder before removal.';requestStatus();}
     catch(e){setPending(false);error.textContent=e.message;pin.focus();}

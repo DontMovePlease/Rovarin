@@ -37,9 +37,9 @@
 /* Admin badge in section title */
 .maint-admin-badge {
   margin-left: auto;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  padding: 3px 9px;
+  padding: 3px 10px;
   border-radius: 20px;
   letter-spacing: 0.4px;
 }
@@ -62,7 +62,7 @@
 }
 
 .maint-group-label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -184,13 +184,13 @@
 /* Admin-required badge on card */
 .maint-requires-admin {
   display: inline-block;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: #fbbf24;
   background: rgba(245, 158, 11, 0.12);
   border: 1px solid rgba(245, 158, 11, 0.25);
   border-radius: 6px;
-  padding: 1px 6px;
+  padding: 2px 7px;
   margin-top: 2px;
   width: fit-content;
 }
@@ -246,13 +246,13 @@
 }
 
 .maint-progress-step {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   margin-top: 2px;
 }
 
 .maint-status-pill {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   padding: 3px 10px;
   border-radius: 20px;
@@ -276,6 +276,12 @@
   background: rgba(245, 158, 11, 0.2);
   color: #fbbf24;
   border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.maint-status-pill.unverified {
+  background: rgba(56, 189, 248, 0.18);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.35);
 }
 
 .maint-status-pill.failed {
@@ -354,6 +360,13 @@
   color: #fbbf24;
 }
 
+.maint-result-banner.unverified {
+  display: block;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  color: #7dd3fc;
+}
+
 .maint-result-banner.failed {
   display: block;
   background: rgba(244, 63, 94, 0.12);
@@ -368,7 +381,7 @@
 }
 
 .maint-history-title {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -402,6 +415,7 @@
 
 .maint-history-dot.success { background: #10b981; box-shadow: 0 0 5px #10b981; }
 .maint-history-dot.partial { background: #f59e0b; box-shadow: 0 0 5px #f59e0b; }
+.maint-history-dot.unverified { background: #38bdf8; box-shadow: 0 0 5px #38bdf8; }
 .maint-history-dot.failed  { background: #f43f5e; box-shadow: 0 0 5px #f43f5e; }
 
 .maint-history-body {
@@ -419,7 +433,7 @@
 
 .maint-history-meta {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
   margin-top: 1px;
 }
 
@@ -537,6 +551,8 @@
 
 .maint-toast.success { border-color: rgba(52, 211, 153, 0.48); }
 .maint-toast.failed { border-color: rgba(251, 113, 133, 0.55); }
+.maint-toast.partial { border-color: rgba(245, 158, 11, 0.5); }
+.maint-toast.unverified { border-color: rgba(56, 189, 248, 0.5); }
 .maint-toast-icon {
   display: grid;
   place-items: center;
@@ -549,6 +565,8 @@
   background: rgba(16, 185, 129, 0.16);
 }
 .maint-toast.failed .maint-toast-icon { color: #fb7185; background: rgba(244, 63, 94, 0.16); }
+.maint-toast.partial .maint-toast-icon { color: #fbbf24; background: rgba(245, 158, 11, 0.18); }
+.maint-toast.unverified .maint-toast-icon { color: #38bdf8; background: rgba(56, 189, 248, 0.18); font-style: normal; }
 .maint-toast-copy { display: grid; gap: 3px; min-width: 0; flex: 1; }
 .maint-toast-copy strong { font-size: 13px; line-height: 1.35; }
 .maint-toast-copy > span { color: var(--text-secondary); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }

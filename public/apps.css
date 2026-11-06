@@ -154,7 +154,7 @@ html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
   max-width: 100%;
 }
 .apps-tray-hidden {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--accent-amber);
   margin-top: 1px;
 }
@@ -433,9 +433,9 @@ html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
  .apps-list:not(.is-grid) .apps-info h2 {font-size:13px;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
  .apps-list:not(.is-grid) .apps-card-meta {flex-direction:column;align-items:flex-end;gap:2px;margin-left:6px;min-width:0}
  .apps-list:not(.is-grid) .apps-size {font-size:12px;width:auto;min-width:0}
- .apps-list:not(.is-grid) .apps-category {font-size:10px;width:auto;max-width:80px;overflow:hidden;text-overflow:ellipsis;min-width:0}
+ .apps-list:not(.is-grid) .apps-category {font-size:11px;width:auto;max-width:80px;overflow:hidden;text-overflow:ellipsis;min-width:0}
  .apps-list:not(.is-grid) .apps-row-actions {grid-column:2/-1;display:flex;justify-content:flex-end;margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,255,255,.05)}
- #appsPage .apps-description {font-size:10px}
+ #appsPage .apps-description {font-size:11px}
 }
 
 @media(prefers-reduced-motion:reduce){.apps-row,.apps-row-action {transition:none}}
@@ -489,7 +489,7 @@ html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
  #appsPage .is-grid .apps-icon-img {width:28px;height:28px}
  #appsPage .is-grid .apps-icon-fallback {width:30px;height:30px;font-size:13px}
  #appsPage .is-grid .apps-info h2 {font-size:12px}
- #appsPage .is-grid .apps-publisher,#appsPage .is-grid .apps-category {font-size:10px}
+ #appsPage .is-grid .apps-publisher,#appsPage .is-grid .apps-category {font-size:11px}
  #appsPage .is-grid .apps-size {font-size:11px}
 }
 @media(max-width:379px){
@@ -523,9 +523,9 @@ html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
 .quick-launch-count {font-size:11px;color:var(--text-secondary)}
 .quick-launch-status {font-size:11px;color:var(--accent-emerald);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .quick-launch-status.is-error {color:var(--accent-amber)}
-.quick-launch-rail {display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;scrollbar-width:thin;max-width:100%;box-sizing:border-box;touch-action:pan-x pan-y}
+.quick-launch-rail {display:flex;gap:8px;overflow-x:auto;overflow-y:hidden;padding:8px 6px 6px;margin:-4px -6px 0;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;scrollbar-width:thin;max-width:100%;box-sizing:border-box;touch-action:pan-x pan-y}
 .quick-launch-empty {font-size:12px;color:var(--text-secondary);padding:6px 0;margin:0}
-.quick-launch-tile {position:relative;flex:0 0 86px;width:86px;min-height:92px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 6px 8px;border:1px solid var(--border-card);border-radius:12px;background:var(--surface-content);cursor:pointer;scroll-snap-align:start;text-decoration:none;color:inherit;transition:background .15s,border-color .15s,transform .1s}
+.quick-launch-tile {position:relative;flex:0 0 86px;width:86px;min-height:92px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 6px 8px;border:1px solid var(--border-card);border-radius:12px;background:var(--surface-content);cursor:pointer;scroll-snap-align:start;text-decoration:none;color:inherit;transition:background .15s,border-color .15s,transform .1s;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 .quick-launch-tile:hover {background:var(--tint-primary);border-color:var(--accent-primary)}
 .quick-launch-tile:active {transform:scale(.97)}
 .quick-launch-tile:focus-visible {outline:2px solid var(--accent-primary);outline-offset:2px}
@@ -533,8 +533,9 @@ html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
 @keyframes ql-pulse {from{transform:scale(1)}to{transform:scale(.97);border-color:var(--accent-primary)}}
 .quick-launch-tile.is-missing {opacity:.5;border-style:dashed;cursor:default}
 .quick-launch-tile.is-missing:hover {background:var(--surface-content);border-color:var(--border-card)}
-.quick-launch-tile-icon {width:38px;height:38px;object-fit:contain;margin-bottom:4px;image-rendering:-webkit-optimize-contrast}
-.quick-launch-tile-name {font-size:11px;font-weight:500;color:var(--text-primary);text-align:center;line-height:1.2;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-inline:2px}
+.quick-launch-tile-icon-wrap {-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.quick-launch-tile-icon {width:38px;height:38px;object-fit:contain;margin-bottom:4px;image-rendering:-webkit-optimize-contrast;-webkit-user-drag:none;user-drag:none}
+.quick-launch-tile-name {font-size:11px;font-weight:500;color:var(--text-primary);text-align:center;line-height:1.2;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-inline:2px;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 .quick-launch-missing-label {font-size:9px;color:var(--accent-amber);margin-top:2px}
 .quick-launch-unpin-btn {position:absolute;top:-5px;right:-5px;width:22px;height:22px;border:0;background:#1e293b;border:1px solid rgba(255,255,255,.25);box-shadow:0 2px 6px rgba(0,0,0,.45);color:#f87171;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;line-height:1;padding:0;z-index:5;transition:transform .18s cubic-bezier(0.34, 1.56, 0.64, 1),opacity .15s ease}
 .quick-launch-unpin-btn:hover {background:#ef4444;color:#fff;border-color:#ef4444;transform:scale(1.1)}
@@ -568,14 +569,20 @@ html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
 }
 
 /* Quick Launch Picker Dialog */
-.ql-picker-dialog {max-width:min(520px,calc(100vw - 24px));width:100%;padding:20px}
-.ql-picker-container {display:flex;flex-direction:column;gap:12px;max-height:calc(85dvh - 32px)}
-.ql-picker-header {display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.ql-picker-dialog {max-width:min(520px,calc(100vw - 24px));width:100%;padding:18px 20px;overflow:hidden;box-sizing:border-box}
+.ql-picker-container {display:flex;flex-direction:column;gap:12px;max-height:calc(85dvh - 36px);min-height:0}
+.ql-picker-header {display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-shrink:0}
 #qlPickerTitle {font-size:18px;margin:0 0 2px}
 .ql-picker-subtitle {font-size:11px;color:var(--text-secondary);margin:0}
-.ql-picker-header button {width:32px;height:32px;min-height:32px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:8px;font-size:13px}
-.ql-picker-search-wrap input {width:100%;min-height:40px;background:var(--surface-content-raised);color:var(--text-primary);border:1px solid var(--border-card);border-radius:8px;padding:8px 12px;font:inherit;font-size:13px}
-.ql-picker-list {display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:4px}
+.ql-picker-header button {width:32px;height:32px;min-height:32px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:8px;font-size:13px;background:var(--surface-glass);border:1px solid var(--glass-border);color:var(--text-secondary);cursor:pointer;-webkit-tap-highlight-color:transparent;transition:background .15s ease,border-color .15s ease,color .15s ease}
+.ql-picker-header button:hover {background:var(--surface-glass-strong);color:var(--text-primary);border-color:var(--glass-rim)}
+.ql-picker-header button:focus {outline:none}
+.ql-picker-header button:focus-visible {outline:2px solid var(--accent-primary);outline-offset:2px}
+.ql-picker-search-wrap {flex-shrink:0}
+.ql-picker-search-wrap input {width:100%;min-height:40px;background:var(--surface-content-raised);color:var(--text-primary);border:1px solid var(--border-card);border-radius:8px;padding:8px 12px;font:inherit;font-size:13px;outline:none;-webkit-tap-highlight-color:transparent;transition:border-color .18s ease,box-shadow .18s ease}
+.ql-picker-search-wrap input:focus {outline:none;border-color:var(--accent-primary);box-shadow:inset 0 1px 2px rgba(0,4,12,.32),0 0 0 1px rgba(139,222,237,.25),0 4px 14px rgba(2,7,18,.22)}
+.ql-picker-search-wrap input:focus-visible {outline:none;border-color:var(--accent-primary)}
+.ql-picker-list {display:flex;flex-direction:column;gap:6px;max-height:320px;flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:4px 4px 4px 0}
 .ql-picker-item {display:grid;grid-template-columns:36px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid var(--border-card);background:var(--surface-content-raised);transition:background .15s}
 .ql-picker-item:hover {background:var(--tint-primary)}
 .ql-picker-item-info {min-width:0}
@@ -622,7 +629,7 @@ html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
 .startup-info h2 {font-size:14px;font-weight:600;line-height:1.4;margin:0 0 3px;overflow-wrap:anywhere}
 .startup-info p {font-size:11px;color:var(--text-secondary);margin:2px 0;line-height:1.4;overflow-wrap:anywhere}
 .startup-badges {display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.startup-scope-badge,.startup-status-badge {font-size:10px;font-weight:600;padding:2px 7px;border-radius:8px;line-height:1.3;white-space:nowrap}
+.startup-scope-badge,.startup-status-badge {font-size:11.5px;font-weight:600;padding:2px 7px;border-radius:8px;line-height:1.3;white-space:nowrap}
 .startup-scope-user {background:rgba(56,189,248,.12);color:#38bdf8;border:1px solid rgba(56,189,248,.25)}
 .startup-scope-machine {background:rgba(148,163,184,.12);color:#94a3b8;border:1px solid rgba(148,163,184,.25)}
 .startup-status-enabled {background:rgba(52,211,153,.12);color:#34d399;border:1px solid rgba(52,211,153,.25)}
@@ -700,3 +707,20 @@ html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
 .startup-actions {display:flex;gap:8px;flex-wrap:wrap}
 .startup-control-reason {font-size:12px;color:var(--text-secondary);margin:6px 0 0}
 @media(max-width:699px){.startup-actions {grid-column:1/-1}.startup-actions .startup-toggle-btn {flex:1;min-height:44px}}
+
+/* Anchored filter menus retain the app's glass material and touch targets. */
+#appsPage .apps-filter-source { position: absolute; width: 1px; height: 1px; padding: 0; opacity: 0; pointer-events: none; }
+#appsPage .apps-filter-trigger { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 44px; padding: 10px 12px; font: inherit; text-align: left; }
+#appsPage .apps-filter-trigger::after { content: '⌄'; flex-shrink: 0; }
+.apps-filter-menu { position: fixed; inset: auto; margin: 0; box-sizing: border-box; padding: 6px; overflow-y: auto; overscroll-behavior: contain; z-index: 300; border: 1px solid var(--glass-border); border-radius: 16px; background: rgba(20,35,51,.9); color: var(--text-primary); box-shadow: 0 12px 32px #0005; backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+.apps-filter-option { display: block; width: 100%; min-height: 44px; padding: 10px 12px; border: 0; border-radius: 10px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.apps-filter-option[aria-selected="true"] { background: var(--tint-primary); color: var(--accent-primary); }
+.apps-filter-option:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
+html[data-graphics-quality="minimal"] .apps-filter-menu { backdrop-filter: none; -webkit-backdrop-filter: none; background: #142333; }
+@media (prefers-contrast: more), (prefers-reduced-transparency: reduce) { .apps-filter-menu { background: #142333; backdrop-filter: none; -webkit-backdrop-filter: none; } }
+@media (forced-colors: active) { .apps-filter-menu { background: Canvas; color: CanvasText; border-color: ButtonText; } }
+
+#appsPage .startup-control-filter { display: flex; flex-direction: row; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; }
+#appsPage .startup-control-filter input { width: 20px; height: 20px; min-height: 0; margin: 0; accent-color: var(--accent-primary); }
+
+@media (max-width:699px) { #appsPage .startup-toolbar .startup-control-filter { flex-basis: 100%; font-size: 13px; } }

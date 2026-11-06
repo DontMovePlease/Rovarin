@@ -1,6 +1,6 @@
-import { vertexShader, backdropFragment, glassFragment } from './liquid-shaders.js';
+import { vertexShader, backdropFragment, legacyBackdropFragment, glassFragment } from './liquid-shaders.js';
 const KEY='rovarin.graphicsQuality';
-const SURFACES='.health-card,.metric-card,.system-specs-card,.pc-details-footer,.cpu-detail-panel,.maint-section,.power-section,.diagnostics-page,.app-page.processes-page,.login-card,.app-sidebar,.native-app-bar,.glass-panel,.glass-card';
+const SURFACES='.health-card,.metric-card,.system-specs-card,.pc-details-footer,.cpu-detail-panel,.maint-section,.power-section,.diagnostics-page,.app-page.processes-page,.login-card,.app-sidebar,html:not(.native-shell) .native-app-bar,.glass-panel,.glass-card';
 const MODES=['auto','full','balanced','minimal'];
 const root=document.documentElement;
 const motion=matchMedia('(prefers-reduced-motion: reduce)');
@@ -18,7 +18,7 @@ export class GlassRenderer {
   this.canvas=this.renderer.domElement;this.canvas.className='liquid-scene';this.canvas.setAttribute('aria-hidden','true');this.canvas.setAttribute('role','presentation');document.body.prepend(this.canvas);
   this.geometry=new THREE.PlaneGeometry(1,1);this.camera=new THREE.OrthographicCamera(0,1,1,0,-1,1);
   this.backdrop=new THREE.Scene();this.scene=new THREE.Scene();
-  this.backgroundMaterial=new THREE.ShaderMaterial({vertexShader,fragmentShader:backdropFragment,depthTest:false,depthWrite:false,uniforms:{uResolution:{value:new THREE.Vector2(1,1)},uViewport:{value:new THREE.Vector2(1,1)},uPhase:{value:0},uCalibration:{value:calibration?1:0}}});
+  this.backgroundMaterial=new THREE.ShaderMaterial({vertexShader,fragmentShader:(root.dataset.desktopTheme==='liquid'&&!narrow.matches?legacyBackdropFragment:backdropFragment),depthTest:false,depthWrite:false,uniforms:{uResolution:{value:new THREE.Vector2(1,1)},uViewport:{value:new THREE.Vector2(1,1)},uPhase:{value:0},uCalibration:{value:calibration?1:0}}});
   this.background=new THREE.Mesh(this.geometry,this.backgroundMaterial);this.backdrop.add(this.background);
   this.target=new THREE.WebGLRenderTarget(1,1,{minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter,depthBuffer:false,stencilBuffer:false});
   this.presentScene=new THREE.Scene();this.presentMaterial=new THREE.ShaderMaterial({vertexShader,fragmentShader:'varying vec2 vUv;uniform sampler2D uBackdrop;void main(){gl_FragColor=texture2D(uBackdrop,vUv);}',depthTest:false,depthWrite:false,uniforms:{uBackdrop:{value:this.target.texture}}});this.present=new THREE.Mesh(this.geometry,this.presentMaterial);this.presentScene.add(this.present);
@@ -122,14 +122,16 @@ export class GlassRenderer {
 }
 let preference='auto',engine=null,generation=0;
 try{const saved=localStorage.getItem(KEY);if(MODES.includes(saved))preference=saved;}catch{}
-function desired(){if(forced.matches||contrast.matches||transparency.matches)return 'minimal';if(preference!=='auto')return preference;if(motion.matches||navigator.connection?.saveData)return 'minimal';return narrow.matches||(navigator.deviceMemory&&navigator.deviceMemory<=4)?'balanced':'full';}
+function desired(){if(!narrow.matches&&root.dataset.desktopTheme!=='liquid')return 'minimal';if(forced.matches||contrast.matches||transparency.matches)return 'minimal';if(preference!=='auto')return preference;if(motion.matches||navigator.connection?.saveData)return 'minimal';return narrow.matches||(navigator.deviceMemory&&navigator.deviceMemory<=4)?'balanced':'full';}
 function report(message){const status=document.getElementById('graphicsQualityStatus');if(status)status.textContent=message||({full:'Full optics · renders on interaction, rests when idle.',balanced:'Balanced optics · lower resolution, no ambient animation.',minimal:'Minimal · crisp CSS surfaces, no graphics renderer.'}[root.dataset.graphicsQuality]||'Preparing graphics…');}
-async function applyQuality(){const ticket=++generation,mode=desired();root.dataset.graphicsQuality=mode;const select=document.getElementById('graphicsQuality');if(select)select.value=preference;
+let renderedTheme=null;
+async function applyQuality(){const theme=narrow.matches?'mobile':(root.dataset.desktopTheme||'simplified');if(theme!==renderedTheme){engine?.dispose();engine=null;renderedTheme=theme;}const ticket=++generation,mode=desired();root.dataset.graphicsQuality=mode;const select=document.getElementById('graphicsQuality');if(select)select.value=preference;
  if(mode==='minimal'){engine?.dispose();engine=null;report();return;}
  try{library ||= import('./three-glass.module.js');const THREE=await library;if(ticket!==generation)return;if(!engine||engine.dead){engine=new GlassRenderer(THREE);}engine.setMode(mode);report();}catch{engine?.dispose();engine=null;root.dataset.graphicsQuality='minimal';report('Advanced graphics unavailable. Minimal appearance is active.');}
 }
 function setQuality(value){if(!MODES.includes(value))return;preference=value;try{localStorage.setItem(KEY,value);}catch{}applyQuality();}
 if(root.classList.contains('liquid-theme')){
+ window.addEventListener('rovarin-theme-change',applyQuality);
  document.getElementById('graphicsQuality')?.addEventListener('change',e=>setQuality(e.target.value));
  for(const query of [motion,contrast,transparency,forced,narrow])query.addEventListener('change',applyQuality);
  window.addEventListener('pagehide',()=>{generation++;engine?.dispose();engine=null;});window.addEventListener('pageshow',applyQuality);

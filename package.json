@@ -1,6 +1,6 @@
 {
   "name": "rovarin-dashboard",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Lightweight personal Rovarining dashboard for Windows accessible via Tailscale",
   "main": "server.js",
   "scripts": {
@@ -9,6 +9,8 @@
     "build:installer": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File packaging/build.ps1",
     "release:verify": "node scripts/release-verify.js",
     "test:packaging": "node scripts/packaging-smoke-test.js",
+    "test:pin": "node scripts/pin-lifecycle-smoke-test.js",
+    "test:pin:native": "node scripts/native-desktop-test.js --pin",
     "test:security": "node scripts/security-smoke-test.js",
     "test:maintenance": "node scripts/maintenance-smoke-test.js",
     "test:maintenance-service": "node scripts/maintenance-service-smoke-test.js",

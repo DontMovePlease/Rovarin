@@ -11,7 +11,16 @@ let loginSucceeded = false;
 let autoSubmittedPin = null;
 let loginController = null;
 // Length mode only, rendered by the server; absent/unknown metadata fails to manual entry.
-let sixDigitPinMode = document.querySelector?.('meta[name="rovarin-pin-mode"]')?.content === '6';
+let sixDigitPinMode = false;
+function applyPinMode(mode) {
+  const length = ['6', '8', '12'].includes(String(mode)) ? Number(mode) : null;
+  sixDigitPinMode = length === 6;
+  pinInput.maxLength = length || 12;
+  pinInput.pattern = length ? '[0-9]{' + length + '}' : '[0-9]{6}|[0-9]{8}|[0-9]{12}';
+  pinInput.placeholder = '•'.repeat(length || 6);
+  pinInput?.setAttribute?.('aria-label', length ? 'Rovarin PIN (' + length + ' digits)' : 'Rovarin PIN');
+}
+applyPinMode(document.querySelector?.('meta[name="rovarin-pin-mode"]')?.content);
 
 async function attemptLogin() {
   const pin = pinInput.value.trim();
@@ -54,8 +63,8 @@ async function attemptLogin() {
       window.location.replace('/');
       return;
     }
-    if(response.status===401&&data.code==='pin-mode-changed'&&['6','12'].includes(data.pinMode)){
-      sixDigitPinMode=data.pinMode==='6';
+    if(response.status===401&&data.code==='pin-mode-changed'&&['6','8','12'].includes(data.pinMode)){
+      applyPinMode(data.pinMode);
       errMsg.textContent='Your PIN uses '+data.pinMode+' digits. Enter the full PIN, then tap Unlock.';
       pinInput.focus();return;
     }
@@ -63,6 +72,8 @@ async function attemptLogin() {
       errMsg.textContent = `Too many attempts. Try again in ${Number(response.headers.get('Retry-After')) || 60} seconds.`;
     } else if (response.status === 401) {
       errMsg.textContent = 'Incorrect PIN. Please try again.';
+    } else if(response.status===409 && data.code==='credential-changed'){
+      errMsg.textContent='Your PIN changed while signing in. Try your latest PIN.';
     } else if(data.code==='credential-unavailable'){
       errMsg.textContent='Rovarin cannot read its saved sign-in settings on this PC. Your PIN was not changed. Try again once Rovarin is ready.';
     } else {

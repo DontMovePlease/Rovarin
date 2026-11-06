@@ -197,6 +197,12 @@ function Get-TestPin {
 }
 function Login-TestCopy {
     Remove-SyncHardLinks (Join-Path $dataDir 'config.json')
+    # Full removal/reinstall intentionally returns to v0.6 native enrollment.
+    # Provision only this disposable pending fixture, using the same canonical
+    # enrollment operation as the fresh-install fixture below. Existing or
+    # corrupt credentials must never be reset by the test harness.
+    & (Join-Path $testDir 'runtime\node.exe') -e "const p=require(process.argv[1]),f=p.configurationFile(),s=p.readConfig(f);if(s.pinSetup){const pin=p.generatePin();p.updatePin(f,{action:'enroll',newPin:pin,confirmPin:pin,revision:p.credentialRevision(s)});}" (Join-Path $appDir 'pin-manager.js')
+    Assert-Test ($LASTEXITCODE -eq 0) 'Disposable reinstall enrollment failed.'
     & (Join-Path $appDir 'scripts\start.ps1') | Out-Null
     $script:runtime = Wait-DashboardRuntime $appDir 15
     if (-not $script:runtime.healthy) {
@@ -428,7 +434,11 @@ try {
     Assert-Test (Test-Path -LiteralPath (Join-Path $testDir 'runtime\node.exe')) 'Bundled Node missing.'
     Assert-Test (-not (Test-Path -LiteralPath (Join-Path $appDir 'config.json'))) 'Installer must not distribute a PIN/config in its application payload.'
     $freshInstallerConfig = Get-Content -LiteralPath (Join-Path $dataDir 'config.json') -Raw | ConvertFrom-Json
-    Assert-Test ((Get-TestPin) -match '^\d{6}$' -and $freshInstallerConfig.requireDesktopPin -eq $true) 'Fresh installer must locally generate a canonical PIN and apply default desktop PIN protection.'
+    Assert-Test ($freshInstallerConfig.pinSetup.schema -eq 1 -and -not $freshInstallerConfig.pinCredential -and $freshInstallerConfig.requireDesktopPin -eq $true) 'Fresh installer must require explicit native PIN enrollment, with no generated credential.'
+    # Same Windows owner initializes this disposable test fixture. The real
+    # native-only HTTP/WebView enrollment boundary has separate integration tests.
+    & (Join-Path $testDir 'runtime\node.exe') -e "const p=require(process.argv[1]),f=p.configurationFile(),s=p.readConfig(f),pin=p.generatePin();p.updatePin(f,{action:'enroll',newPin:pin,confirmPin:pin,revision:p.credentialRevision(s)});" (Join-Path $appDir 'pin-manager.js')
+    Assert-Test ($LASTEXITCODE -eq 0 -and (Get-TestPin) -match '^\d{6}$') 'Disposable fixture enrollment failed.'
     Assert-Test (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'Rovarin\Rovarin.lnk')) 'Start menu shortcut missing.'
     . (Join-Path $appDir 'scripts\dashboard-runtime.ps1')
     & (Join-Path $appDir 'scripts\start.ps1') | Out-Null

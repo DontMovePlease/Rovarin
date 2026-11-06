@@ -42,6 +42,19 @@ function fixture(mode = 'supported') {
 }
 
 async function test() {
+  const serverSource=fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8');
+  const finder=serverSource.match(/function getTailscaleIP\(\) \{[\s\S]*?\n\}/)[0];
+  const validator=serverSource.match(/function isTailscaleIP\(ip\) \{[\s\S]*?\n\}/)[0];
+  let interfaces={Tailscale:[{family:'IPv4',address:'169.254.83.107'}],Ethernet:[{family:'IPv4',address:'10.0.2.15'}]};
+  const find=vm.runInNewContext(finder+'\n'+validator+'\ngetTailscaleIP',{os:{networkInterfaces:()=>interfaces}});
+  assert.strictEqual(find(),null,'a named disconnected adapter must not advertise APIPA');
+  interfaces.Tailscale.push({family:4,address:'100.64.1.2'});
+  assert.strictEqual(find(),'100.64.1.2');
+  interfaces={Other:[{family:'IPv4',address:'100.127.255.254'}]};
+  assert.strictEqual(find(),'100.127.255.254','valid range works independently of adapter name');
+  interfaces={Tailscale:[{family:'IPv4',address:'100.128.0.1'}]};
+  assert.strictEqual(find(),null,'outside the Tailscale range remains unavailable');
+  console.log('PASS Windows Tailscale discovery rejects disconnected APIPA and out-of-range addresses');
   const root = path.resolve(__dirname, '..');
   const policy = JSON.parse(fs.readFileSync(path.join(root, 'scripts/release-public-files.json'), 'utf8'));
   assert(policy.includes('diagnostics.js'));

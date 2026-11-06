@@ -1,4 +1,4 @@
-#define AppVersion "0.5.0"
+#define AppVersion "0.6.0"
 [Setup]
 AppId={{C51A4180-26D2-4F48-93BD-B40B182B78DA}
 AppName=Rovarin
@@ -124,6 +124,9 @@ begin
   ExistingOnboarding := FileExists(ExpandConstant('{app}\data\config.json')) and
     (FileExists(ExpandConstant('{app}\app\server.js')) or FileExists(ExpandConstant('{app}\data\rebrand-migration.json')));
   ExistingConfiguration := FileExists(ExpandConstant('{app}\data\config.json'));
+  if not ExistingConfiguration and (FileExists(ExpandConstant('{app}\app\server.js')) or DirExists(ExpandConstant('{app}\data'))) then begin
+    Result := 'Existing PIN configuration is missing. Restore the saved configuration before repairing Rovarin. Setup will not replace your PIN.'; exit;
+  end;
   Result := StopInstalledServer();
 end;
 function InitializeUninstall(): Boolean;
@@ -157,10 +160,10 @@ begin
   if CurStep = ssPostInstall then begin
     { Never overwrite an upgrade/preserved-data PIN or desktop preference. }
     if not ExistingConfiguration then begin
-      Preference := '--desktop-pin-on';
+      Preference := '--prepare-pin-on';
       if not WizardIsTaskSelected('desktopPin') then begin
         if WizardSilent then RaiseException('Passwordless desktop requires interactive confirmation.');
-        Preference := '--desktop-pin-off';
+        Preference := '--prepare-pin-off';
       end;
       if not Exec(ExpandConstant('{app}\runtime\node.exe'), '"' + ExpandConstant('{app}\app\pin-manager.js') + '" ' + Preference,
         ExpandConstant('{app}\app'), SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then

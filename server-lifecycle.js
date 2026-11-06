@@ -3,6 +3,15 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
+// Content identity excludes configuration, credentials and frontend-only edits.
+function runtimeFingerprint(root = __dirname) {
+  const hash = crypto.createHash('sha256');
+  const files = fs.readdirSync(root).filter(name => name.endsWith('.js') || name === 'package.json').sort();
+  for (const name of files) {
+    hash.update(name); hash.update('\0'); hash.update(fs.readFileSync(path.join(root, name))); hash.update('\0');
+  }
+  return hash.digest('hex');
+}
 const DEFAULT_PORT = 7331;
 const FALLBACK_COUNT = 4;
 function portCandidates(value = DEFAULT_PORT) {
@@ -129,4 +138,8 @@ function claimInstance(directory, preferredPort) {
     for (const guard of guards) if (read(guard.path) === guard.record) fs.unlinkSync(guard.path);
   }
 }
-module.exports = { DEFAULT_PORT, FALLBACK_COUNT, portCandidates, bindServer, claimInstance };
+module.exports = { DEFAULT_PORT, FALLBACK_COUNT, portCandidates, bindServer, claimInstance, runtimeFingerprint };
+
+if (require.main === module && process.argv[2] === '--runtime-fingerprint') {
+  try { console.log(runtimeFingerprint()); } catch (_) { console.error('Backend identity unavailable.'); process.exitCode = 1; }
+}

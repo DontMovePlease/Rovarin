@@ -11,6 +11,7 @@
   const state = {
     isAdmin: false,
     isRunning: false,
+    unsupported: false,
     isLocal: (!window.location.hostname || ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname)),
     serviceEnabled: false,
     serviceState: 'disabled',
@@ -209,7 +210,7 @@
           <div id="maintModalWarn" class="maint-modal-warn" style="display:none"></div>
           <div id="maintModalPinSection" style="display:none;margin-top:0.75rem;text-align:left;">
             <label for="maintModalPin" style="font-size:0.9rem;opacity:0.9;display:block;margin-bottom:0.25rem;">Enter your Rovarin PIN to authorize:</label>
-            <input id="maintModalPin" type="password" inputmode="numeric" pattern="[0-9]{6}|[0-9]{12}" maxlength="12" autocomplete="off" placeholder="PIN" style="width:100%;box-sizing:border-box;padding:0.6rem;font-size:1.1rem;letter-spacing:0.15em;text-align:center;border-radius:6px;border:1px solid rgba(255,255,255,0.25);background:rgba(0,0,0,0.3);color:#fff;">
+            <input id="maintModalPin" type="password" inputmode="numeric" pattern="[0-9]{6}|[0-9]{8}|[0-9]{12}" maxlength="12" autocomplete="off" placeholder="PIN" style="width:100%;box-sizing:border-box;padding:0.6rem;font-size:1.1rem;letter-spacing:0.15em;text-align:center;border-radius:6px;border:1px solid rgba(255,255,255,0.25);background:rgba(0,0,0,0.3);color:#fff;">
             <p id="maintModalPinError" style="display:none;color:#ff6b6b;font-size:0.85rem;margin-top:0.35rem;"></p>
           </div>
           <div class="maint-modal-buttons">
@@ -294,7 +295,7 @@
   // ── Action Click Handler ──────────────────────────────────────────────────
 
   function onActionClick(action) {
-    if (state.isRunning) return;
+    if (state.isRunning || state.unsupported) return;
 
     if (action.confirm || action.requiresAdmin) {
       showConfirmModal(action);
@@ -384,7 +385,7 @@
   // ── Execute Action ─────────────────────────────────────────────────────────
 
   async function executeAction(actionId, pin) {
-    if (state.isRunning) return;
+    if (state.isRunning || state.unsupported) return;
 
     // Show progress panel immediately
     state.isRunning = true;
@@ -488,8 +489,8 @@
     qs('#maintProgressStep').textContent = task.stepTitle || '';
 
     const pill = qs('#maintStatusPill');
-    pill.textContent = task.status === 'running' ? 'Running' : task.status === 'completed' ? 'Done' : task.status === 'partially-completed' ? 'Partial' : task.status === 'cancelled' ? 'Cancelled' : 'Failed';
-    pill.className = 'maint-status-pill ' + (task.status === 'running' ? 'running' : task.status === 'completed' ? 'completed' : task.status === 'partially-completed' ? 'partially-completed' : task.status === 'cancelled' ? 'cancelled' : 'failed');
+    pill.textContent = task.status === 'running' ? 'Running' : task.status === 'completed' ? 'Done' : task.status === 'partially-completed' ? 'Partial' : task.status === 'unverified' ? 'Unverified' : task.status === 'cancelled' ? 'Cancelled' : 'Failed';
+    pill.className = 'maint-status-pill ' + (task.status === 'running' ? 'running' : task.status === 'completed' ? 'completed' : task.status === 'partially-completed' ? 'partially-completed' : task.status === 'unverified' ? 'unverified' : task.status === 'cancelled' ? 'cancelled' : 'failed');
 
     // Step progress bar
     const pct = task.totalSteps > 0 ? Math.round((task.currentStep / task.totalSteps) * 100) : (task.status !== 'running' ? 100 : 20);
@@ -513,29 +514,57 @@
     if (task.status !== 'running' && task.result) {
       const banner = qs('#maintResultBanner');
       banner.textContent = task.result.summary;
-      banner.className = 'maint-result-banner ' + (task.status === 'cancelled' ? 'cancelled' : task.status === 'partially-completed' ? 'partially-completed' : task.result.success ? 'success' : 'failed');
+      banner.className = 'maint-result-banner ' + (task.status === 'cancelled' ? 'cancelled' : task.status === 'partially-completed' ? 'partially-completed' : task.status === 'unverified' ? 'unverified' : task.result.success ? 'success' : 'failed');
     }
   }
 
   // ── Status Polling ─────────────────────────────────────────────────────────
 
   function schedulePoll() {
-    if (window.pcMonitorUninstalling) return;
     clearTimeout(state.pollTimer);
+    if (window.pcMonitorUninstalling || state.unsupported) return;
     if (typeof window.dashboardClientVisible === 'function' && !window.dashboardClientVisible()) return;
     state.pollTimer = setTimeout(fetchStatus, state.isRunning ? 1000 : 4000);
   }
 
   function startFastPoll() {
     clearTimeout(state.pollTimer);
+    if (state.unsupported) return;
     state.pollTimer = setTimeout(fetchStatus, 800);
   }
 
+  function markMaintenanceUnsupported() {
+    state.unsupported = true;
+    clearTimeout(state.pollTimer);
+    state.pollTimer = null;
+    state.isRunning = false;
+    state.runningActionId = null;
+    state.pendingToastActionId = null;
+    closeModal();
+    const panel = qs('#maintProgressPanel');
+    if (panel) panel.classList.add('active');
+    const pill = qs('#maintStatusPill');
+    if (pill) { pill.textContent = 'Unavailable on Linux'; pill.className = 'maint-status-pill failed'; }
+    const title = qs('#maintProgressTitle');
+    if (title) title.textContent = 'Maintenance unavailable';
+    const step = qs('#maintProgressStep');
+    if (step) step.textContent = 'Maintenance actions are Windows-only and are not available on Linux.';
+    const badge = qs('#maintAdminBadge');
+    if (badge) { badge.textContent = 'Not available on Linux'; badge.className = 'maint-admin-badge not-admin'; }
+    setAllButtonsDisabled(true);
+  }
+
   async function fetchStatus() {
-    if (window.pcMonitorUninstalling) return;
+    if (window.pcMonitorUninstalling || state.unsupported) return;
     if (typeof window.dashboardClientVisible === 'function' && !window.dashboardClientVisible()) return;
     try {
       const res = await fetch('/api/maintenance/status', { credentials: 'same-origin' });
+      // Only the Linux backend's explicit capability error is terminal.
+      // Generic 501s and transient Windows failures retain normal retries.
+      if (res.status === 501) {
+        const error = await res.json();
+        if (error?.error === 'unsupported_on_linux') { markMaintenanceUnsupported(); return; }
+      }
       if (!res.ok) { schedulePoll(); return; }
       const data = await res.json();
       state.resetNetworkOfflineCount = 0;
@@ -553,6 +582,7 @@
   }
 
   function applyStatus(data) {
+    if (state.unsupported) return;
     if (typeof data.isLocal === 'boolean') {
       state.isLocal = data.isLocal;
     }
@@ -588,7 +618,11 @@
       if (data.currentTask.status !== 'running') {
         if (state.pendingToastActionId && data.currentTask.id === state.pendingToastActionId) {
           const result = data.currentTask.result || {};
-          showMaintenanceToast(result.success, result.summary || (result.success ? 'Operation completed.' : 'Operation failed.'), data.currentTask.title || actionTitle(state.pendingToastActionId), result.detailedResult?.code === 'uac-cancelled', data.currentTask.status === 'partially-completed');
+          const isCancelled = result.detailedResult?.code === 'uac-cancelled' || data.currentTask.status === 'cancelled';
+          const isPartial = data.currentTask.status === 'partially-completed' || result.detailedResult?.code === 'partially-completed' || result.detailedResult?.code === 'locked-files-only';
+          const isUnverified = data.currentTask.status === 'unverified' || result.detailedResult?.code === 'verification-unavailable';
+          const isAlreadyClean = result.detailedResult?.code === 'already-empty' || result.detailedResult?.code === 'already-clean';
+          showMaintenanceToast(result.success, result.summary || (result.success ? 'Operation completed.' : 'Operation failed.'), data.currentTask.title || actionTitle(state.pendingToastActionId), isCancelled, isPartial, isUnverified, isAlreadyClean);
           state.pendingToastActionId = null;
         }
         // Task finished
@@ -603,18 +637,21 @@
         if (last && last.id === state.runningActionId) {
           const pill = qs('#maintStatusPill');
           if (pill) {
-            pill.textContent = last.status === 'completed' ? 'Done' : last.status === 'partially-completed' ? 'Partial' : last.status === 'cancelled' ? 'Cancelled' : 'Failed';
-            pill.className = 'maint-status-pill ' + (last.status === 'completed' ? 'completed' : last.status === 'partially-completed' ? 'partially-completed' : last.status === 'cancelled' ? 'cancelled' : 'failed');
+            pill.textContent = last.status === 'completed' ? 'Done' : last.status === 'partially-completed' ? 'Partial' : last.status === 'unverified' ? 'Unverified' : last.status === 'cancelled' ? 'Cancelled' : 'Failed';
+            pill.className = 'maint-status-pill ' + (last.status === 'completed' ? 'completed' : last.status === 'partially-completed' ? 'partially-completed' : last.status === 'unverified' ? 'unverified' : last.status === 'cancelled' ? 'cancelled' : 'failed');
           }
           const stepFill = qs('#maintStepFill');
           if (stepFill) stepFill.style.width = '100%';
           const banner = qs('#maintResultBanner');
           if (banner) {
             banner.textContent = last.summary;
-            banner.className = 'maint-result-banner ' + (last.status === 'cancelled' ? 'cancelled' : last.status === 'partially-completed' ? 'partially-completed' : last.success ? 'success' : 'failed');
+            banner.className = 'maint-result-banner ' + (last.status === 'cancelled' ? 'cancelled' : last.status === 'partially-completed' ? 'partially-completed' : last.status === 'unverified' ? 'unverified' : last.success ? 'success' : 'failed');
           }
           if (state.pendingToastActionId && last.id === state.pendingToastActionId) {
-            showMaintenanceToast(last.success, last.summary, last.title || actionTitle(last.id), last.status === 'cancelled', last.status === 'partially-completed');
+            const isCancelled = last.status === 'cancelled';
+            const isPartial = last.status === 'partially-completed';
+            const isUnverified = last.status === 'unverified';
+            showMaintenanceToast(last.success, last.summary, last.title || actionTitle(last.id), isCancelled, isPartial, isUnverified);
             state.pendingToastActionId = null;
           }
           state.runningActionId = null;
@@ -633,15 +670,16 @@
     return action ? action.title : 'Maintenance operation';
   }
 
-  function showMaintenanceToast(success, message, title, cancelled = false, isPartial = false) {
+  function showMaintenanceToast(success, message, title, cancelled = false, isPartial = false, isUnverified = false, isAlreadyClean = false) {
     const toast = qs('#maintToast');
     if (!toast) return;
     clearTimeout(state.toastTimer);
-    qs('#maintToastIcon').textContent = isPartial ? '!' : success ? '✓' : '×';
-    qs('#maintToastTitle').textContent = `${title} ${cancelled ? 'cancelled' : isPartial ? 'partially completed' : success ? 'succeeded' : 'failed'}`;
+    qs('#maintToastIcon').textContent = isUnverified ? 'ℹ' : isPartial ? '!' : success ? '✓' : '×';
+    const outcomeText = cancelled ? 'cancelled' : isUnverified ? 'completed (unverified)' : isPartial ? 'partially completed' : isAlreadyClean ? 'already clean' : success ? 'succeeded' : 'failed';
+    qs('#maintToastTitle').textContent = `${title} ${outcomeText}`;
     qs('#maintToastMessage').textContent = message;
-    toast.classList.remove('success', 'failed', 'cancelled', 'partial');
-    toast.classList.add(cancelled ? 'cancelled' : isPartial ? 'partial' : success ? 'success' : 'failed', 'is-visible');
+    toast.classList.remove('success', 'failed', 'cancelled', 'partial', 'unverified');
+    toast.classList.add(cancelled ? 'cancelled' : isUnverified ? 'unverified' : isPartial ? 'partial' : success ? 'success' : 'failed', 'is-visible');
     state.toastTimer = setTimeout(dismissMaintenanceToast, 6500);
   }
 
@@ -653,6 +691,7 @@
   }
 
   function setAllButtonsDisabled(disabled, activeId) {
+    disabled = disabled || state.unsupported;
     ACTIONS.forEach(a => {
       const btn = qs(`#maint-btn-${a.id}`);
       if (!btn) return;
@@ -678,10 +717,10 @@
 
     list.innerHTML = historyItems.slice(0, 10).map(item => `
       <div class="maint-history-item">
-        <div class="maint-history-dot ${item.status === 'partially-completed' ? 'partial' : item.success ? 'success' : 'failed'}"></div>
+        <div class="maint-history-dot ${item.status === 'unverified' ? 'unverified' : item.status === 'partially-completed' ? 'partial' : item.success ? 'success' : 'failed'}"></div>
         <div class="maint-history-body">
           <div class="maint-history-name">${escHtml(item.title)}</div>
-          <div class="maint-history-meta">${escHtml(item.date)} ${escHtml(item.timestamp)} · ${escHtml(item.duration)} · ${item.status === 'cancelled' ? 'Cancelled' : item.status === 'partially-completed' ? 'Partial (Restart Required)' : item.success ? 'Succeeded' : 'Failed'}</div>
+          <div class="maint-history-meta">${escHtml(item.date)} ${escHtml(item.timestamp)} · ${escHtml(item.duration)} · ${item.status === 'cancelled' ? 'Cancelled' : item.status === 'partially-completed' ? 'Partial (Restart Required)' : item.status === 'unverified' ? 'Unverified' : item.success ? 'Succeeded' : 'Failed'}</div>
         </div>
       </div>
     `).join('');

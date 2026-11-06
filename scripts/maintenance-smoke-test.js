@@ -80,7 +80,93 @@ function run(actionId) {
   });
 }
 
+
+// Execute the production controller with disposable DOM/fetch/timer fixtures.
+// No maintenance actions, credentials, OS commands, or HTTP listeners are used.
+async function testFrontendCompatibility() {
+  const vm = require('vm'), path = require('path');
+  const frontend = realFs.readFileSync(path.join(__dirname, '../public/maintenance.js'), 'utf8');
+  function controller(responses) {
+    const elements = new Map(), timers = new Map(), listeners = new Map();
+    let requests = 0, timerId = 0;
+    function element(selector) {
+      if (!elements.has(selector)) {
+        const classes = new Set();
+        elements.set(selector, { textContent:'', innerHTML:'', style:{}, dataset:{}, disabled:false,
+          classList:{add:v=>classes.add(v), remove:v=>classes.delete(v), contains:v=>classes.has(v)} });
+      }
+      return elements.get(selector);
+    }
+    const document = { readyState:'loading', addEventListener(){}, querySelector:element,
+      querySelectorAll:()=>[] };
+    const window = { location:{hostname:'localhost'}, dashboardClientVisible:()=>true,
+      addEventListener:(name, fn)=>listeners.set(name,fn) };
+    const context = { document, window, console,
+      fetch:async()=>{ requests++; const response=responses.shift(); if(response instanceof Error)throw response; return await response; },
+      setTimeout:(fn,ms)=>{const id=++timerId;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id) };
+    const end=frontend.lastIndexOf('})();');
+    vm.runInNewContext(frontend.slice(0,end)+
+      'window.fixture={state,fetchStatus,schedulePoll,startFastPoll,applyStatus,setAllButtonsDisabled,executeAction,onActionClick,ACTIONS};\n'+frontend.slice(end),context);
+    return { ...window.fixture, element,timers,listeners,requests:()=>requests };
+  }
+  const response=(status,data)=>({status,ok:status>=200&&status<300,json:async()=>data});
+  const windows={isLocal:false,isAdmin:false,isRunning:false,service:{enabled:false,state:'disabled'},history:[]};
+  const linux=controller([response(501,{error:'unsupported_on_linux'})]);
+  linux.schedulePoll(); await linux.fetchStatus();
+  assert(linux.state.unsupported); assert.equal(linux.timers.size,0,'terminal response cancels the pending poll');
+  assert.equal(linux.element('#maintAdminBadge').textContent,'Not available on Linux');
+  assert(linux.element('#maintProgressPanel').classList.contains('active'),'unavailable message is in a visible panel');
+  assert.equal(linux.element('#maintProgressTitle').textContent,'Maintenance unavailable');
+  assert(linux.element('#maintProgressStep').textContent.includes('Windows-only'));
+  for(const action of linux.ACTIONS)assert.equal(linux.element('#maint-btn-'+action.id).disabled,true);
+  linux.applyStatus(windows); linux.setAllButtonsDisabled(false); linux.schedulePoll();linux.startFastPoll();
+  await linux.fetchStatus();await linux.executeAction('clean_temp');linux.onActionClick(linux.ACTIONS[0]);
+  linux.listeners.get('pc-monitor-pagechange')({detail:{page:'maintenancePage'}});
+  linux.listeners.get('pc-monitor-desktop-visibility')({detail:{visible:true}});
+  assert.equal(linux.requests(),1,'page/resume/action events cannot restart unsupported requests');
+  assert.equal(linux.timers.size,0);
+  for(const action of linux.ACTIONS)assert.equal(linux.element('#maint-btn-'+action.id).disabled,true,'late status cannot enable unsupported actions');
+  for(const status of [401,403,500,501]) {
+    const ordinary=controller([response(status,{error:'temporary-error'}),response(200,windows)]);
+    await ordinary.fetchStatus();assert(!ordinary.state.unsupported);assert.equal(ordinary.timers.size,1,'ordinary '+status+' retries');
+    await ordinary.fetchStatus();assert.equal(ordinary.element('#maintAdminBadge').textContent,'\u26a0 Standard User');
+    for(const action of ordinary.ACTIONS)assert.equal(ordinary.element('#maint-btn-'+action.id).disabled,false,'Windows admin actions retain confirmation availability');
+  }
+  const malformed=controller([{status:501,ok:false,json:async()=>{throw Error('invalid JSON');}}]);
+  await malformed.fetchStatus();assert(!malformed.state.unsupported);assert.equal(malformed.timers.size,1);
+  const offline=controller([Error('offline')]);await offline.fetchStatus();assert(!offline.state.unsupported);assert.equal(offline.timers.size,1);
+  let resolveStatus; const late=controller([new Promise(resolve=>resolveStatus=resolve),response(501,{error:'unsupported_on_linux'})]);
+  const pending=late.fetchStatus();await late.fetchStatus();resolveStatus(response(200,windows));await pending;
+  assert(late.state.unsupported);assert.equal(late.timers.size,0,'late successful response cannot resume polling');
+  assert.equal(late.element('#maintAdminBadge').textContent,'Not available on Linux');
+
+  // Run the affected rendering portion of the actual updateUI function.
+  const app=realFs.readFileSync(path.join(__dirname,'../public/app.js'),'utf8');
+  const start=app.indexOf('function updateUI(data) {'),end=app.indexOf('  // CPU\n',start);
+  assert(start>=0&&end>start);
+  const render=app.slice(start,end)+'\n}';
+  for(const fixture of [
+    {system:{platform:'Windows',windowsVersion:'Microsoft Windows 11',distro:'Ignore Linux',osVersion:'Ignore kernel'},badge:'Windows 11',spec:'Microsoft Windows 11',scope:true},
+    {system:{platform:'Windows'},badge:'Windows',spec:'Windows 11',scope:true},
+    {system:{platform:'Linux',distro:'Ubuntu 24.04 LTS',osVersion:'Ubuntu 24.04 LTS (Linux fixture)'},badge:'Ubuntu 24.04 LTS',spec:'Ubuntu 24.04 LTS (Linux fixture)',scope:false},
+    {system:{platform:'Linux',distro:'Fedora Linux 43',osVersion:'Fedora Linux 43'},badge:'Fedora Linux 43',spec:'Fedora Linux 43',scope:false},
+    {system:{platform:'Linux'},badge:'Linux',spec:'Linux',scope:false}
+  ]) {
+    const elements=new Map();
+    const create=()=>({textContent:'',children:[],append(...items){this.children.push(...items);},replaceChildren(...items){this.children=items;}});
+    const get=id=>{if(!elements.has(id))elements.set(id,create());return elements.get(id);};
+    const context={document:{getElementById:get,createElement:create},summarizeHealth:()=>({issues:[],rating:'Healthy',badgeColor:'emerald'}),updateHealthSubText(){}};
+    vm.createContext(context);vm.runInContext(render,context);
+    context.data={system:fixture.system,cpu:{model:'Fixture CPU',cores:2,threads:4},gpu:{name:'Fixture GPU'},drives:[{mount:fixture.scope?'D:':'/',freeGB:5,totalGB:10}],health:{},uptime:'1m'};
+    vm.runInContext('updateUI(data)',context);
+    assert.equal(get('osBadge').textContent,fixture.badge);assert.equal(get('specOs').textContent,fixture.spec);
+    assert.equal(get('healthChecklist').children.some(child=>child.textContent.includes('Storage health checks cover C:')),fixture.scope);
+  }
+  console.log('PASS frontend Windows/Linux labels and storage scope; typed 501 unavailable state, disabled actions, timer/event/late-response cleanup; generic errors retry and Windows actions remain available');
+}
+
 async function main() {
+  await testFrontendCompatibility();
   const checksBefore = mockState.adminChecks;
   await Promise.all(Array.from({ length: 8 }, () => new Promise(resolve => getStatus(resolve))));
   assert.strictEqual(mockState.adminChecks - checksBefore, 1, 'concurrent status requests should share one admin check');
@@ -430,7 +516,7 @@ async function testServiceIntegration() {
   console.log('PASS service integration: status reporting, privileged service execution, and remote service-disabled enforcement');
 }
 
-(process.argv.includes('--watchdog-only') ? testWatchdogOrdering() : process.argv.includes('--service-results-only') ? testServiceIntegration() : main()).catch((err) => {
+(process.argv.includes('--frontend-only') ? testFrontendCompatibility() : process.argv.includes('--watchdog-only') ? testWatchdogOrdering() : process.argv.includes('--service-results-only') ? testServiceIntegration() : main()).catch((err) => {
   console.error(err);
   process.exitCode = 1;
 });

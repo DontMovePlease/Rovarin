@@ -9,7 +9,7 @@
 #diagnosticsFeedback { font-size: 12px; color: var(--text-secondary); min-height: 36px; }
 .diagnostics-summary { padding: 16px; border: 1px solid var(--border-card); border-radius: var(--radius-lg); background: var(--bg-subtle); margin: 8px 0 16px; box-sizing: border-box; max-width: 100%; }
 .diagnostics-summary h2 { font-size: 17px; }
-#diagnosticsUpdated { font-size: 11px; color: var(--text-muted); }
+#diagnosticsUpdated { font-size: 12px; color: var(--text-muted); }
 .diagnostics-checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 10px; }
 .diagnostics-check { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 14px; border: 1px solid var(--border-card); border-radius: var(--radius-md); background: var(--bg-subtle); }
 .diagnostics-check h3 { font-size: 14px; }
@@ -29,11 +29,11 @@
   .diagnostics-check { box-sizing: border-box; max-width: 100%; }
   .temperature-settings select { flex: 1 1 100%; max-width: 100%; box-sizing: border-box; }
 }
-.diagnostics-status { align-self: start; border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 650; }
+.diagnostics-status { align-self: start; border-radius: 999px; padding: 3px 9px; font-size: 11.5px; font-weight: 650; }
 .diagnostics-status.supported { color: #6ee7b7; background: rgba(16, 185, 129, .15); }
 .diagnostics-status.unavailable { color: #cbd5e1; background: rgba(148, 163, 184, .15); }
 .diagnostics-status.failed { color: #fcd34d; background: rgba(245, 158, 11, .15); }
-.diagnostics-footnote { margin-top: 16px; color: var(--text-muted); font-size: 11px; }
+.diagnostics-footnote { margin-top: 16px; color: var(--text-muted); font-size: 12px; }
 .diagnostics-page details { margin-top: 16px; }
 .diagnostics-page summary { padding: 10px 0; font-size: 13px; cursor: pointer; }
 #diagnosticsReport { display: block; width: 100%; min-height: 240px; padding: 12px; border: 1px solid var(--glass-rim); border-radius: var(--radius-md); color: var(--text-primary); background: var(--bg-primary); font: 12px var(--font-mono); }

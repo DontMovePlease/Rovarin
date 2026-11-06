@@ -6,11 +6,11 @@ function command(text) { const file=path.join(temp,'command.ps1'); fs.writeFileS
 const call=(script,args=[],env=process.env)=>execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',script,...args],{env:{...env,PSModulePath:path.join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/Modules')},windowsHide:true,encoding:'utf8',timeout:15000});
 try{
  const app=path.join(temp,'app'),scripts=path.join(app,'scripts');fs.mkdirSync(scripts,{recursive:true});
- const env={...process.env,LOCALAPPDATA:temp};
+ const env={...process.env,LOCALAPPDATA:temp,USERPROFILE:temp};
  for(const name of ['dashboard-runtime.ps1','migrate-development-state.ps1','native-startup.ps1'])fs.copyFileSync(path.join(root,'scripts',name),path.join(scripts,name));
  fs.copyFileSync(path.join(root,'pin-manager.js'),path.join(app,'pin-manager.js'));
- fs.writeFileSync(path.join(app,'.rovarin-development-state.json'),'{"schema":1}');
- const old=process.env.LOCALAPPDATA;process.env.LOCALAPPDATA=temp;let file;try{file=pins.developmentConfigFile(app)}finally{process.env.LOCALAPPDATA=old}
+ fs.writeFileSync(path.join(app,'.rovarin-development-state.json'),'{"schema":2}');
+ const old=process.env.LOCALAPPDATA,oldProfile=process.env.USERPROFILE;process.env.LOCALAPPDATA=temp;process.env.USERPROFILE=temp;let file;try{file=pins.developmentConfigFile(app)}finally{process.env.LOCALAPPDATA=old;if(oldProfile===undefined)delete process.env.USERPROFILE;else process.env.USERPROFILE=oldProfile}
  const data=path.dirname(file);fs.mkdirSync(data,{recursive:true});pins.writeConfig(file,{pin:'314159',retained:true});
  // Fixture ownership/ACL only; production migration never widens permissions.
  command(`$p='${data.replace(/'/g,"''")}';$a=New-Object Security.AccessControl.DirectorySecurity;$s=[Security.Principal.WindowsIdentity]::GetCurrent().User;$a.SetOwner($s);$a.SetAccessRuleProtection($true,$false);foreach($i in @($s,(New-Object Security.Principal.SecurityIdentifier('S-1-5-18')))){$a.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($i,'FullControl','ContainerInherit,ObjectInherit','None','Allow')))};Set-Acl -LiteralPath $p -AclObject $a`);

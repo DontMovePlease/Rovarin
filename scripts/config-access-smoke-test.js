@@ -6,25 +6,31 @@ try{
  const app=path.join(temp,'app'),data=path.join(temp,'data');fs.mkdirSync(app);fs.mkdirSync(data);
  assert.strictEqual(pins.dataDirectory(app),app,'development operational state remains in checkout');
  assert.strictEqual(pins.configurationFile(app),path.join(app,'config.json'));
- const previousLocal=process.env.LOCALAPPDATA;process.env.LOCALAPPDATA=temp;
+ const previousLocal=process.env.LOCALAPPDATA,previousProfile=process.env.USERPROFILE;process.env.LOCALAPPDATA=temp;process.env.USERPROFILE=temp;
  try {
   const developer=pins.developmentConfigFile(app),directory=path.dirname(developer);
   fs.mkdirSync(directory,{recursive:true});
   const original={pin:'123456',requireDesktopPin:true,autoCheckUpdates:false,desktopLocked:true};
   pins.writeConfig(developer,original);
-  fs.writeFileSync(path.join(app,'.rovarin-development-state.json'),'{"schema":1}');
+  fs.writeFileSync(path.join(app,'.rovarin-development-state.json'),'{"schema":2}');
   assert.strictEqual(pins.configurationFile(app),developer,'backend and Recovery share fixed unsynced config');
+  process.env.LOCALAPPDATA=path.join(temp,'other-package-view');
+  assert.strictEqual(pins.configurationFile(app),developer,'package-private AppData does not split the PIN');
+  assert.strictEqual(pins.dataDirectory(app),directory,'package-private AppData does not split runtime ownership');
+  process.env.LOCALAPPDATA=temp;
+  assert.notStrictEqual(pins.developmentConfigFile(app,1),developer,'legacy AppData remains explicitly distinct');
+
   assert.strictEqual(pins.dataDirectory(app),directory,'all marked-development state shares protected unsynced storage');
   fs.unlinkSync(path.join(app,'.rovarin-development-state.json'));
   assert.throws(()=>pins.configurationFile(app),/Development storage marker missing/);
   assert.throws(()=>pins.dataDirectory(app),/Development storage marker missing/);
   assert(!fs.existsSync(path.join(app,'config.json')),'temporary marker loss cannot create a second credential');
-  fs.writeFileSync(path.join(app,'.rovarin-development-state.json'),'{"schema":1}');
+  fs.writeFileSync(path.join(app,'.rovarin-development-state.json'),'{"schema":2}');
   assert.notStrictEqual(pins.developmentConfigFile(path.join(temp,'other')),developer,'checkouts cannot share credentials accidentally');
   assert.strictEqual(pins.readConfig(developer).pin,original.pin);
   pins.regeneratePin(app);
   const rotated=pins.readConfig(developer);assert.notStrictEqual(rotated.pin,original.pin);
-  const {pinCredential,...rotatedSettings}=rotated;assert.deepStrictEqual({...rotatedSettings,pin:original.pin},original,'Recovery preserves every unrelated field');
+  const {pinCredential,pinVersion,pinLifecycleVersion,...rotatedSettings}=rotated;assert.deepStrictEqual({...rotatedSettings,pin:original.pin},original,'Recovery preserves every unrelated field');
   assert.strictEqual(fs.lstatSync(developer).nlink,1);
   // Reproduce disappearance after successful resolution but before startup read.
   const resolvedBeforeRemoval=pins.configurationFile(app);
@@ -33,11 +39,11 @@ try{
   assert(!fs.existsSync(developer),'startup read race cannot reset a migrated PIN');
   assert.throws(()=>pins.configurationFile(app),/Migrated development configuration missing/);
   assert(!fs.existsSync(developer),'missing migrated state never generates a replacement PIN');
-  fs.writeFileSync(path.join(app,'.rovarin-development-state.json'),'{"schema":1,"path":"untrusted"}');
+  fs.writeFileSync(path.join(app,'.rovarin-development-state.json'),'{"schema":2,"path":"untrusted"}');
   assert.throws(()=>pins.configurationFile(app),/Invalid development storage marker/);
   fs.writeFileSync(path.join(app,'.rovarin-development-state.json'),'{broken');
   assert.throws(()=>pins.configurationFile(app));
- } finally { if(previousLocal===undefined)delete process.env.LOCALAPPDATA;else process.env.LOCALAPPDATA=previousLocal; }
+ } finally { if(previousProfile===undefined)delete process.env.USERPROFILE;else process.env.USERPROFILE=previousProfile;if(previousLocal===undefined)delete process.env.LOCALAPPDATA;else process.env.LOCALAPPDATA=previousLocal; }
  const setup=fs.readFileSync(path.join(__dirname,'setup.ps1'),'utf8');
  assert(setup.includes('--config-path'));assert(!setup.includes("Get-Content (Join-Path $dataDir 'config.json')"));
  fs.writeFileSync(path.join(app,'installation.json'),'{"schema":1,"channel":"windows-x64"}');

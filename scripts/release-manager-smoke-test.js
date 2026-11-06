@@ -12,6 +12,29 @@ const privacy=new Manager(path.resolve(__dirname,'..'));assert.throws(()=>privac
 const {SUITES,verifyAndPublish} = require('./release-verify');
 async function test(root = path.resolve(__dirname,'..')) {
   {
+    const temporary=fs.mkdtempSync(path.join(os.tmpdir(),'rovarin-missing-public-parent-'));
+    const publication=path.join(temporary,'publication');fs.mkdirSync(publication);
+    const files=['linux/PREVIEW-README.md','linux/platform.js','test-support/http-contract.js'];
+    const contents=new Map(files.map(file=>[file,Buffer.from('reviewed fixture: '+file)]));
+    const manager=new Manager(root);manager.publicRoot=publication;
+    manager.git=async args=>{
+      if(args[0]==='ls-files')return '';
+      if(args[0]==='add'){assert.deepStrictEqual(args.slice(3),files);return '';}
+      if(args[0]==='diff')return files.join('\0')+'\0';
+      throw Error('Unexpected fixture Git command');
+    };
+    try {
+      await manager.sync({files,contents});
+      assert(fs.statSync(path.join(publication,'linux')).isDirectory());
+      for(const [file,bytes] of contents)assert(fs.readFileSync(path.join(publication,file)).equals(bytes));
+      const outside=path.join(temporary,'outside');fs.mkdirSync(outside);
+      fs.symlinkSync(outside,path.join(publication,'redirect'),'junction');
+      await assert.rejects(manager.sync({files:['redirect/private.js'],contents:new Map([['redirect/private.js',Buffer.from('refused')]])}),/Redirecting path/);
+      assert(!fs.existsSync(path.join(outside,'private.js')));
+      console.log('PASS missing Linux/shared-contract parent directories preserve full source paths; redirecting parents remain refused');
+    } finally { fs.rmSync(temporary,{recursive:true,force:true}); }
+  }
+  {
     const sha='a'.repeat(40), email='DontMovePlease@users.noreply.github.com';
     let row=[sha,'DontMovePlease',email,'GitHub','noreply@github.com'].join('\t');
     let response={sha,author:{login:'DontMovePlease'},committer:{login:'web-flow'},commit:{verification:{verified:true,reason:'valid'}}}, checks=0;
@@ -83,6 +106,7 @@ async function test(root = path.resolve(__dirname,'..')) {
   const upgrade=toolCalls.find(c=>c.args[0]==='upgrade');assert.deepStrictEqual(upgrade.args,['upgrade','--id','GitHub.cli','--exact','--source','winget','--version','2.61.0','--disable-interactivity']);
   assert(!toolCalls.some(c=>c.args.includes('--all')));
   assert.strictEqual(inventory.pinned.length,4);
+  assert.strictEqual(inventory.pinned.find(item=>item.name==='Bundled Node runtime').version,'24.22.1','tool inventory reports the reviewed runtime pin, not a PowerShell variable');
   console.log('PASS help/safety labels, tool versions/updates, missing tools/WinGet, expired auth, check failure, cancel/confirmation, pinned exclusions and exact mocked update');
   const {CODING,redact}=require('./release-manager-tools');
   assert(!CODING.some(t=>/ollama|openrouter|groq/i.test(t.id)));
@@ -231,7 +255,7 @@ async function test(root = path.resolve(__dirname,'..')) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(),'rovarin-release-manager-'));
   const git = (cwd,args) => execFileSync('git',['-c','core.autocrlf=false','-c','user.name=DontMovePlease','-c','user.email=DontMovePlease@users.noreply.github.com',...args],{cwd,windowsHide:true,encoding:'utf8',timeout:15000,stdio:['pipe','pipe','pipe']}).trim();
   let sequence = 0;
-  function fixture() {
+  function fixture(targetVersion = '0.1.1') {
     const dir = path.join(temp,String(++sequence)); fs.mkdirSync(dir);
     const policy = JSON.parse(fs.readFileSync(path.join(root,'scripts/release-public-files.json'),'utf8'));
     for (const file of policy) if (fs.existsSync(path.join(root,file))) { fs.mkdirSync(path.dirname(path.join(dir,file)),{recursive:true}); fs.copyFileSync(path.join(root,file),path.join(dir,file)); }
@@ -258,8 +282,8 @@ async function test(root = path.resolve(__dirname,'..')) {
         if (args[0] === 'release' && args[1] === 'edit') { draft = false; return ''; }
         if (args[0] === 'api') {
           const publish = path.join(dir,'publish');
-          return JSON.stringify({tag_name:'v0.1.1',draft,html_url:'https://github.com/DontMovePlease/Rovarin/releases/tag/v0.1.1',assets:['RovarinSetup.exe','RovarinSetup.sha256','release.json'].map(name=>{
-            const bytes=fs.readFileSync(path.join(publish,name)); return {name,size:bytes.length,state:'uploaded',digest:'sha256:'+(corruptUpload ? '0'.repeat(64) : hash(bytes))};
+          return JSON.stringify({tag_name:'v'+targetVersion,draft,html_url:'https://github.com/DontMovePlease/Rovarin/releases/tag/v'+targetVersion,assets:['RovarinSetup.exe','RovarinSetup.sha256','release.json',...require('./release-linux-preview').names(targetVersion)].map(name=>{
+            const bytes=fs.readFileSync(path.join(name.startsWith('rovarin-')?path.join(dir,'dist/linux-preview'):publish,name)); return {name,size:bytes.length,state:'uploaded',digest:'sha256:'+(corruptUpload ? '0'.repeat(64) : hash(bytes))};
           })});
         }
         throw new Error('Unexpected fixture gh command');
@@ -330,14 +354,14 @@ async function test(root = path.resolve(__dirname,'..')) {
     fs.appendFileSync(path.join(f.dir,'server.js'),'\n// '+['C:','Users','FixturePerson','private'].join('\\')+'\n'); await assert.rejects(f.manager.source(),/personal path/); fs.copyFileSync(path.join(root,'server.js'),path.join(f.dir,'server.js'));
     fs.appendFileSync(path.join(f.dir,'server.js'),'\n// ghp_'+'A'.repeat(30)+'\n'); await assert.rejects(f.manager.source(),/Possible local/); fs.copyFileSync(path.join(root,'server.js'),path.join(f.dir,'server.js'));
     // Secret values stay in disposable unsynced storage and never reach output.
-    const pins=require('../pin-manager'),previousLocal=process.env.LOCALAPPDATA;
-    process.env.LOCALAPPDATA=path.join(temp,'private-local');
+    const pins=require('../pin-manager'),previousLocal=process.env.LOCALAPPDATA,previousProfile=process.env.USERPROFILE;
+    process.env.LOCALAPPDATA=path.join(temp,'private-local');process.env.USERPROFILE=path.join(temp,'private-profile');
     try {
       const canonical=pins.developmentConfigFile(f.dir);
       fs.mkdirSync(path.dirname(canonical),{recursive:true});
       pins.writeConfig(canonical,{pin,requireDesktopPin:true});
       fs.unlinkSync(path.join(f.dir,'config.json'));
-      fs.writeFileSync(path.join(f.dir,'.rovarin-development-state.json'),'{"schema":1}');
+      fs.writeFileSync(path.join(f.dir,'.rovarin-development-state.json'),'{"schema":2}');
       assert(!fs.existsSync(path.join(f.dir,'config.json')),'checkout config remains absent');
       assert(f.manager.secrets().includes(pin),'privacy preflight reads canonical unsynced config');
       await f.manager.source();
@@ -364,7 +388,7 @@ async function test(root = path.resolve(__dirname,'..')) {
       pins.writeConfig(path.join(data,'config.json'),{pin});
       assert(installed.secrets().includes(pin),'installed sibling config is checked');
       assert(!fs.existsSync(path.join(app,'config.json')),'installed app has no config copy');
-    } finally { if(previousLocal===undefined)delete process.env.LOCALAPPDATA;else process.env.LOCALAPPDATA=previousLocal; }
+    } finally { if(previousProfile===undefined)delete process.env.USERPROFILE;else process.env.USERPROFILE=previousProfile;if(previousLocal===undefined)delete process.env.LOCALAPPDATA;else process.env.LOCALAPPDATA=previousLocal; }
     console.log('PASS canonical unsynced/installed privacy, absent fresh-checkout config, secret/config publication rejection and fail-closed missing/unsafe config (no secrets logged)');
     git(f.pub,['remote','set-url','origin','https://github.com/Elsewhere/Other.git']); await assert.rejects(f.manager.publicPreflight(),/does not match/); git(f.pub,['remote','set-url','origin','https://github.com/DontMovePlease/Rovarin.git']);
     const h=fixture(); fs.writeFileSync(path.join(h.pub,'AGENTS.md'),'private fixture'); git(h.pub,['add','-f','AGENTS.md']);git(h.pub,['commit','-m','Fixture forbidden history']);git(h.pub,['rm','AGENTS.md']);git(h.pub,['commit','-m','Fixture removal']); await assert.rejects(h.manager.publicPreflight(),/Public history includes/);
@@ -397,6 +421,17 @@ async function test(root = path.resolve(__dirname,'..')) {
     assert(!cancelled.calls.some(c=>c.args.includes('push') || c.args.includes('commit') || c.command==='gh' && c.args.includes('create')));
     console.log('PASS final artifact summary and cancelled publication makes no source commit/push/tag/release');
     console.log('PASS mocked full publish pipeline, exact source tag, draft-first digest checks and three-asset allowlist (no network writes)');
+    // Same reviewed pipeline, with the accepted Linux artifact and five assets.
+    const coordinated=fixture('0.6.0');
+    const linuxDir=path.join(coordinated.dir,'dist/linux-preview');fs.mkdirSync(linuxDir,{recursive:true});
+    for(const name of require('./release-linux-preview').names('0.6.0'))fs.copyFileSync(path.join(root,'dist/linux-preview',name),path.join(linuxDir,name));
+    fs.appendFileSync(path.join(coordinated.dir,'README.md'),'\nCoordinated fixture source change.\n');
+    const combined=await coordinated.manager.operate('Publish',{confirm:true,version:'0.6.0'});
+    assert.strictEqual(combined.version,'0.6.0');
+    const coordinatedUpload=coordinated.calls.find(c=>c.command==='gh'&&c.args[0]==='release'&&c.args[1]==='upload');
+    assert.deepStrictEqual(coordinatedUpload.args.slice(3,8).map(p=>path.basename(p)),['RovarinSetup.exe','RovarinSetup.sha256','release.json',...require('./release-linux-preview').names('0.6.0')]);
+    assert(coordinated.calls.some(c=>c.command===path.basename(process.execPath)&&c.args.includes('scripts/release-verify.js')));
+    console.log('PASS coordinated v0.6.0 mocked Windows gate, five exact assets and draft digest verification (no network writes)');
     for(const fault of ['failedBuild','failedVerify','editDuringVerify','corruptUpload']) {
       const fail=fixture(); fs.appendFileSync(path.join(fail.dir,'public/app.css'),'\n/* changed */\n'); fail.set({[fault]:true});
       await assert.rejects(fail.manager.operate('Publish',{confirm:true,version:'0.1.1'}));

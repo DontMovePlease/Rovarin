@@ -10,8 +10,8 @@ const { CpuTemperatureProvider } = require('./cpu-temperature-provider');
 const { normalizeProcessRecords, isProcessSnapshotStale, ProcessDisplayCache } = require('./process-stats');
 const { terminateProcess, processTree } = require('./process-termination');
 const { AppManager } = require('./app-manager');
-const { loadConfig, readConfig, validPin, writeConfig, generatePin, desktopTrust, configurationFile, dataDirectory, verifyPin } = require('./pin-manager');
-const { bindServer, claimInstance, portCandidates } = require('./server-lifecycle');
+const { loadConfig, readConfig, validPin, writeConfig, desktopTrust, configurationFile, dataDirectory, verifyPin, credentialRevision, updatePin, validateNewPin } = require('./pin-manager');
+const { bindServer, claimInstance, portCandidates, runtimeFingerprint } = require('./server-lifecycle');
 const { EnhancedSupport, isLocalDesktopRequest } = require('./enhanced-support');
 const { UninstallManager } = require('./uninstall-manager');
 const { UpdateManager } = require('./update-manager');
@@ -21,7 +21,6 @@ const { createLocalLifecycleClient } = require('./maintenance-service');
 
 // Configuration
 const PORT = process.env.PORT || 7331;
-const IS_INSTALLED = fs.existsSync(path.join(__dirname, 'installation.json'));
 const DATA_DIR = (() => { try { return dataDirectory(); } catch (_) {
   console.error('Saved development storage is invalid or inaccessible; server will not start.'); process.exit(1);
 } })();
@@ -55,16 +54,22 @@ const sessions = new Map();
 const loginAttempts = new Map();
 const LOGIN_FAILURE_LIMIT = 5;
 const LOGIN_LOCK_MS = 60 * 1000;
+// Session epochs are private to this backend, not offline PIN fingerprints.
+const SESSION_CREDENTIAL_KEY = crypto.randomBytes(32);
+function sessionEpoch(value) { return crypto.createHmac('sha256',SESSION_CREDENTIAL_KEY).update(JSON.stringify([value.pinVersion || '',value.pinSetup || value.pin])).digest('hex'); }
+function nativePinRevision() { return crypto.createHmac('sha256',SESSION_CREDENTIAL_KEY).update('pin-state:' + savedPinRevision).digest('hex'); }
 
-// Load or generate PIN for private access
+// Startup only reads established state. Enrollment is explicitly provisioned locally.
 let config;
 try {
-  config = loadConfig(CONFIG_FILE, { allowCreate: IS_INSTALLED || CONFIG_FILE === path.join(__dirname, 'config.json') });
+  config = loadConfig(CONFIG_FILE, { allowCreate: false });
 } catch (_) {
   console.error('Saved access configuration is invalid or inaccessible; server will not start.'); process.exit(1);
 }
 // Explicit test/development override never changes the saved PIN.
 let savedAccessPin = config.pin;
+let savedPinRevision = credentialRevision(config);
+let savedSessionEpoch = sessionEpoch(config);
 if (validPin(process.env.PC_MONITOR_PIN)) { config.pin = process.env.PC_MONITOR_PIN; delete config.pinCredential; }
 let pinConfigHealthy = true;
 let lastPinCheckTime = 0;
@@ -80,13 +85,14 @@ function refreshAccessPin(force = false) {
     const saved = readConfig(CONFIG_FILE);
     lastPinCheckTime = now;
     transientPinFailures = 0;
-    if (!pinConfigHealthy || saved.pin !== savedAccessPin) {
+    if (!pinConfigHealthy || sessionEpoch(saved) !== savedSessionEpoch) {
       if (saved.pin !== savedAccessPin) loginAttempts.clear(); // New local credential, new guess budget.
       authLog('REFRESH_PIN_CHANGED_OR_UNHEALTHY', { healthyBefore: pinConfigHealthy, pinMismatch: saved.pin !== savedAccessPin, activeSessions: sessions.size });
       for (const session of Array.from(sessions.values())) revokeSession(session, 'pin-changed-or-unhealthy');
       config = saved;
       if (validPin(process.env.PC_MONITOR_PIN)) config.pin = process.env.PC_MONITOR_PIN;
       savedAccessPin = saved.pin;
+      savedSessionEpoch = sessionEpoch(saved);
     }
     if (saved.requireDesktopPin !== config.requireDesktopPin || saved.desktopLocked !== config.desktopLocked) {
       if (saved.requireDesktopPin !== false || saved.desktopLocked) {
@@ -95,13 +101,14 @@ function refreshAccessPin(force = false) {
       config.requireDesktopPin = saved.requireDesktopPin;
       config.desktopLocked = saved.desktopLocked;
     }
+    savedPinRevision = credentialRevision(saved);
     config.requirePhoneRemovalPin=saved.requirePhoneRemovalPin===true;
     if(!validPin(process.env.PC_MONITOR_PIN))config.pinCredential=saved.pinCredential;
     pinConfigHealthy = true;
     return true;
   } catch (err) {
     const isTransient = err && (err.code === 'EBUSY' || err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EMFILE' || err.code === 'ENFILE');
-    if (isTransient && pinConfigHealthy && validPin(savedAccessPin) && transientPinFailures < 3) {
+    if (!force && isTransient && pinConfigHealthy && validPin(savedAccessPin) && transientPinFailures < 3) {
       transientPinFailures++;
       lastPinCheckTime = now;
       authLog('REFRESH_PIN_TRANSIENT_ERROR', { error: err.message, code: err.code, transientPinFailures });
@@ -115,7 +122,7 @@ function refreshAccessPin(force = false) {
   }
 }
 
-const bindingState = { status: 'starting', preferredPort: Number(PORT), defaultPort: 7331, actualPort: null, fallbackRequired: false };
+const bindingState = { sourceFingerprint: runtimeFingerprint(), status: 'starting', preferredPort: Number(PORT), defaultPort: 7331, actualPort: null, fallbackRequired: false };
 let serverInstance;
 try { portCandidates(PORT); serverInstance = claimInstance(DATA_DIR, PORT); serverInstance.write(bindingState); }
 catch (_) { console.error('[Startup] Could not claim this server instance or preferred port is invalid. No second instance was started.'); process.exit(1); }
@@ -128,13 +135,13 @@ process.on('SIGTERM', () => { cleanupPid(); process.exit(0); });
 // Find Tailscale IPv4 address
 function getTailscaleIP() {
   const nets = os.networkInterfaces();
-  for (const [name, addrs] of Object.entries(nets)) {
+  for (const addrs of Object.values(nets)) {
     if (!addrs) continue;
     for (const addr of addrs) {
       if (addr.family === 'IPv4' || addr.family === 4) {
         // Tailscale CGNAT subnet is 100.64.0.0/10 (100.64.0.0 to 100.127.255.255)
-        // or interface name includes 'tailscale'
-        if (name.toLowerCase().includes('tailscale') || isTailscaleIP(addr.address)) {
+        // A disconnected named adapter can have an APIPA address instead.
+        if (isTailscaleIP(addr.address)) {
           return addr.address;
         }
       }
@@ -725,13 +732,16 @@ function assessHealth(cpu, ram, gpu, drives, latency) {
     score -= 5;
   }
 
-  let rating = 'Optimal';
+  let rating = 'Healthy';
   let badgeColor = 'emerald';
-  if (score < 60) {
+  const hasCritical = issues.some(i => i.level === 'critical');
+  const warningCount = issues.filter(i => i.level === 'warning').length;
+
+  if (hasCritical || score < 60) {
     rating = 'Attention Needed';
     badgeColor = 'rose';
-  } else if (score < 85) {
-    rating = 'Good';
+  } else if (warningCount > 0 || score < 85) {
+    rating = warningCount === 1 ? '1 Advisory' : (warningCount > 1 ? `${warningCount} Advisories` : 'Advisory');
     badgeColor = 'amber';
   }
 
@@ -739,6 +749,7 @@ function assessHealth(cpu, ram, gpu, drives, latency) {
     score: Math.max(0, score),
     rating,
     badgeColor,
+    advisoriesCount: warningCount + (hasCritical ? issues.filter(i => i.level === 'critical').length : 0),
     issues: issues.length > 0 ? issues : [{ level: 'optimal', text: 'All hardware systems running smoothly' }]
   };
 }
@@ -1116,11 +1127,11 @@ function parseCookies(request) {
 
 function safeEqualPin(candidate) { return verifyPin(candidate,config); }
 
-function issueSession(req, res, desktopAutomatic = false) {
+function issueSession(req, res, desktopAutomatic = false, verifiedEpoch = savedSessionEpoch) {
   for (const session of Array.from(sessions.values())) if (session.expiresAt <= Date.now()) revokeSession(session, 'issueSession-expired');
   if (sessions.size >= MAX_SESSIONS) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Login is temporarily unavailable.' })); return; }
   const token = crypto.randomBytes(32).toString('base64url');
-  sessions.set(token, { id: crypto.randomBytes(16).toString('hex'), expiresAt: Date.now() + SESSION_TTL_MS, desktopAutomatic });
+  sessions.set(token, { id: crypto.randomBytes(16).toString('hex'), expiresAt: Date.now() + SESSION_TTL_MS, desktopAutomatic, credentialEpoch:verifiedEpoch });
   const secure = req.socket.encrypted ? '; Secure' : '';
   res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': [
     `auth_pin=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`,
@@ -1148,7 +1159,7 @@ function verifyRemovalPin(req,pin,reply){
   loginAttempts.delete(rate.key);return true;
 }
 function getAuthenticatedSession(req) {
-  if (!refreshAccessPin()) {
+  if (!refreshAccessPin(true)) {
     if (req) req.authFailureReason = 'pin-config-unhealthy';
     return null;
   }
@@ -1166,6 +1177,7 @@ function getAuthenticatedSession(req) {
     if (req) req.authFailureReason = `session-not-found(activeSessions=${sessions.size})`;
     return null;
   }
+  if (session.credentialEpoch !== savedSessionEpoch) { revokeSession(session,'credential-revision-mismatch'); if(req)req.authFailureReason='credential-revision-mismatch'; return null; }
   if (session.expiresAt <= Date.now()) {
     if (req) req.authFailureReason = 'session-expired';
     sessions.delete(token);
@@ -1265,7 +1277,7 @@ const MIME_TYPES = {
   '.png': 'image/png',
   '.ico': 'image/x-icon'
 };
-const PUBLIC_FILES = new Set(["liquid-bootstrap.js","liquid-glass.css","liquid-glass.js","liquid-shaders.js","three-glass.module.js",'power.js', 'power.css', 'index.html', 'login.html', 'app.css', 'maintenance.css', 'processes.css', 'desktop.css', 'app.js', 'maintenance.js', 'processes.js', 'login.js', 'diagnostics.js', 'diagnostics.css', 'enhanced-support.js', 'uninstall.js', 'apps.js', 'apps.css', 'app-leftovers.js']);
+const PUBLIC_FILES = new Set(["liquid-bootstrap.js","liquid-glass.css","liquid-glass.js","liquid-shaders.js","three-glass.module.js",'power.js', 'power.css', 'index.html', 'login.html', 'app.css', 'maintenance.css', 'processes.css', 'desktop.css', 'app.js', 'maintenance.js', 'processes.js', 'pin-lifecycle.js', 'pin-lifecycle.css', 'login.js', 'diagnostics.js', 'diagnostics.css', 'enhanced-support.js', 'uninstall.js', 'apps.js', 'apps.css', 'app-leftovers.js']);
 
 let dashboardAssetSignature = '';
 let dashboardAssetRevision = '';
@@ -1316,7 +1328,7 @@ const server = http.createServer((req, res) => {
   const pathname = parsedUrl.pathname;
 
   const isLoginPost = req.method === 'POST' && pathname === '/api/login';
-  const isDesktopPost = req.method === 'POST' && ['/api/desktop/auth', '/api/desktop/security', '/api/desktop/updates', '/api/desktop/maintenance'].includes(pathname);
+  const isDesktopPost = req.method === 'POST' && ['/api/desktop/auth', '/api/desktop/pin', '/api/desktop/security', '/api/desktop/updates', '/api/desktop/maintenance'].includes(pathname);
   const isLogoutPost = req.method === 'POST' && pathname === '/api/logout';
   const isMaintenancePost = req.method === 'POST' && pathname === '/api/maintenance/run';
   const isMonitoringLeasePost = req.method === 'POST' && pathname === '/api/monitoring/lease';
@@ -1352,9 +1364,33 @@ const server = http.createServer((req, res) => {
         let data; try { data = JSON.parse(body); } catch (_) {}
         if (err || !data || typeof data !== 'object' || Array.isArray(data)) { reply(400, { success: false, error: 'Invalid request.' }); return; }
         if (!refreshAccessPin(true)) { reply(503, { success: false, error: 'Access configuration unavailable.' }); return; }
+        if (pathname === '/api/desktop/pin') {
+          const fields = Object.keys(data).sort().join(',');
+          if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '') || parsedUrl.search) { reply(400, {success:false,error:'Invalid PIN request.'}); return; }
+          const session = getAuthenticatedSession(req);
+          if (data.action === 'status' && fields === 'action') {
+            if (!config.pinSetup && !session) { reply(401,{success:false,error:'Sign in before changing your PIN.'}); return; }
+            reply(200,{success:true,setupRequired:!!config.pinSetup,revision:nativePinRevision()}); return;
+          }
+          if (!['enroll','change'].includes(data.action) || fields !== (data.action === 'enroll' ? 'action,confirmPin,newPin,revision' : 'action,confirmPin,currentPin,newPin,revision')) { reply(400,{success:false,error:'Invalid PIN request.'}); return; }
+          if (data.action === 'change' && !session) { reply(401,{success:false,error:'Sign in before changing your PIN.'}); return; }
+          if ((data.action === 'enroll') !== !!config.pinSetup) { reply(409,{success:false,error:'PIN setup is already complete, or must be completed first.'}); return; }
+          if (typeof data.revision !== 'string' || data.revision !== nativePinRevision()) { reply(409,{success:false,error:'Sign-in settings changed. Reopen this screen and try again.'}); return; }
+          if (data.action === 'change' && !verifyRemovalPin(req,data.currentPin,reply)) return;
+          try {
+            validateNewPin(data.newPin,data.confirmPin);
+            const committed = updatePin(CONFIG_FILE,{...data,revision:savedPinRevision}), verifiedEpoch = sessionEpoch(committed);
+            // Revoke every old session, including native sessions, before issuing
+            // the caller a replacement ordinary session after verified setup/change.
+            if (!refreshAccessPin(true)) { reply(503,{success:false,error:'Saved access configuration is unavailable. No PIN confirmation was issued.'}); return; }
+            if (savedSessionEpoch !== verifiedEpoch) { reply(409,{success:false,error:'Your PIN changed again during confirmation. Sign in with the latest PIN.'}); return; }
+            issueSession(req,res,false,verifiedEpoch);
+          } catch (error) { reply(409,{success:false,error:error.message}); }
+          return;
+        }
         if (pathname === '/api/desktop/auth') {
           if (Object.keys(data).length) { reply(400, { success: false, error: 'Invalid request.' }); return; }
-          if (config.requireDesktopPin !== false || config.desktopLocked) { reply(401, { success: false, error: 'Enter your Rovarin PIN.' }); return; }
+          if (config.pinSetup || config.requireDesktopPin !== false || config.desktopLocked) { reply(401, { success: false, error: 'Enter your Rovarin PIN.' }); return; }
           if (getAuthenticatedSession(req)) { reply(200, { success: true }); return; }
           issueSession(req, res, true); return;
         }
@@ -1424,12 +1460,7 @@ const server = http.createServer((req, res) => {
             if (data.requireDesktopPin) revokeSession(session, 'desktop-pin-required-changed');
             reply(200, { success: true, requireDesktopPin: data.requireDesktopPin }); return;
           }
-          if (data.action === 'rotate' && fields.length === 2 && data.confirmed === true) {
-            const saved = readConfig(CONFIG_FILE), pin = generatePin(saved.pin);
-            writeConfig(CONFIG_FILE, { ...saved, pin, desktopLocked: true });
-            refreshAccessPin(true);
-            reply(200, { success: true, pin }); return;
-          }
+
         } catch (_) { reply(503, { success: false, error: 'Security settings could not be saved.' }); return; }
         reply(400, { success: false, error: 'Invalid request.' });
       });
@@ -1471,6 +1502,7 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ success: false, error: 'Too many attempts. Try again shortly.' })); return;
       }
       if(!pinConfigHealthy){res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({success:false,code:'credential-unavailable',error:'Saved access configuration is temporarily unavailable.'}));return;}
+      if(config.pinSetup){res.writeHead(409,{'Content-Type':'application/json'});res.end(JSON.stringify({success:false,code:'setup-required',error:'Create your PIN in the native Rovarin app on this PC first.'}));return;}
       if (!validShape || !validPin(data.pin) || !safeEqualPin(data.pin)) {
         rate.state.failures++;
         if (rate.state.failures >= LOGIN_FAILURE_LIMIT) rate.state.lockedUntil = Date.now() + LOGIN_LOCK_MS;
@@ -1485,17 +1517,19 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ success: false, error: rate.state.lockedUntil ? 'Too many attempts. Try again shortly.' : 'Invalid PIN.', ...(!rate.state.lockedUntil&&validShape&&validPin(data.pin)&&data.pin.length!==config.pin.length?{code:'pin-mode-changed',pinMode:String(config.pin.length)}:{}) }));
         return;
       }
+      const verifiedEpoch = savedSessionEpoch;
       loginAttempts.delete(rate.key);
       if (config.desktopLocked) {
-        try { writeConfig(CONFIG_FILE, { ...readConfig(CONFIG_FILE), desktopLocked: false }); refreshAccessPin(true); }
+        try { const saved=readConfig(CONFIG_FILE); if(sessionEpoch(saved)!==verifiedEpoch)throw new Error('credential-changed');writeConfig(CONFIG_FILE, { ...saved, desktopLocked: false }); refreshAccessPin(true); }
         catch (_) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Access configuration unavailable.' })); return; }
       }
+      if (!refreshAccessPin(true) || savedSessionEpoch !== verifiedEpoch) { res.writeHead(409,{'Content-Type':'application/json'});res.end(JSON.stringify({success:false,code:'credential-changed',error:'Your PIN changed during sign-in. Try the latest PIN.'}));return; }
       if (sessions.size >= MAX_SESSIONS) {
         for (const [token, session] of sessions) if (session.expiresAt <= Date.now()) revokeSession(session, 'login-cleanup-expired');
       }
       if (sessions.size >= MAX_SESSIONS) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Login is temporarily unavailable.' })); return; }
       const token = crypto.randomBytes(32).toString('base64url');
-      const session = { id: crypto.randomBytes(16).toString('hex'), expiresAt: Date.now() + SESSION_TTL_MS };
+      const session = { id: crypto.randomBytes(16).toString('hex'), expiresAt: Date.now() + SESSION_TTL_MS, credentialEpoch:verifiedEpoch };
       sessions.set(token, session);
       const secure = req.socket.encrypted ? '; Secure' : '';
       authLog('LOGIN_SUCCESS', {
@@ -1530,7 +1564,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const isStaticAsset = ["/liquid-bootstrap.js","/liquid-glass.css","/liquid-glass.js","/liquid-shaders.js","/three-glass.module.js",'/power.css', '/power.js', '/app.css', '/maintenance.css', '/processes.css', '/app.js', '/maintenance.js', '/processes.js', '/apps.js', '/apps.css', '/app-leftovers.js', '/login.js'].includes(pathname);
+  const isStaticAsset = ["/liquid-bootstrap.js","/liquid-glass.css","/liquid-glass.js","/liquid-shaders.js","/three-glass.module.js",'/power.css', '/power.js', '/app.css', '/maintenance.css', '/processes.css', '/app.js', '/maintenance.js', '/processes.js', '/apps.js', '/apps.css', '/app-leftovers.js', '/pin-lifecycle.js', '/pin-lifecycle.css', '/login.js'].includes(pathname);
 
   // Reuse authenticated lease traffic to detect UI edits without another poller.
   if (session && pathname === '/api/monitoring/lease') {
@@ -1552,12 +1586,13 @@ const server = http.createServer((req, res) => {
       res.setHeader('Content-Type', 'text/html; charset=UTF-8');
       // Non-secret input mode prevents a legacy PIN prefix becoming an auth attempt.
       // No value/hash is rendered; unhealthy configuration leaves manual entry.
-      const pinMode = refreshAccessPin(true) ? String(config.pin.length) : 'manual';
+      const pinMode = refreshAccessPin(true) ? String(config.pin?.length || 'manual') : 'manual';
       res.setHeader('Cache-Control', 'no-store');
-      let loginHtml = fs.readFileSync(loginHtmlPath, 'utf8').replace(
+      let loginHtml = fs.readFileSync(loginHtmlPath, 'utf8').replace('<meta name="rovarin-pin-setup" content="false">', '<meta name="rovarin-pin-setup" content="' + Boolean(config.pinSetup) + '">').replace(
         '<meta name="rovarin-pin-mode" content="manual">',
         '<meta name="rovarin-pin-mode" content="' + pinMode + '">'
       );
+      if(config.pinSetup)loginHtml=loginHtml.replace('id="pinInput"','id="pinInput" disabled hidden').replace('id="unlockBtn"','id="unlockBtn" disabled hidden');
       try {
         const revision = getDashboardAssetRevision();
         loginHtml = loginHtml.replace(/(href|src)="\/([a-z-]+\.(?:css|js))(?:\?[^" ]*)?"/g,

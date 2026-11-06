@@ -5,6 +5,14 @@ $runtime = Get-DashboardRuntime $projectDir
 if ($runtime.state -eq 'starting' -or ($runtime.state -eq 'owned' -and -not $runtime.healthy)) {
     $runtime = Wait-DashboardRuntime $projectDir
 }
+# Reopening the native app must not reuse Node modules from an older build.
+if ($runtime.state -eq 'owned' -and $runtime.stale) {
+    Write-Host '[ACTION] Restarting the verified Rovarin backend after a code update.'
+    & (Join-Path $PSScriptRoot 'stop.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Owned backend shutdown failed; no replacement started.' }
+    $runtime = Get-DashboardRuntime $projectDir
+    if ($runtime.state -ne 'none') { throw 'Previous backend still owns its runtime; no replacement started.' }
+}
 if ($runtime.state -eq 'owned') {
     if ($runtime.healthy) { Write-Host "[STATUS] Dashboard is already running (PID $($runtime.pid)); http://127.0.0.1:$($runtime.port)" -ForegroundColor Yellow }
     else { Write-Host "[ERROR] Dashboard PID $($runtime.pid) owns port $($runtime.port), but the HTTP health check failed. No second server started." -ForegroundColor Red }

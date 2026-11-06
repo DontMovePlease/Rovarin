@@ -45,7 +45,19 @@ async function getProcessImageName(pid) {
   return processName ? `${processName}.exe` : null;
 }
 
-async function getPortListenerPids(port) {
+async function getPortListenerPids(port, expectedPid) {
+  // Use the same listener-only Windows TCP query as native startup. On some
+  // hosts netstat omits a healthy listener, which misclassifies it as starting.
+  // This is positive PID ownership evidence, never an HTTP/localhost shortcut.
+  if (expectedPid !== null) {
+    const helper = path.join(__dirname, 'dashboard-runtime.ps1').replace(/'/g, "''");
+    const owned = await runWindowsCommand('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+      `. '${helper}'; if (Get-DashboardListener ${port} ${expectedPid}) { 'owned' }`
+    ], 10000);
+    if (owned.trim() === 'owned') return [expectedPid];
+  }
+  // Retain conflict detection; an inconclusive result never authorizes a kill.
   const output = await runWindowsCommand('netstat.exe', ['-ano', '-p', 'tcp']);
   const pids = [];
   for (const line of output.split(/\r?\n/)) {
@@ -93,7 +105,7 @@ async function inspectExistingDashboard(projectDir) {
   }
 
   let listeners;
-  try { listeners = await getPortListenerPids(port); }
+  try { listeners = await getPortListenerPids(port, pid); }
   catch (_) { return { state: 'unsafe', reason: 'the recorded port listener could not be verified' }; }
 
   if (pid === null) {

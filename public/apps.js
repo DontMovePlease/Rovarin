@@ -234,11 +234,13 @@
       tile.classList.toggle('is-wiggling',qlEditMode);
     }
   }
-  document.addEventListener('pointerdown',e=>{
-    if(qlEditMode&&!e.target.closest('#quickLaunchRail')){
-      setQlEditMode(false);
-    }
-  });
+  document.addEventListener('click',e=>{
+    if(!qlEditMode)return;
+    if(e.target.closest('.quick-launch-unpin-btn'))return;
+    e.preventDefault();
+    e.stopPropagation();
+    setQlEditMode(false);
+  },{capture:true});
   window.addEventListener('keydown',e=>{
     if(e.key==='Escape'&&qlEditMode){
       setQlEditMode(false);
@@ -316,6 +318,7 @@
         cancelLongPress();
         longPressTimer=setTimeout(()=>{
           longPressTriggered=true;
+          window.getSelection?.()?.removeAllRanges?.();
           setQlEditMode(true);
           if(navigator.vibrate){
             try{navigator.vibrate(40);}catch(_){}
@@ -875,7 +878,7 @@
     }
   }
   form.addEventListener('submit',async event=>{
-    event.preventDefault();if(!canRemove()||operationBusy||(window.RovarinRemovalSecurity.requirePin&&!/^(?:\d{6}|\d{12})$/.test(pin.value)))return;
+    event.preventDefault();if(!canRemove()||operationBusy||(window.RovarinRemovalSecurity.requirePin&&!/^(?:\d{6}|\d{8}|\d{12})$/.test(pin.value)))return;
     get('appsConfirmSubmit').disabled=true;get('appsConfirmError').textContent='Checking the reviewed selection…';
     const body=JSON.stringify({...review,...(window.RovarinRemovalSecurity.requirePin?{pin:pin.value}:{}),confirmation:'uninstall-apps'});pin.value='';
     try{
@@ -900,12 +903,75 @@
   get('appsSelectModeBtn').addEventListener('click',()=>setSelectionMode(!selectionMode));
   get('appsDoneSelection').addEventListener('click',()=>setSelectionMode(false));
 
+  // Native mobile pickers choose their own placement. This shared listbox stays
+  // below its trigger; original selects retain the existing value/change contract.
+  const filterMenu=node('div',undefined,'apps-filter-menu');
+  filterMenu.id='appsFilterMenu';filterMenu.setAttribute('role','listbox');
+  const hasPopover=typeof filterMenu.showPopover==='function';
+  if(hasPopover)filterMenu.setAttribute('popover','auto');else filterMenu.hidden=true;
+  document.body.append(filterMenu);
+  let activeFilter=null;
+  function closeFilter(restoreFocus=false){
+    if(!activeFilter)return;
+    const previous=activeFilter;activeFilter=null;
+    previous.button.setAttribute('aria-expanded','false');
+    if(hasPopover&&filterMenu.matches(':popover-open'))filterMenu.hidePopover();
+    else if(!hasPopover)filterMenu.hidden=true;
+    if(restoreFocus)previous.button.focus({preventScroll:true});
+  }
+  for(const id of ['appsType','appsSort','startupScope','startupStatusFilter']){
+    const select=get(id);if(!select)continue;
+    const label=select.labels[0],name=label.firstChild.textContent.trim();
+    const button=node('button',undefined,'apps-filter-trigger');button.type='button';
+    button.id=id+'Trigger';button.setAttribute('aria-haspopup','listbox');
+    button.setAttribute('aria-controls',filterMenu.id);button.setAttribute('aria-expanded','false');
+    select.classList.add('apps-filter-source');select.tabIndex=-1;select.setAttribute('aria-hidden','true');
+    label.htmlFor=button.id;label.append(button);
+    const sync=()=>{const text=select.selectedOptions[0]?.textContent||'';button.textContent=text;button.setAttribute('aria-label',name+': '+text);button.disabled=select.disabled;};
+    const observer=new MutationObserver(sync);observer.observe(select,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','selected']});
+    select.addEventListener('change',sync);sync();
+    function open(){
+      if(activeFilter?.select===select){closeFilter();return;}
+      closeFilter();activeFilter={select,button};filterMenu.replaceChildren();
+      filterMenu.setAttribute('aria-label',name);
+      for(const option of select.options){
+        const item=node('button',option.textContent,'apps-filter-option');item.type='button';
+        item.setAttribute('role','option');item.setAttribute('aria-selected',String(option.selected));item.disabled=option.disabled;item.tabIndex=-1;
+        item.addEventListener('click',()=>{select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));closeFilter(true);});
+        filterMenu.append(item);
+      }
+      const rect=button.getBoundingClientRect(),width=Math.min(Math.max(rect.width,220),innerWidth-16);
+      filterMenu.style.left=Math.max(8,Math.min(rect.left,innerWidth-width-8))+'px';
+      filterMenu.style.top=(rect.bottom+6)+'px';filterMenu.style.width=width+'px';
+      filterMenu.style.maxHeight=Math.max(0,innerHeight-rect.bottom-14)+'px';
+      button.setAttribute('aria-expanded','true');
+      if(hasPopover)filterMenu.showPopover();else filterMenu.hidden=false;
+      (filterMenu.querySelector('[aria-selected="true"]')||filterMenu.firstElementChild)?.focus({preventScroll:true});
+    }
+    button.addEventListener('click',open);
+    button.addEventListener('keydown',event=>{if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();if(!activeFilter)open();}});
+  }
+  filterMenu.addEventListener('keydown',event=>{
+    if(event.key==='Escape'){event.preventDefault();closeFilter(true);return;}
+    if(event.key==='Tab'){closeFilter(true);return;}
+    const options=[...filterMenu.querySelectorAll('button:not(:disabled)')],i=options.indexOf(document.activeElement);
+    let next;if(event.key==='ArrowDown')next=(i+1)%options.length;else if(event.key==='ArrowUp')next=(i-1+options.length)%options.length;else if(event.key==='Home')next=0;else if(event.key==='End')next=options.length-1;
+    if(next!==undefined){event.preventDefault();options[next]?.focus();}
+  });
+  filterMenu.addEventListener('toggle',event=>{if(event.newState==='closed'&&activeFilter)closeFilter();});
+  document.addEventListener('pointerdown',event=>{if(activeFilter&&!filterMenu.contains(event.target)&&!activeFilter.button.contains(event.target))closeFilter();});
+  document.addEventListener('scroll',event=>{if(activeFilter&&!filterMenu.contains(event.target))closeFilter();},true);
+  window.addEventListener('resize',()=>closeFilter());
+
   /* Startup Apps Implementation */
   function visibleStartupApps(){
     const search=get('startupSearch').value.trim().toLocaleLowerCase();
     const scope=get('startupScope').value;
     const statusVal=get('startupStatusFilter').value;
+    const supportedOnly=get('startupControlFilter').checked;
     return startupApps.filter(item=>{
+      const manageable=item.readOnly===false&&typeof item.enabled==='boolean'&&item.source!=='app-service';
+      if(supportedOnly&&!manageable)return false;
       if(scope&&item.scope!==scope)return false;
       if(statusVal==='enabled'&&item.enabled!==true)return false;
       if(statusVal==='disabled'&&item.enabled!==false)return false;
@@ -917,6 +983,10 @@
   function renderStartup(){
     const shown=visibleStartupApps();
     shown.sort((a,b)=>compareAppNames(a.displayName||a.name,b.displayName||b.name));
+    if(!startupLoading&&!startupLoadError){
+      const count=shown.length===startupApps.length?`${startupApps.length} startup entries`:`Showing ${shown.length} of ${startupApps.length} startup entries`;
+      startupStatus.textContent=startupStatus.textContent.replace(/^(?:Showing \d+ of \d+ startup entries|\d+ startup entries)/,count);
+    }
     startupList.replaceChildren();
     if(!shown.length){
       const query=get('startupSearch').value.trim();
@@ -998,7 +1068,7 @@
     const target=startupTarget;
     const nextEnabled=target.restore?'restore':!target.enabled;
     const currentPin=get('startupConfirmPin').value;
-    if(!/^(?:\d{6}|\d{12})$/.test(currentPin))return;
+    if(!/^(?:\d{6}|\d{8}|\d{12})$/.test(currentPin))return;
     get('startupConfirmPin').value='';
     get('startupConfirmSubmit').disabled=true;
     get('startupConfirmError').textContent='Applying changes…';
@@ -1017,6 +1087,7 @@
   get('startupSearch').addEventListener('input',renderStartup);
   get('startupScope').addEventListener('change',renderStartup);
   get('startupStatusFilter').addEventListener('change',renderStartup);
+  get('startupControlFilter').addEventListener('change',renderStartup);
 
   window.addEventListener('pc-monitor-pagechange',event=>{
     selection();

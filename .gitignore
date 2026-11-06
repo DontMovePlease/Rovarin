@@ -1,5 +1,7 @@
 # Local access credentials and runtime artifacts
 config.json
+# Linux credential staging (including interrupted atomic setup).
+.config-*.tmp
 config.json.*.tmp
 temperature-settings.json
 temperature-settings.json.*.tmp

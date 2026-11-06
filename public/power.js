@@ -41,7 +41,7 @@
   dialog.addEventListener('cancel', event => { if (submitting) event.preventDefault(); else { pin.value = ''; selected = null; } });
   document.getElementById('powerConfirmForm').addEventListener('submit', async event => {
     event.preventDefault(); if (submitting || !selected) return;
-    if (requirePin && !/^\d{6}(?:\d{6})?$/.test(pin.value)) { error.textContent = 'Enter your current Rovarin PIN.'; return; }
+    if (requirePin && !/^(?:\d{6}|\d{8}|\d{12})$/.test(pin.value)) { error.textContent = 'Enter your current Rovarin PIN.'; return; }
     submitting = true; disable(true); stopChecking();
     const submit = document.getElementById('powerConfirmSubmit'), cancel = document.getElementById('powerCancel'); submit.disabled = true; cancel.disabled = true;
     const body = { action: selected, confirmed: true, requestId: crypto.randomUUID() };

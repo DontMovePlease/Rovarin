@@ -79,23 +79,29 @@ if ($runtime.state -eq 'none') {
     $deadline = (Get-Date).AddSeconds(15)
     do { $runtime = Get-DashboardRuntime $appDir; if ($runtime.state -eq 'owned' -and $runtime.healthy) { break }; Start-Sleep -Milliseconds 200 } while ((Get-Date) -lt $deadline)
 }
-if ($runtime.state -ne 'owned' -or -not $runtime.healthy) { throw 'Rovarin is not healthy.' }
+# Local DPAPI recovery does not depend on the HTTP backend being available.
+if ($runtime.state -ne 'owned' -or -not $runtime.healthy) { $runtime = @{port=7331;state='unavailable';healthy=$false} }
 # Resolve through the same fixed local helper as the backend (no client path).
 $configFile = & $node (Join-Path $appDir 'pin-manager.js') --config-path
 if ($LASTEXITCODE -ne 0 -or -not $configFile) { throw 'Saved configuration is unavailable.' }
 $configFile = [string]$configFile
+# An uninitialized installation has no forgotten PIN to reveal or reset.
+# Reuse the native Create PIN screen, which still requires its desktop proof.
+$pinStatus = (& $node (Join-Path $appDir 'pin-manager.js') --pin-status | ConvertFrom-Json)
+if ($LASTEXITCODE -ne 0) { throw 'Saved PIN status unavailable.' }
+if ($pinStatus.setupRequired) {
+    if ($CheckOnly) { @{setupRequired=$true;pinValid=$false} | ConvertTo-Json -Compress; exit 0 }
+    & (Join-Path $PSScriptRoot 'desktop.ps1')
+    exit 0
+}
 # Recovery is a native user-launched window. No PIN HTTP endpoint or bypass.
 if ($RegeneratePin) {
-    for ($attempt = 0; $attempt -lt 4; $attempt++) {
-        & $node (Join-Path $appDir 'pin-manager.js') --regenerate | Out-Null
-        if ($LASTEXITCODE -eq 0) { break }
-        Start-Sleep -Milliseconds 500
-    }
+    & $node (Join-Path $appDir 'pin-manager.js') --regenerate | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'PIN regeneration failed.' }
 }
 $pin = & $node -e "const p=require(process.argv[1]);process.stdout.write(p.readConfig(p.configurationFile()).pin)" (Join-Path $appDir 'pin-manager.js')
 if ($LASTEXITCODE -ne 0) { throw 'Protected PIN unavailable for this Windows user.' }
-if ($pin -cnotmatch '^(\d{6}|\d{12})$') { throw 'A valid saved PIN is not available.' }
+if ($pin -cnotmatch '^(\d{6}|\d{8}|\d{12})$') { throw 'A valid saved PIN is not available.' }
 $local = "http://127.0.0.1:$($runtime.port)"
 $webSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 function Read-SetupDiagnostics([switch]$Refresh) {
@@ -202,7 +208,7 @@ $copy = New-SetupButton 'Copy PIN'
 function Update-SetupPin {
     try {
         $freshPin = & $node -e "const p=require(process.argv[1]);process.stdout.write(p.readConfig(p.configurationFile()).pin)" (Join-Path $appDir 'pin-manager.js')
-        if ($LASTEXITCODE -ne 0 -or $freshPin -cnotmatch '^(\d{6}|\d{12})$') { throw 'Saved PIN unavailable.' }
+        if ($LASTEXITCODE -ne 0 -or $freshPin -cnotmatch '^(\d{6}|\d{8}|\d{12})$') { throw 'Saved PIN unavailable.' }
         $script:pin = [string]$freshPin
         $pinField.Text = if ($pin.Length -eq 6) { $pin -replace '(\d{3})(\d{3})','$1 $2' } else { $pin -replace '(\d{4})(\d{4})(\d{4})','$1 $2 $3' }
         $copy.Enabled=$true; $copy.Text='Copy PIN'
@@ -219,14 +225,56 @@ $copy.Add_Click({
     [Windows.Forms.Clipboard]::SetText($script:pin); $copy.Text='Copied'
 })
 $pinRow.Controls.Add($pinField,0,0); $pinRow.Controls.Add($copy,1,0); Add-SetupRow $pinRow
-$regenerate = New-SetupButton 'Generate New PIN'
+$regenerate = New-SetupButton 'Reset PIN'
 $regenerate.Add_Click({
-    if ([Windows.Forms.MessageBox]::Show('Generate a new PIN and sign out every device?', 'Generate New PIN', 'YesNo', 'Warning') -ne 'Yes') { return }
     try {
-        & $node (Join-Path $appDir 'pin-manager.js') --regenerate | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'PIN regeneration failed.' }
-        if (-not (Update-SetupPin)) { throw 'Updated PIN unavailable.' }
-    } catch { [Windows.Forms.MessageBox]::Show('Could not update the PIN. Check the local saved configuration.', 'PIN update failed') | Out-Null }
+        $snapshot = (& $node (Join-Path $appDir 'pin-manager.js') --pin-status | ConvertFrom-Json)
+        if ($LASTEXITCODE -ne 0 -or $snapshot.setupRequired) { throw 'Local ownership unavailable.' }
+        $dialog = New-Object Windows.Forms.Form
+        $dialog.Text='Reset your Rovarin PIN'; $dialog.Font=$form.Font; $dialog.ClientSize=New-Object Drawing.Size(360,360)
+        $dialog.StartPosition='CenterParent'; $dialog.FormBorderStyle='FixedDialog'; $dialog.MaximizeBox=$false; $dialog.MinimizeBox=$false
+        $dialog.BackColor=$background; $dialog.ForeColor=$foreground
+        $layout=New-Object Windows.Forms.FlowLayoutPanel
+        $layout.Dock='Fill'; $layout.AutoScroll=$true; $layout.FlowDirection='TopDown'; $layout.WrapContents=$false; $layout.Padding=New-Object Windows.Forms.Padding(20)
+        $dialog.Controls.Add($layout)
+        $hint=New-SetupLabel 'Choose six digits. This signs out other devices. Recovery is authorized by your Windows account.'
+        $hint.MaximumSize=New-Object Drawing.Size(310,0); $layout.Controls.Add($hint)
+        $inputs=@()
+        foreach($label in @('New PIN','Confirm PIN')) {
+            $caption=New-SetupLabel $label; $layout.Controls.Add($caption)
+            $inputBox=New-Object Windows.Forms.TextBox
+            $inputBox.UseSystemPasswordChar=$true; $inputBox.MaxLength=6; $inputBox.Width=310; $inputBox.AccessibleName=$label
+            $layout.Controls.Add($inputBox); $inputs+=,$inputBox
+        }
+        $show=New-Object Windows.Forms.CheckBox; $show.Text='Show PINs'; $show.AutoSize=$true
+        $show.Add_CheckedChanged({foreach($box in $inputs){$box.UseSystemPasswordChar=-not $show.Checked}}); $layout.Controls.Add($show)
+        $save=New-SetupButton 'Save PIN'; $save.Width=310; $layout.Controls.Add($save); $dialog.AcceptButton=$save
+        $save.Add_Click({
+            if ($inputs[0].Text -cnotmatch '^[0-9]{6}$') { [Windows.Forms.MessageBox]::Show($dialog,'Enter exactly six digits.','Reset PIN') | Out-Null; return }
+            if ($inputs[0].Text -cne $inputs[1].Text) { [Windows.Forms.MessageBox]::Show($dialog,'The new PINs do not match.','Reset PIN') | Out-Null; return }
+            $save.Enabled=$false
+            $process=New-Object Diagnostics.Process
+            $process.StartInfo=New-Object Diagnostics.ProcessStartInfo
+            $process.StartInfo.FileName=$node
+            $process.StartInfo.Arguments='"'+(Join-Path $appDir 'pin-manager.js')+'" --reset-pin'
+            $process.StartInfo.UseShellExecute=$false; $process.StartInfo.CreateNoWindow=$true
+            $process.StartInfo.RedirectStandardInput=$true; $process.StartInfo.RedirectStandardOutput=$true; $process.StartInfo.RedirectStandardError=$true
+            try {
+                [void]$process.Start()
+                $output=$process.StandardOutput.ReadToEndAsync(); $errors=$process.StandardError.ReadToEndAsync()
+                $request=@{newPin=$inputs[0].Text;confirmPin=$inputs[1].Text;revision=$snapshot.revision} | ConvertTo-Json -Compress
+                $process.StandardInput.Write($request); $process.StandardInput.Close(); $request=$null
+                foreach($box in $inputs){$box.Clear()}
+                if(-not $process.WaitForExit(30000)){ $process.Kill(); throw 'No reset confirmation received.' }
+                if($process.ExitCode -ne 0){throw 'PIN was not reset. Reopen Recovery if the PIN changed elsewhere.'}
+                if(-not(Update-SetupPin)){throw 'Reopen Recovery to check the saved PIN.'}
+                [Windows.Forms.MessageBox]::Show($dialog,'Your PIN was reset. Other devices must sign in again.','PIN saved') | Out-Null
+                $dialog.DialogResult='OK'; $dialog.Close()
+            } catch { [Windows.Forms.MessageBox]::Show($dialog,'The reset could not be confirmed. Close this window and reopen Recovery to check the saved PIN. No replacement PIN was generated.','Reset PIN') | Out-Null }
+            finally {$save.Enabled=$true; $process.Dispose()}
+        })
+        try { [void]$dialog.ShowDialog($form) } finally { foreach($box in $inputs){$box.Clear()}; $dialog.Dispose() }
+    } catch { [Windows.Forms.MessageBox]::Show('The saved PIN cannot be authorized for this Windows account. No PIN was reset.','Reset PIN') | Out-Null }
 })
 $temp = $report.checks | Where-Object id -eq 'cpu-temperature' | Select-Object -First 1
 $driver=$report.checks | Where-Object id -eq 'enhanced-driver' | Select-Object -First 1
@@ -251,7 +299,7 @@ $copyPhone.Add_Click({ if ($script:phoneState.address) { [Windows.Forms.Clipboar
 $securityActions=New-SetupPair
 $securityActions.Controls.Add($copyPhone,0,0); $securityActions.Controls.Add($regenerate,1,0); Add-SetupRow $securityActions
 Add-SetupRow (New-SetupLabel "$($report.overall.title)`r`nCPU temperature: $($temp.status)`r`n$enhancedNote")
-Add-SetupRow (New-SetupLabel 'Local desktop works without Tailscale. PIN recovery is available only through this local Windows shortcut. Generating a new PIN signs out every device.')
+Add-SetupRow (New-SetupLabel 'Local desktop works without Tailscale. PIN recovery is available only through this local Windows shortcut. Resetting your PIN signs out every device.')
 $footer=New-Object Windows.Forms.Panel
 $footer.Dock='Bottom'; $footer.Height=72; $footer.Padding=New-Object Windows.Forms.Padding(24,12,24,16)
 $footer.BackColor=$background

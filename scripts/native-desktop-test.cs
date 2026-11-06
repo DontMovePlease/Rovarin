@@ -29,6 +29,9 @@ internal static class NativeDesktopTest
         while (DateTime.UtcNow < limit) { if (await Condition(script)) return; await Task.Delay(100); }
         if(label.StartsWith("Native installed-app")) Console.Error.WriteLine(await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({rows:document.querySelectorAll('.apps-row').length,status:document.getElementById('appsStatus')?.textContent,width:document.documentElement.scrollWidth,viewport:innerWidth})"));
         if(label.Contains("component"))Console.Error.WriteLine(await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({feedback:document.getElementById('adminMaintenanceFeedback')?.textContent,native:!!window.chrome?.webview,controlsHidden:document.getElementById('nativeSecurityControls')?.hidden})"));
+        if(label.StartsWith("Phone PIN typing"))Console.Error.WriteLine(await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({receipt:window.__qaTypeReceipt,typed:window.__qaTyped,auto:window.__qaAuto,mode:document.querySelector('meta[name=rovarin-pin-mode]')?.content,inputLength:document.getElementById('pinInput')?.value.length,classes:document.documentElement.className})"));
+        if(label.StartsWith("PIN surface clipped"))Console.Error.WriteLine(await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({viewport:[innerWidth,innerHeight,devicePixelRatio],dialog:document.getElementById('pinChangeDialog')?.getBoundingClientRect().toJSON(),scroll:document.getElementById('pinChangeDialog')?.scrollHeight,controls:[...document.querySelectorAll('#pinFlow input,#pinFlow button,#pinFlow .pin-show')].map(e=>({id:e.id,rect:e.getBoundingClientRect().toJSON()}))})"));
+        if(label=="Login document not ready")Console.Error.WriteLine(await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({href:location.href,ready:document.readyState,loginReady:document.documentElement.dataset.loginReady,setup:document.querySelector('meta[name=rovarin-pin-setup]')?.content,resources:performance.getEntriesByType('resource').map(e=>({name:e.name,duration:e.duration}))})"));
         throw new Exception(label + "; pending=" + window.GetField("visibilityPending",flags).GetValue(form) + "; loading=" + window.GetField("loading",flags).GetValue(form) + "; visible=" + form.Visible + "; doc=" + await View.CoreWebView2.ExecuteScriptAsync("document.visibilityState"));
     }
     static async Task<int> Leases() {
@@ -161,8 +164,12 @@ internal static class NativeDesktopTest
         await GlassCapture("lock");
         await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('pinInput').value="+json.Serialize(pin)+";document.getElementById('unlockBtn').click()");
         await Wait("typeof showAppPage==='function' && document.documentElement.classList.contains('native-shell') && !!window.RovarinGlass", "Native glass login/bootstrap",30);
-        await View.CoreWebView2.ExecuteScriptAsync("RovarinGlass.setQuality('full')");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('desktopTheme').value='liquid';document.getElementById('desktopTheme').dispatchEvent(new Event('change'));RovarinGlass.setQuality('full')");
         await Wait("document.documentElement.classList.contains('liquid-ready') && RovarinGlass.diagnostics().contexts===1", "Native WebGL renderer",30);
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('desktopTheme').value='simplified';document.getElementById('desktopTheme').dispatchEvent(new Event('change'))");
+        await Wait("RovarinGlass.diagnostics().contexts===0 && document.querySelectorAll('.liquid-scene').length===0", "Native Simplified theme releases graphics",30);
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('desktopTheme').value='liquid';document.getElementById('desktopTheme').dispatchEvent(new Event('change'))");
+        await Wait("RovarinGlass.diagnostics().contexts===1", "Native Liquid Glass theme recreates graphics",30);
         await Wait("eventSource?.readyState===1", "Native SSE connection",30);
         form.WindowState=FormWindowState.Normal;
         form.Size=new System.Drawing.Size(1440,900);
@@ -191,7 +198,7 @@ internal static class NativeDesktopTest
         foreach(string quality in new[]{"full","balanced","minimal"}) {
             await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('graphicsQuality').value="+json.Serialize(quality)+";document.getElementById('graphicsQuality').dispatchEvent(new Event('change'))");
             await Wait("RovarinGlass.diagnostics().quality==="+json.Serialize(quality)+" && RovarinGlass.diagnostics().idle", "Native quality selection");
-            await Task.Delay(1500);
+            await Task.Delay(2500);
             string before=await View.CoreWebView2.ExecuteScriptAsync("RovarinGlass.diagnostics().frames");
             var process=Process.GetCurrentProcess();var cpu=process.TotalProcessorTime;var start=DateTime.UtcNow;
             await Task.Delay(3000);process.Refresh();
@@ -201,7 +208,7 @@ internal static class NativeDesktopTest
             receipts.Add(new {quality=quality,shellCpuOneCorePercent=(process.TotalProcessorTime-cpu).TotalMilliseconds/(DateTime.UtcNow-start).TotalMilliseconds*100,shellWorkingSetMiB=process.WorkingSet64/1048576.0,graphics=json.DeserializeObject(json.Deserialize<string>(graphics))});
             await GlassCapture(quality);
         }
-        await View.CoreWebView2.ExecuteScriptAsync("RovarinGlass.setQuality('full')");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('desktopTheme').value='liquid';document.getElementById('desktopTheme').dispatchEvent(new Event('change'));RovarinGlass.setQuality('full')");
         await Wait("RovarinGlass.diagnostics().contexts===1 && RovarinGlass.diagnostics().idle", "Full restore");
         form.WindowState=FormWindowState.Minimized;
         await Task.Delay(750);View.CoreWebView2.Resume();
@@ -220,6 +227,153 @@ internal static class NativeDesktopTest
         File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-glass-results.json"),json.Serialize(new{native=true,webViewVersion=View.CoreWebView2.Environment.BrowserVersionString,qualityMeasurements=receipts,minimized="PASS",trayHidden="PASS",screenshots="actual production WinForms/WebView2, isolated test state"}));
         Console.WriteLine("PASS actual WinForms/WebView2 glass: six views, expanded sidebar, cancelled dialog, three qualities, zero idle frames, minimize/tray suspension and restore");
     }
+    static async Task DashboardLayout(string pin, JavaScriptSerializer json) {
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('pinInput').value="+json.Serialize(pin)+";document.getElementById('unlockBtn').click()");
+        await Wait("typeof showAppPage==='function' && !!latestDashboardMetrics?.ram && !!window.RovarinGlass", "Native dashboard data unavailable",45);
+        await View.CoreWebView2.ExecuteScriptAsync("RovarinGlass.setQuality('minimal');setHealthCollapsed(true);setSidebarOpen(false);document.body.classList.remove('desktop-sidebar-hover')");
+        var receipts=new System.Collections.Generic.List<object>();
+        foreach(var size in new[]{new System.Drawing.Size(900,680),new System.Drawing.Size(820,620),new System.Drawing.Size(760,560),new System.Drawing.Size(1100,800),new System.Drawing.Size(1440,900)}) {
+            form.Size=size;
+            await Task.Delay(250);
+            await Wait("document.documentElement.scrollWidth<=innerWidth", "Native dashboard horizontal overflow");
+            Check(await Condition("(()=>{const health=document.getElementById('healthCard'),grid=document.querySelector('.metrics-grid');return getComputedStyle(grid).alignItems==='start' && health.getBoundingClientRect().height<85 && document.getElementById('healthChecklist').hidden && ['cpu','gpu','ram','storage','network'].every(k=>{const r=document.querySelector('.overview-'+k+'-card').getBoundingClientRect();return r.left>=0 && r.right<=innerWidth+1 && r.width>230})})()"),"Native cards or health summary do not fit");
+            string layout=await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({viewport:[innerWidth,innerHeight],grid:getComputedStyle(document.querySelector('.metrics-grid')).gridTemplateColumns,cpu:document.querySelector('.overview-cpu-card').getBoundingClientRect().height,gpu:document.querySelector('.overview-gpu-card').getBoundingClientRect().height,ram:document.querySelector('.overview-ram-card').getBoundingClientRect().height,health:document.getElementById('healthCard').getBoundingClientRect().height})");
+            receipts.Add(json.DeserializeObject(json.Deserialize<string>(layout)));
+            using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-dashboard-"+size.Width+"x"+size.Height+".png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+            await View.CoreWebView2.ExecuteScriptAsync("window.__qaPage=document.querySelector('.dashboard-container').getBoundingClientRect().toJSON();setSidebarOpen(true)");
+            await Task.Delay(350);
+            Check(await Condition("(()=>{const r=document.querySelector('.dashboard-container').getBoundingClientRect();return r.x===__qaPage.x && r.width===__qaPage.width})()"),"Native overlay moved/resized dashboard");
+            await View.CoreWebView2.ExecuteScriptAsync("setSidebarOpen(false)");
+        }
+        form.Size=new System.Drawing.Size(900,680);
+        foreach(double scale in new[]{1.25,1.5}) {
+            int width=(int)(form.ClientSize.Width/scale),height=(int)(form.ClientSize.Height/scale);
+            await View.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setDeviceMetricsOverride",json.Serialize(new {width=width,height=height,deviceScaleFactor=scale,mobile=false}));
+            await Wait("innerWidth==="+width+" && document.documentElement.scrollWidth<=innerWidth", "Native scaled viewport overflow");
+            using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-dashboard-scale-"+(int)(scale*100)+".png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+        }
+        await View.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.clearDeviceMetricsOverride","{}");
+        form.WindowState=FormWindowState.Maximized;await Task.Delay(250);
+        Check(await Condition("document.documentElement.scrollWidth<=innerWidth"),"Maximized native dashboard overflow");
+        form.WindowState=FormWindowState.Normal;form.Size=new System.Drawing.Size(900,680);
+        await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('.memory-statistics summary').click()");
+        await Wait("document.querySelector('.memory-statistics').open && document.getElementById('ramAvailGB').getBoundingClientRect().height>0", "Native memory details inaccessible");
+        await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('.memory-statistics summary').click();document.getElementById('healthToggle').click()");
+        await Wait("!document.getElementById('healthChecklist').hidden", "Native health assessment did not expand");
+        File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-dashboard-results.json"),json.Serialize(new {windowDpi=form.DeviceDpi,layouts=receipts,simulatedScalePercent=new[]{125,150},physicalScalingTest=false}));
+        Console.WriteLine("PASS actual WinForms/WebView2 dashboard: 900x680 default, 820x620, 760x560 minimum, 1100x800, 1440x900, maximized; stationary overlay, health summary/expansion, memory details; simulated 125/150 percent viewport scaling (physical DPI unchanged)");
+    }
+
+    static async Task PinSurfaceChecks(string stage, JavaScriptSerializer json) {
+        var presentationDeadline=DateTime.UtcNow.AddSeconds(15);
+        while(((bool)window.GetField("loginPresentation",flags).GetValue(form)!=(stage=="enrollment") || (bool)window.GetField("changingBounds",flags).GetValue(form)) && DateTime.UtcNow<presentationDeadline)await Task.Delay(50);
+        Check((bool)window.GetField("loginPresentation",flags).GetValue(form)==(stage=="enrollment"),"Native presentation did not settle before density measurement");
+        await Wait("Math.abs(innerWidth*devicePixelRatio-"+View.ClientSize.Width+")<2 && Math.abs(innerHeight*devicePixelRatio-"+View.ClientSize.Height+")<2", "Native viewport did not match its actual client bounds");
+        Console.WriteLine("MEASURE native "+stage+" viewport="+await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify([innerWidth,innerHeight,devicePixelRatio])"));
+        int width=Int32.Parse(await View.CoreWebView2.ExecuteScriptAsync("innerWidth"));
+        int height=Int32.Parse(await View.CoreWebView2.ExecuteScriptAsync("innerHeight"));
+        foreach(double scale in new[]{1.0,1.25,1.5,2.0}) {
+            await View.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setDeviceMetricsOverride",json.Serialize(new {width=width,height=height,deviceScaleFactor=scale,mobile=false}));
+            await Wait("Math.abs(devicePixelRatio-"+scale.ToString(System.Globalization.CultureInfo.InvariantCulture)+")<.01 && document.documentElement.scrollWidth<=innerWidth", "PIN density/width did not settle: "+stage+" / "+scale);
+            // Short high-DPI windows intentionally scroll the Change PIN dialog.
+            // Every control must fit fully in its scrollport and receive pointer input.
+            Check(await Condition("(()=>{const dialog=document.getElementById('pinChangeDialog');return [...document.querySelectorAll('#pinFlow .pin-field input,#pinFlow button,#pinFlow .pin-show')].every(e=>{if(dialog)e.scrollIntoView({block:'nearest',behavior:'instant'});const r=e.getBoundingClientRect(),d=dialog?dialog.getBoundingClientRect():{left:0,right:innerWidth,top:0,bottom:innerHeight},hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return r.left>=Math.max(0,d.left) && r.right<=Math.min(innerWidth,d.right) && r.top>=Math.max(0,d.top) && r.bottom<=Math.min(innerHeight,d.bottom) && r.height>=32 && !!hit && (hit===e || e.contains(hit))})})()"),"PIN control clipped or obstructed: "+stage+" / "+scale);
+            await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('#pinFlow .pin-field input').focus()");
+            await CheckPinFocus();
+            await View.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent","{\"type\":\"keyDown\",\"key\":\"Tab\",\"code\":\"Tab\",\"windowsVirtualKeyCode\":9}");
+            await View.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent","{\"type\":\"keyUp\",\"key\":\"Tab\",\"code\":\"Tab\",\"windowsVirtualKeyCode\":9}");
+            await Wait("document.activeElement===document.querySelectorAll('#pinFlow .pin-field input')[1]", "PIN Tab order failed");
+            await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('#pinFlow .pin-show input').click()");
+            Check(await Condition("[...document.querySelectorAll('#pinFlow .pin-field input')].every(e=>e.type==='text')"),"Show PINs failed");
+            await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('#pinFlow .pin-show input').click()");
+            Check(await Condition("[...document.querySelectorAll('#pinFlow .pin-field input')].every(e=>e.type==='password')"),"Hide PINs failed");
+            if(scale==2)using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-pin-"+stage+"-density200.png")))await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+        }
+        await View.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.clearDeviceMetricsOverride","{}");
+        Console.WriteLine("PASS "+stage+" clipping, labels, keyboard Tab/focus, show/hide at WebView2 raster densities 100/125/150/200%; actual native DPI="+form.DeviceDpi+"; display DPI was not changed");
+    }
+    static async Task CheckPinFocus() {
+        Check(await Condition("document.activeElement===document.querySelector('#pinFlow .pin-field input') && [...document.querySelectorAll('#pinFlow .pin-field')].every(e=>e.textContent.trim().length>0)"),"PIN label/focus missing");
+    }
+
+    static async Task PinLifecycle(JavaScriptSerializer json) {
+        await Wait("!!document.getElementById('pinFlow') && !document.querySelector('#pinFlow [type=submit]').disabled", "Native Create PIN was not ready",30);
+        Check(await Condition("document.querySelector('#pinFlow h2').textContent==='Create your PIN'"),"Welcome heading");
+        await PinSurfaceChecks("enrollment",json);
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('newPin').value='012340';document.getElementById('confirmPin').value='012341';document.getElementById('pinFlow').requestSubmit()");
+        await Wait("document.getElementById('pinFlowMessage').textContent.includes('do not match')", "Native confirmation mismatch not reported");
+        using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-pin-enrollment.png")))await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('confirmPin').value='012340';document.getElementById('pinFlow').requestSubmit()");
+        await Wait("!document.getElementById('pinInput') && typeof showSecuritySettings==='function'", "Native enrollment did not open dashboard",30);
+        Check(await Condition("document.querySelector('.pin-saved-notice')?.textContent.includes('saved successfully')"),"PIN setup success notice");
+        await PinChangeLifecycle(json);
+        Console.WriteLine("PASS real native first-run enrollment, leading zeros and confirmation validation");
+    }
+    static async Task PinChangeLifecycle(JavaScriptSerializer json) {
+        window.GetField("busy",flags).SetValue(form,true);
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('nativeSettingsButton').click();showSecuritySettings(true);document.getElementById('generateDesktopPin').click()");
+        await Wait("document.getElementById('pinFlowMessage')?.textContent.includes('reconnecting')", "Busy native PIN status request was silently dropped");
+        window.GetField("busy",flags).SetValue(form,false);
+        await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('#pinFlow button[type=button]').click()");
+        await Wait("!document.getElementById('pinChangeDialog')", "Busy PIN dialog did not cancel");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('nativeSettingsButton').click();showSecuritySettings(true);document.getElementById('generateDesktopPin').focus();document.getElementById('generateDesktopPin').click()");
+        await Wait("document.getElementById('pinChangeDialog')?.open && !document.querySelector('#pinFlow [type=submit]').disabled", "Settings Change PIN dialog not ready");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('currentPin').value='999998';document.getElementById('newPin').value='043210';document.getElementById('confirmPin').value='043210';document.getElementById('pinFlow').requestSubmit()");
+        await Wait("document.getElementById('pinFlowMessage').textContent.includes('not accepted')", "Incorrect current PIN feedback missing");
+        await PinSurfaceChecks("change",json);
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('currentPin').value='012340';document.getElementById('newPin').value='043210';document.getElementById('confirmPin').value='043210'");
+        using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-pin-change.png")))await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('pinFlow').requestSubmit()");
+        await Wait("!document.getElementById('pinChangeDialog') && !!document.querySelector('.pin-saved-notice')", "Native PIN change did not finish",30);
+        await View.CoreWebView2.ExecuteScriptAsync("window.__pinOld=null;void fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:'012340'})}).then(r=>window.__pinOld=r.status)");
+        await Wait("window.__pinOld===401", "Old PIN still authenticated after native rotation");
+        await View.CoreWebView2.ExecuteScriptAsync("window.__pinNew=null;void fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:'043210'})}).then(r=>window.__pinNew=r.status)");
+        await Wait("window.__pinNew===200", "New native PIN did not authenticate");
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('nativeSettingsButton').click();showSecuritySettings(true);document.getElementById('generateDesktopPin').focus();document.getElementById('generateDesktopPin').click()");
+        await Wait("document.getElementById('pinChangeDialog')?.open", "Reopen Change PIN");
+        await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('#pinFlow button[type=button]').click()");
+        await Wait("!document.getElementById('pinChangeDialog') && document.activeElement?.id==='generateDesktopPin'", "Cancel did not close/focus restore");
+        window.GetField("busy",flags).SetValue(form,true);
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('logoutButton').click()");
+        var lockDeadline=DateTime.UtcNow.AddSeconds(5);
+        while(!(bool)window.GetField("pendingSecurityLock",flags).GetValue(form) && DateTime.UtcNow<lockDeadline)await Task.Delay(50);
+        Check((bool)window.GetField("pendingSecurityLock",flags).GetValue(form),"Lock click dropped during backend ownership verification");
+        window.GetField("busy",flags).SetValue(form,false);Invoke("DrainSecurityLock");
+        await Wait("!!document.getElementById('pinInput') && document.readyState==='complete'", "Queued Lock did not return to PIN screen",30);
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('pinInput').value='043210';document.getElementById('unlockBtn').click()");
+        await Wait("!document.getElementById('pinInput') && !!document.getElementById('dashboardPage')", "PIN failed after queued native lock",30);
+        Console.WriteLine("PASS native Lock queued during ownership verification, authenticated revocation and subsequent PIN unlock");
+        Console.WriteLine("PASS real native Settings Change PIN, current-PIN rejection, save, old/new login, Cancel and focus restoration");
+    }
+    static async Task PinLayout(JavaScriptSerializer json) {
+        var loginSize=form.Size; var loginMinimum=form.MinimumSize;
+        form.MinimumSize=new System.Drawing.Size(320,240);
+        await View.CoreWebView2.ExecuteScriptAsync("document.documentElement.classList.remove('native-shell');document.querySelector('.login-container').style.paddingTop='47px';document.querySelector('.login-container').style.paddingBottom='34px';window.dispatchEvent(new Event('resize'))");
+        foreach(var phoneSize in new System.Drawing.Size[]{new System.Drawing.Size(320,568),new System.Drawing.Size(375,812),new System.Drawing.Size(390,844),new System.Drawing.Size(430,932)}) {
+            int width=phoneSize.Width; form.Size=phoneSize;
+            await Wait("innerWidth==="+width+" && innerHeight==="+phoneSize.Height+" && Math.abs(document.querySelector('.login-container').getBoundingClientRect().height-innerHeight)<1 && document.documentElement.scrollWidth<=innerWidth && getComputedStyle(document.querySelector('.login-container')).justifyContent==='center' && getComputedStyle(document.querySelector('.login-container')).overflowY==='hidden' && getComputedStyle(document.querySelector('.lock-window-controls')).display==='none' && getComputedStyle(document.querySelector('.lock-window-drag')).display==='none'", "Stable phone PIN layout at "+width);
+            await Wait("!document.getElementById('pinInput').autofocus && (matchMedia('(prefers-reduced-motion: reduce)').matches ? getComputedStyle(document.querySelector('.pin-input')).transitionDuration==='0s' : getComputedStyle(document.querySelector('.pin-input')).transitionProperty==='border-color, box-shadow') && parseFloat(getComputedStyle(document.querySelector('.pin-input')).letterSpacing)<=6", "Phone PIN keyboard/animation settings at "+width);
+            // Each viewport owns one deliberate failed login. Wait for
+            // the prior HTTP attempt before measuring another viewport;
+            // its feedback/focus must not race the next synthetic input.
+            await Wait("!loginPending", "Previous PIN layout attempt did not settle");
+            await View.CoreWebView2.ExecuteScriptAsync("(()=>{const p=document.getElementById('pinInput');p.value='';window.__qaAuto=false;document.getElementById('errMsg').textContent='Incorrect PIN. Please try again.';p.focus();const snap=()=>[...document.querySelector('.login-card').children].filter(x=>!x.hidden).map(x=>({tag:x.tagName,id:x.id,rect:x.getBoundingClientRect().toJSON(),font:getComputedStyle(x).font,lineHeight:getComputedStyle(x).lineHeight,display:getComputedStyle(x).display}));window.__qaBefore=snap();window.__qaPinTop=p.getBoundingClientRect().top;for(const d of '123456'){p.value+=d;p.dispatchEvent(new Event('input',{bubbles:true}));}window.__qaTypeReceipt={elementsBefore:window.__qaBefore,elementsAfter:snap(),before:window.__qaPinTop,after:p.getBoundingClientRect().top,length:p.value.length,disabled:document.getElementById('unlockBtn').disabled,pending:loginPending,ready:document.readyState,error:document.getElementById('errMsg').textContent,viewport:[innerWidth,innerHeight],container:document.querySelector('.login-container').getBoundingClientRect().toJSON(),card:document.querySelector('.login-card').getBoundingClientRect().toJSON()};window.__qaTyped=p.value==='123456' && p.getBoundingClientRect().top===window.__qaPinTop;window.__qaAuto=document.getElementById('unlockBtn').disabled;p.value='';p.blur()})()");
+            await Wait("window.__qaTyped && window.__qaAuto && document.documentElement.scrollWidth<=innerWidth", "Phone PIN typing shifted/cleared or did not auto-submit at "+width);
+            await Wait("(()=>{const c=document.querySelector('.login-container'),r=document.querySelector('.login-card').getBoundingClientRect(),p=getComputedStyle(c);return r.top>=47 && r.bottom<=innerHeight-34 && Math.abs((r.top+r.bottom)/2-(47+(innerHeight-47-34)/2))<2})()", "Phone login is not centered within safe areas at "+width);
+            await View.CoreWebView2.ExecuteScriptAsync("scrollTo(0,200);document.querySelector('.login-container').scrollTop=200");
+            await Wait("scrollY===0 && document.body.scrollTop===0 && document.querySelector('.login-container').scrollTop===0", "Phone login scroll lock failed at "+width);
+            if(width==390) using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"login-mobile.png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+            form.Height=320;
+            await Wait("innerHeight===320 && (()=>{const p=document.getElementById('pinInput').getBoundingClientRect(),b=document.getElementById('unlockBtn').getBoundingClientRect();return p.top>=47 && b.bottom<=innerHeight-34 && b.height>=44 && scrollY===0})()", "Keyboard-height PIN and unlock button hidden at "+width);
+            await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('errMsg').textContent='Incorrect PIN. Please try again.'");
+            await Wait("document.getElementById('errMsg').getBoundingClientRect().bottom<=innerHeight-34", "Keyboard-height error clipped at "+width);
+            if(width==390) using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"login-keyboard.png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+            await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('errMsg').textContent=''");
+        }
+        form.MinimumSize=loginMinimum;form.Size=loginSize;
+        await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('.login-container').style.removeProperty('padding-top');document.querySelector('.login-container').style.removeProperty('padding-bottom');document.documentElement.classList.add('native-shell');window.dispatchEvent(new Event('resize'))");
+        Console.WriteLine("PASS phone PIN 320x568/375x812/390x844/430x932: safe-area centered, no page/pane scrolling, stable typing; reduced-height 320px controls/errors visible (physical iOS keyboard remains manual)");
+    }
     [STAThread] static int Main() {
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
         var assembly = Assembly.LoadFrom(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Rovarin.exe"));
@@ -229,21 +383,39 @@ internal static class NativeDesktopTest
         var package = json.Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"package.json")));
         string currentVersion = json.Serialize((string)package["version"]);
         var saved = json.Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","data","config.json")));
-        string pin;
-        if(saved.ContainsKey("pin")) pin=(string)saved["pin"];
+        string pin = null;
+        if(saved.ContainsKey("pinSetup")) { }
+        else if(saved.ContainsKey("pin")) pin=(string)saved["pin"];
         else {var credential=(System.Collections.Generic.Dictionary<string,object>)saved["pinCredential"];pin=System.Text.Encoding.UTF8.GetString(System.Security.Cryptography.ProtectedData.Unprotect(Convert.FromBase64String((string)credential["protected"]),System.Text.Encoding.UTF8.GetBytes("Rovarin.Pin.v1"),System.Security.Cryptography.DataProtectionScope.CurrentUser));}
         form.Shown += async delegate {
             try {
+                var readyClock=Stopwatch.StartNew();
                 var deadline=DateTime.UtcNow.AddSeconds(45);
                 while((View==null || View.CoreWebView2==null) && DateTime.UtcNow<deadline) await Task.Delay(100);
                 Check(View!=null && View.CoreWebView2!=null,"WebView2 did not initialize");
+                // WebView now renders the shared startup card before a port is ready.
+                while(window.GetField("origin",flags).GetValue(form)==null && DateTime.UtcNow<deadline) await Task.Delay(100);
                 origin=(string)window.GetField("origin",flags).GetValue(form);
-                await Wait("location.origin==="+json.Serialize(origin)+" && document.readyState==='complete'", "Login document not ready");
+                Check(origin!=null,"Native startup did not resolve a backend origin");
+                await Wait("location.origin==="+json.Serialize(origin)+" && document.readyState==='complete'", "Login document not ready",60);
+                Console.WriteLine("MEASURE native initial document ready ms="+readyClock.ElapsedMilliseconds);
                 Check(View.CoreWebView2.Source.StartsWith(origin),"Wrong dashboard origin");
                 await View.CoreWebView2.ExecuteScriptAsync("window.__qaAuth=null;void fetch('/api/metrics').then(r=>window.__qaAuth=r.status)");
-                if(Environment.GetEnvironmentVariable("ROVARIN_NATIVE_MAINTENANCE_VM")=="1")
+                if(Environment.GetEnvironmentVariable("ROVARIN_NATIVE_MAINTENANCE_VM")=="1" || Environment.GetEnvironmentVariable("ROVARIN_NATIVE_PIN_CHANGE_ONLY")=="1")
                     await Wait("window.__qaAuth===401 || window.__qaAuth===200", "VM authentication status unavailable");
                 else await Wait("window.__qaAuth===401", "Native shell bypassed authentication");
+                if (Environment.GetEnvironmentVariable("ROVARIN_NATIVE_PIN_LAYOUT_ONLY") == "1") {
+                    for(int cycle=0;cycle<6;cycle++) { await PinLayout(json); View.CoreWebView2.Navigate(origin+"/"); await Wait("document.documentElement.dataset.loginReady==='true' && document.readyState==='complete' && !!document.getElementById('pinInput')", "Repeated PIN document not ready",30); }
+                    result=0;Invoke("ExitShell");return;
+                }
+                if (Environment.GetEnvironmentVariable("ROVARIN_NATIVE_PIN_CHANGE_ONLY") == "1") {
+                    if(await Condition("!!document.getElementById('pinInput')"))await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('pinInput').value="+json.Serialize(pin)+";document.getElementById('unlockBtn').click()");
+                    await Wait("!document.getElementById('pinInput') && typeof showSecuritySettings==='function'", "Existing QA PIN did not unlock",30);
+                    await PinChangeLifecycle(json);result=0;Invoke("ExitShell");return;
+                }
+                if (Environment.GetEnvironmentVariable("ROVARIN_NATIVE_PIN_ONLY") == "1") {
+                    await PinLifecycle(json);result=0;Invoke("ExitShell");return;
+                }
                 if (Environment.GetEnvironmentVariable("ROVARIN_NATIVE_MAINTENANCE_VM") == "1") {
                     using (var bios=Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\BIOS"))
                         Check(bios!=null && String.Equals(Convert.ToString(bios.GetValue("SystemProductName")),"VirtualBox",StringComparison.OrdinalIgnoreCase),"Physical host refused: VM-only provisioning test");
@@ -253,10 +425,23 @@ internal static class NativeDesktopTest
                     await MaintenanceSettings(pin,json); result=0; Invoke("ExitShell"); return;
                 }
                 await Task.Delay(200);
+                if (Environment.GetEnvironmentVariable("ROVARIN_NATIVE_DASHBOARD_ONLY") == "1") {
+                    // A hidden native window must not keep sending PINs to a stale
+                    // backend origin after the canonical owner has changed.
+                    window.GetField("origin",flags).SetValue(form,"http://127.0.0.1:1");
+                    form.Hide(); Invoke("OpenWindow");
+                    var reopenDeadline=DateTime.UtcNow.AddSeconds(40);
+                    while (DateTime.UtcNow<reopenDeadline && ((bool)window.GetField("busy",flags).GetValue(form) || (string)window.GetField("origin",flags).GetValue(form)!=origin)) await Task.Delay(100);
+                    Check((string)window.GetField("origin",flags).GetValue(form)==origin && !(bool)window.GetField("busy",flags).GetValue(form),"Tray reopen retained stale backend origin");
+                    await Wait("location.origin==="+json.Serialize(origin)+" && !!document.getElementById('pinInput') && document.readyState==='complete'", "Reopened native PIN did not target canonical backend",30);
+                    Console.WriteLine("PASS actual native tray reopen re-resolves stale backend origin");
+                    await DashboardLayout(pin,json); result=0; Invoke("ExitShell"); return;
+                }
                 if (Environment.GetEnvironmentVariable("ROVARIN_NATIVE_GLASS_ONLY")=="1") {
                     await GlassParity(pin,json); result=0; Invoke("ExitShell"); return;
                 }
-                Check(form.Width==360 && form.Height>=320 && form.Height<480,"PIN window not sized around the shared card");
+                Check(form.Width==344 && form.Height>=320 && form.Height<480,"PIN window not sized around the shared card");
+                await Wait("(()=>{const r=document.querySelector('.login-card').getBoundingClientRect();return r.x===0 && r.y===0 && r.width===innerWidth && Math.abs(r.height-innerHeight)<1 && getComputedStyle(document.body).backgroundImage==='none' && getComputedStyle(document.body).backgroundColor==='rgba(0, 0, 0, 0)' && getComputedStyle(document.body,'::before').content==='none'})()", "Native PIN has a second backdrop or outer frame");
                 Check(form.FormBorderStyle==FormBorderStyle.None && !form.ControlBox && form.ClientSize==form.Size,"Lock window has an outer native frame");
                 bool dwmCorners=(bool)window.GetField("lockUsesDwmCorners",flags).GetValue(form);
                 if(dwmCorners) {
@@ -302,29 +487,7 @@ internal static class NativeDesktopTest
                 using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-lock.png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
                 await Wait("document.documentElement.scrollHeight<=innerHeight+1", "Compact PIN page overflows");
                 await View.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia", "{\"features\":[{\"name\":\"prefers-reduced-motion\",\"value\":\"no-preference\"},{\"name\":\"prefers-contrast\",\"value\":\"no-preference\"}]}");
-                var loginSize=form.Size; var loginMinimum=form.MinimumSize;
-                form.MinimumSize=new System.Drawing.Size(320,240);
-                await View.CoreWebView2.ExecuteScriptAsync("document.documentElement.classList.remove('native-shell');document.querySelector('.login-container').style.paddingTop='47px';document.querySelector('.login-container').style.paddingBottom='34px';window.dispatchEvent(new Event('resize'))");
-                foreach(var phoneSize in new System.Drawing.Size[]{new System.Drawing.Size(320,568),new System.Drawing.Size(375,812),new System.Drawing.Size(390,844),new System.Drawing.Size(430,932)}) {
-                    int width=phoneSize.Width; form.Size=phoneSize;
-                    await Wait("innerWidth==="+width+" && document.documentElement.scrollWidth<=innerWidth && getComputedStyle(document.querySelector('.login-container')).justifyContent==='center' && getComputedStyle(document.querySelector('.login-container')).overflowY==='hidden' && getComputedStyle(document.querySelector('.lock-window-controls')).display==='none' && getComputedStyle(document.querySelector('.lock-window-drag')).display==='none'", "Stable phone PIN layout at "+width);
-                    await Wait("!document.getElementById('pinInput').autofocus && (matchMedia('(prefers-reduced-motion: reduce)').matches ? getComputedStyle(document.querySelector('.pin-input')).transitionDuration==='0s' : getComputedStyle(document.querySelector('.pin-input')).transitionProperty==='border-color, box-shadow') && parseFloat(getComputedStyle(document.querySelector('.pin-input')).letterSpacing)<=6", "Phone PIN keyboard/animation settings at "+width);
-                    await View.CoreWebView2.ExecuteScriptAsync("(()=>{const p=document.getElementById('pinInput');p.focus();window.__qaPinTop=p.getBoundingClientRect().top;for(const d of '123456'){p.value+=d;p.dispatchEvent(new Event('input',{bubbles:true}));}window.__qaTyped=p.value==='123456' && p.getBoundingClientRect().top===window.__qaPinTop;window.__qaAuto=window.__qaAuto||document.getElementById('unlockBtn').disabled;p.value='';p.blur()})()");
-                    await Wait("window.__qaTyped && window.__qaAuto && document.documentElement.scrollWidth<=innerWidth", "Phone PIN typing shifted/cleared or did not auto-submit at "+width);
-                    await Wait("(()=>{const c=document.querySelector('.login-container'),r=document.querySelector('.login-card').getBoundingClientRect(),p=getComputedStyle(c);return r.top>=47 && r.bottom<=innerHeight-34 && Math.abs((r.top+r.bottom)/2-(47+(innerHeight-47-34)/2))<2})()", "Phone login is not centered within safe areas at "+width);
-                    await View.CoreWebView2.ExecuteScriptAsync("scrollTo(0,200);document.querySelector('.login-container').scrollTop=200");
-                    await Wait("scrollY===0 && document.body.scrollTop===0 && document.querySelector('.login-container').scrollTop===0", "Phone login scroll lock failed at "+width);
-                    if(width==390) using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"login-mobile.png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
-                    form.Height=320;
-                    await Wait("innerHeight===320 && (()=>{const p=document.getElementById('pinInput').getBoundingClientRect(),b=document.getElementById('unlockBtn').getBoundingClientRect();return p.top>=47 && b.bottom<=innerHeight-34 && b.height>=44 && scrollY===0})()", "Keyboard-height PIN and unlock button hidden at "+width);
-                    await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('errMsg').textContent='Incorrect PIN. Please try again.'");
-                    await Wait("document.getElementById('errMsg').getBoundingClientRect().bottom<=innerHeight-34", "Keyboard-height error clipped at "+width);
-                    if(width==390) using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"login-keyboard.png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
-                    await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('errMsg').textContent=''");
-                }
-                form.MinimumSize=loginMinimum;form.Size=loginSize;
-                await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('.login-container').style.removeProperty('padding-top');document.querySelector('.login-container').style.removeProperty('padding-bottom');document.documentElement.classList.add('native-shell');window.dispatchEvent(new Event('resize'))");
-                Console.WriteLine("PASS phone PIN 320x568/375x812/390x844/430x932: safe-area centered, no page/pane scrolling, stable typing; reduced-height 320px controls/errors visible (physical iOS keyboard remains manual)");
+                await PinLayout(json);
                 await View.CoreWebView2.ExecuteScriptAsync("window.__qaLogin=null;void fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:"+json.Serialize(pin)+"})}).then(r=>window.__qaLogin=r.status)");
                 await Wait("window.__qaLogin===200", "Native PIN login failed");
                 View.CoreWebView2.Navigate(origin+"/");
@@ -403,7 +566,7 @@ internal static class NativeDesktopTest
                 await preferenceOn;
                 View.CoreWebView2.Navigate(origin+"/");
                 await Wait("document.readyState==='complete' && !!document.getElementById('pinInput')", "Re-enabled native PIN did not show login");
-                await Task.Delay(200); Check(form.Width==360 && form.Height<480 && ((bool)window.GetField("lockUsesDwmCorners",flags).GetValue(form) || form.Region!=null),"Lock/re-enable did not return to rounded compact PIN window");
+                await Task.Delay(200); Check(form.Width==344 && form.Height<480 && ((bool)window.GetField("lockUsesDwmCorners",flags).GetValue(form) || form.Region!=null),"Lock/re-enable did not return to rounded compact PIN window");
                 Invoke("SaveBounds");
                 var normalSaved=json.Deserialize<System.Collections.Generic.Dictionary<string,int>>(File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","data","desktop-window.json")));
                 Check(normalSaved["width"]==900 && normalSaved["height"]==680,"Locked bounds overwrote normal authenticated saved bounds");
@@ -413,14 +576,10 @@ internal static class NativeDesktopTest
                 await Wait("document.readyState==='complete' && !!window.monitoringLeaseId", "Dashboard did not return after re-enable",30);
                 await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('nativeSettingsButton').click()");
                 Console.WriteLine("PASS actual native passwordless cookie provisioning and PIN re-enable");
-                await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('nativeBackButton').click()");
-                await Wait("!document.getElementById('dashboardPage').hidden && !document.getElementById('nativeForwardButton').disabled", "Back did not return to dashboard");
-                await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('nativeForwardButton').click()");
-                await Wait("!document.getElementById('diagnosticsPage').hidden", "Forward did not restore settings page");
-                await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('nativeBackButton').click();showAppPage('processesPage')");
-                await Wait("document.getElementById('nativeForwardButton').disabled", "New navigation did not discard forward history");
+                await Wait("!document.querySelector('#nativeBackButton,#nativeForwardButton,.native-history') && !document.getElementById('diagnosticsPage').hidden", "Removed history controls remain or Settings navigation failed");
                 await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('[data-page=dashboardPage]').click();scrollTo(0,0)");
-                Console.WriteLine("PASS page Back/Forward, branch history and Settings navigation");
+                await Wait("!document.getElementById('dashboardPage').hidden", "Sidebar did not return to Dashboard");
+                Console.WriteLine("PASS compact header without history buttons and sidebar/Settings navigation");
                 await View.CoreWebView2.ExecuteScriptAsync("showAppPage('appsPage')");
                 await Wait("!appsPage.hidden && document.querySelectorAll('.apps-row').length>0 && document.documentElement.scrollWidth<=innerWidth", "Native installed-app inventory and page navigation",45);
                 await View.CoreWebView2.ExecuteScriptAsync("window.__qaAppIds=Array.from(document.querySelectorAll('.apps-row')).slice(0,3).map(r=>({id:r.dataset.appId,name:r.querySelector('h2').textContent}));for(const app of __qaAppIds){appsSearch.value=app.name;appsSearch.dispatchEvent(new Event('input'));const row=Array.from(document.querySelectorAll('.apps-row')).find(r=>r.dataset.appId===app.id);const check=row.querySelector('input');check.checked=true;check.dispatchEvent(new Event('change'));}appsSearch.value='qa-no-match';appsSearch.dispatchEvent(new Event('input'));appsBatchUninstall.click()");
@@ -610,7 +769,7 @@ internal static class NativeDesktopTest
                     await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('logoutButton').click()");
                     await Wait("!!document.getElementById('pinInput') && document.readyState==='complete'", "Relock did not navigate to login");
                     await Task.Delay(200);
-                    Check(((bool)window.GetField("lockUsesDwmCorners",flags).GetValue(form) || form.Region!=null) && form.Width==360 && form.Height<480 && form.WindowState==FormWindowState.Normal,"Repeated relock presentation failed");
+                    Check(((bool)window.GetField("lockUsesDwmCorners",flags).GetValue(form) || form.Region!=null) && form.Width==344 && form.Height<480 && form.WindowState==FormWindowState.Normal,"Repeated relock presentation failed");
                     await Wait("getComputedStyle(document.querySelector('.login-container')).overflowY==='hidden' && !document.querySelector('.native-app-bar')", "Relock did not restore login scroll lock");
                     await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('pinInput').value="+json.Serialize(pin)+";document.getElementById('pinInput').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))");
                     await Wait("!!window.monitoringLeaseId && !!document.getElementById('dashboardPage')", "Enter unlock did not restore dashboard",30);

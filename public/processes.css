@@ -36,7 +36,7 @@
 .processes-heading h1 { margin: 0; font-size: clamp(25px, 7vw, 34px); letter-spacing: -.045em; }
 .processes-heading p:last-child { margin-top: 5px; color: var(--text-secondary); font-size: 13px; }
 .processes-eyebrow { margin: 0 0 7px; color: var(--accent-blue); font: 600 10px var(--font-mono); letter-spacing: .12em; }
-.processes-live-state { display: flex; align-items: center; gap: 7px; padding: 8px 11px; border: 1px solid var(--border-card); border-radius: 999px; color: var(--text-secondary); background: rgba(255,255,255,.045); font-size: 11px; white-space: nowrap; }
+.processes-live-state { display: flex; align-items: center; gap: 7px; padding: 8px 11px; border: 1px solid var(--border-card); border-radius: 999px; color: var(--text-secondary); background: rgba(255,255,255,.045); font-size: 12px; white-space: nowrap; }
 #processesLiveDot { width: 8px; height: 8px; border-radius: 50%; background: #34d399; box-shadow: 0 0 12px rgba(52, 211, 153, .7); }
 #processesLiveDot.is-stale { background: #fbbf24; box-shadow: 0 0 10px rgba(251, 191, 36, .45); }
 .processes-toolbar { margin: 22px 0 10px; }
@@ -49,20 +49,20 @@
 .processes-table tr.is-selected td { box-shadow: inset 0 2px rgba(56,189,248,.16), inset 0 -2px rgba(56,189,248,.16); }
 .processes-table tr:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
 @media (prefers-reduced-motion: reduce) { .processes-table tr.is-selectable { transition: none; } .processes-table tr.is-selectable:active .process-name { transform: none; } }
-.processes-updated { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.processes-updated { color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .processes-sort { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--border-card); border-radius: 11px; background: rgba(0,0,0,.13); }
 .processes-sort button { min-height: 34px; padding: 0 12px; border: 0; border-radius: 8px; color: var(--text-secondary); background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
 .processes-sort button.is-selected { color: white; background: rgba(125, 211, 252, .17); }
 .processes-table-wrap { overflow-x: auto; border: 1px solid rgba(210,226,250,.09); border-radius: 14px; background: rgba(2,8,18,.22); }
 .processes-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
-.processes-table th { padding: 11px 9px; color: var(--text-muted); font-size: 10px; font-weight: 650; white-space: nowrap; }
+.processes-table th { padding: 11px 9px; color: var(--text-muted); font-size: 11px; font-weight: 650; white-space: nowrap; }
 .processes-table td { padding: 11px 9px; border-top: 1px solid rgba(210,226,250,.07); color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .processes-table td.process-name { max-width: 150px; overflow: hidden; color: var(--text-primary); font-weight: 600; text-overflow: ellipsis; }
 .processes-empty { padding: 28px 12px !important; color: var(--text-muted) !important; text-align: center; white-space: normal !important; }
-.processes-footnote { margin: 11px 0 0; color: var(--text-muted); font-size: 10px; line-height: 1.5; }
+.processes-footnote { margin: 11px 0 0; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
 .processes-killbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
 .processes-selection { color: var(--text-secondary); font-size: 12px; }
-.processes-kill-status { min-height: 14px; font-size: 11px; color: var(--text-muted); }
+.processes-kill-status { min-height: 14px; font-size: 12px; color: var(--text-muted); }
 .processes-kill-status.ok { color: #34d399; }
 .processes-kill-status.error { color: #f87171; }
 .processes-kill { min-height: 34px; padding: 0 14px; border: 1px solid rgba(248, 113, 113, .35); border-radius: 9px; color: #fecaca; background: rgba(248, 113, 113, .14); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; transition: background .16s ease; }
@@ -86,13 +86,16 @@
 #processesLiveDot.is-stale { background: var(--state-warning); box-shadow: none; }
 @media (max-width: 699px) { .processes-sort button, .processes-kill { min-height: 44px; } }
 
-.process-technical-name {display:block;font-size:10px;font-weight:400;line-height:1.3;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis}
+.process-technical-name {display:block;font-size:11px;font-weight:400;line-height:1.3;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis}
 
 /* Consumer Processes: shared application groups above exact technical rows. */
 #processesPage {padding:14px;min-height:0;display:flex;flex-direction:column;height:calc(100dvh - 138px)}
 #processesPage .processes-heading h1 {font-size:24px;letter-spacing:-.025em}
-.processes-search {display:block;margin-top:12px;flex-shrink:0}.processes-search input {width:100%;min-height:44px;padding:9px 12px;background:var(--surface-content-raised);color:var(--text-primary);border:1px solid var(--border-card);border-radius:10px;font:inherit;font-size:13px}
-#processesPage .processes-toolbar {margin:8px 0;flex-wrap:nowrap;gap:8px;flex-shrink:0}#processesPage .processes-live-state {border:0;background:none;padding:0;font-size:12px}#processesPage .processes-updated {flex:1;text-align:right;font-size:10px}#processesPage .processes-freeze {min-height:40px}
+.processes-search {display:block;margin-top:12px;flex-shrink:0}
+.processes-search input {width:100%;min-height:44px;padding:9px 12px;background:var(--surface-content-raised);color:var(--text-primary);border:1px solid var(--border-card);border-radius:10px;font:inherit;font-size:13px;outline:none;transition:border-color .18s ease,box-shadow .18s ease;}
+.processes-search input:focus {outline:none;border-color:var(--accent-primary);box-shadow:inset 0 1px 2px rgba(0,4,12,.32),0 0 0 1px rgba(139,222,237,.25),0 4px 14px rgba(2,7,18,.22);}
+.processes-search input:focus-visible {outline:none;border-color:var(--accent-primary);}
+#processesPage .processes-toolbar {margin:8px 0;flex-wrap:nowrap;gap:8px;flex-shrink:0}#processesPage .processes-live-state {border:0;background:none;padding:0;font-size:12px}#processesPage .processes-updated {flex:1;text-align:right;font-size:11.5px}#processesPage .processes-freeze {min-height:40px}
 #processesPage .processes-table-wrap {flex:1;min-height:120px;overflow:auto;border:0;border-radius:0;background:transparent}#processesPage .processes-table {table-layout:fixed}#processesPage .processes-table th {position:sticky;top:0;z-index:1;background:var(--surface-content);padding:0 6px;height:44px}#processesPage .processes-table th:first-child {width:54%}#processesPage .processes-table th.process-pid {width:12%}#processesPage .processes-table td {padding:8px 6px;height:44px;font-size:12px}#processesPage .processes-table .process-name {max-width:none;white-space:normal}#processesPage .process-label {display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#processesPage .process-child .process-name {padding-left:22px}#processesPage .process-group {cursor:pointer}#processesPage .process-group:focus-visible {outline:2px solid var(--accent-primary);outline-offset:-2px}#processesPage .processes-killbar {justify-content:flex-start;margin-top:8px;flex-shrink:0}#processesPage .processes-killbar[hidden] {display:none}#processesPage .processes-selection {flex:1;min-width:100px;font-size:11px}#processesPage .processes-kill {min-height:44px}#processesPage .processes-kill-status {margin:5px 0 0;min-height:0}.processes-advanced summary {cursor:pointer;min-height:44px;display:flex;align-items:center;padding:0 10px;color:var(--text-secondary);font-size:12px}.processes-advanced[open] {flex-basis:100%;padding:8px;background:var(--surface-content-raised);border-radius:10px}.processes-advanced p {font-size:11px;color:var(--text-secondary);margin:8px 0}.sr-only {position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 @media(max-width:699px){#processesPage {height:calc(100dvh - 148px);padding:12px;border-radius:16px}#processesPage .process-pid {display:none}#processesPage .processes-table th:first-child {width:58%}#processesPage .processes-table td {font-size:11px}#processesPage .processes-updated {max-width:130px}#processesPage .processes-freeze {min-height:44px}}
 

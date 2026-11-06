@@ -42,7 +42,7 @@ function pinned(root) {
   const build=fs.readFileSync(path.join(root,'packaging/build.ps1'),'utf8');
   const take=(pattern)=>{const match=build.match(pattern);return match?match[1]:'Unable to determine';};
   return [
-    {name:'Bundled Node runtime',version:take(/nodejs\.org\/dist\/v([^/]+)\//)},
+    {name:'Bundled Node runtime',version:build.match(/^\$nodeVersion\s*=\s*'(\d+\.\d+\.\d+)'/m)?.[1] || take(/nodejs\.org\/dist\/v([^/]+)\//)},
     {name:'PawnIO',version:take(/PawnIO\.Setup\/releases\/download\/([^/]+)\//)},
     {name:'Inno Setup',version:take(/innoVersion='([^']+)'/)},
     {name:'WebView2 SDK',version:take(/webview2-([0-9.]+)\.nupkg/)}

@@ -6,6 +6,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
+const linuxPreview = require('./release-linux-preview');
 const TARGET = 'https://github.com/DontMovePlease/Rovarin';
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const split = text => text.split('\0').filter(Boolean);
@@ -15,6 +16,7 @@ const PRIVATE = /(^|\/)(?:AGENTS\.md|PROJECT_STATUS\.md|THE-PLAN\.md|SECURITY\.m
 const PRIVATE_TOOLS = new Set(["scripts/check-maint-status.ps1", "scripts/diagnose-service.ps1", "scripts/execute-crash-recovery-interactive.ps1", "scripts/execute-interrupted-install-interactive.ps1", "scripts/guest-install-rovarin.ps1", "scripts/guest-step-check.ps1", "scripts/guest-test-e2e-api.ps1", "scripts/guest-test-network-reset.ps1", "scripts/install-maintenance-interactive.ps1", "scripts/maintenance-release-vm-validation.ps1", "scripts/run-guest-cmd.ps1", "scripts/test-clean-install.ps1", "scripts/test-crash-recovery.ps1", "scripts/test-elevation.ps1", "scripts/test-mid-provisioning-interruption.ps1", "scripts/test-privileged-operations.ps1", "scripts/test-sfc-scan.ps1", "scripts/test-upgrade-scenario.ps1", "scripts/update-guest-service.ps1", "scripts/upload-maint-fixtures.ps1", "scripts/vm-control.ps1"]);
 function permitted(file) {
   if (!file || file.includes('\\') || file.includes(':') || file.split('/').some(p => !p || p === '.' || p === '..') || PRIVATE.test(file) || PRIVATE_TOOLS.has(file)) return false;
+  if (linuxPreview.sourceFiles.includes(file)) return true;
   if (/\.md$/i.test(file)) return file === 'README.md' || file === 'vendor/LibreHardwareMonitor/0.9.6/README.md';
   return /^[^/]+\.(?:js|bat|vbs)$/.test(file) || ['.gitignore','LICENSE','package.json','public/three-LICENSE.txt','public/three-glass.NOTICE.txt','public/three-glass.module.js'].includes(file) ||
     /^scripts\/[a-z0-9_-]+\.(?:js|ps1|cs|json)$/.test(file) || /^public\/[a-z0-9-]+\.(?:html|css|js)$/.test(file) ||
@@ -32,7 +34,7 @@ function plain(root, relative, missing = false) {
   if (fs.lstatSync(cursor).isSymbolicLink()) throw new Error('Repository directory redirects; refusing operation.');
   for (const piece of relative.split('/')) {
     cursor = path.join(cursor,piece);
-    if (!fs.existsSync(cursor)) { if (missing) return cursor; throw new Error('Required file is missing: ' + relative); }
+    if (!fs.existsSync(cursor)) { if (missing) return path.join(root,...relative.split('/')); throw new Error('Required file is missing: ' + relative); }
     if (fs.lstatSync(cursor).isSymbolicLink()) throw new Error('Redirecting path rejected: ' + relative);
   }
   return cursor;
@@ -263,7 +265,7 @@ class Manager {
     const lastTag = releases[0];
     const meaningful = await this.meaningfulChanges(source,lastTag);
     if (!meaningful.length) throw new Error('Nothing new to publish. Rovarin has no meaningful changes since version '+(lastTag || current.version).replace(/^v/,'')+'. Make changes to the project before creating another release.');
-    return {...common,...publicState,version,tag:'v'+version,changes,meaningfulChanges:meaningful,previousVersion:lastTag?.replace(/^v/,''),assets:['RovarinSetup.exe','RovarinSetup.sha256','release.json'],prerelease:semver(version).major===0,commands:['synchronize package.json + Inno AppVersion','npm run build:installer','npm run release:verify (all eight suites + isolated installer lifecycle)',...commands,`git tag -a v${version} <exact build-source SHA>`,`git push origin refs/tags/v${version}`,`gh release create v${version} --verify-tag --generate-notes --fail-on-no-commits --draft`, 'gh release upload <exact allowlisted verified assets> (no --clobber)','gh release edit --draft=false']};
+    return {...common,...publicState,version,tag:'v'+version,changes,meaningfulChanges:meaningful,previousVersion:lastTag?.replace(/^v/,''),assets:['RovarinSetup.exe','RovarinSetup.sha256','release.json',...linuxPreview.names(version)],prerelease:semver(version).major===0,commands:['synchronize package.json + Inno AppVersion','npm run build:installer','npm run release:verify (all eight suites + isolated installer lifecycle)',...commands,`git tag -a v${version} <exact build-source SHA>`,`git push origin refs/tags/v${version}`,`gh release create v${version} --verify-tag --generate-notes --fail-on-no-commits --draft`, 'gh release upload <exact allowlisted verified assets> (no --clobber)','gh release edit --draft=false']};
   }
   async meaningfulChanges(source,tag) {
     const rows = tag ? split(await this.git(['ls-tree','-r','-z',tag],this.publicRoot)) : [];
@@ -362,7 +364,7 @@ class Manager {
     this.scan('README.md',Buffer.from(JSON.stringify(receipt)),this.secrets());
     this.verifyBuildSource();
     if (receipt.version !== version || build.version !== version || receipt.sha256 !== actual || build.sha256 !== actual || build.payloadManifestSha256 !== receipt.payloadManifestSha256 || hash(fs.readFileSync(plain(this.root,'dist/RovarinSetup.exe'))) !== actual || fs.readFileSync(assets[1],'utf8').trim() !== `${actual}  RovarinSetup.exe` || receipt.payloadManifestSha256 !== hash(fs.readFileSync(plain(this.root,'packaging/payload-manifest.json'))) || !Array.isArray(receipt.suites) || receipt.suites.join('|') !== [...SUITES,'installer-integration'].join('|')) throw new Error('Version, checksum or verified build metadata mismatch. Release aborted.');
-    return {assets,sha256:actual};
+    return {assets:[...assets,...linuxPreview.verify(this.root,version)],sha256:actual};
   }
   verifyBuildSource() {
     const {digest} = require('./release-verify');
@@ -431,6 +433,7 @@ class Manager {
     // Notes are not credentials and are supplied as a distinct CLI argument.
     if (options.note) args.push('--notes',String(options.note).slice(0,3000));
     await this.run('gh',args,this.root);
+    linuxPreview.verify(this.root,plan.version);
     await this.run('gh',['release','upload',plan.tag,...verified.assets,'--repo','DontMovePlease/Rovarin'],this.root,180000);
     const inspect = async () => {
       try {
@@ -447,6 +450,7 @@ class Manager {
       const local = verified.assets.find(f=>path.basename(f)===asset.name);
       if (asset.size !== fs.statSync(local).size || asset.state !== 'uploaded' || asset.digest !== 'sha256:'+hash(fs.readFileSync(local))) throw new Error('GitHub asset digest/size verification failed. Draft remains unpublished.');
     }
+    linuxPreview.verify(this.root,plan.version);
     await this.run('gh',['release','edit',plan.tag,'--repo','DontMovePlease/Rovarin','--draft=false'],this.root);
     release = await inspect();
     if (release.draft) throw new Error('Release remains a draft.');

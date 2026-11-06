@@ -376,10 +376,10 @@ function updateUI(data) {
   // Header & Host
   if (data.system) {
     document.getElementById('hostName').textContent = data.system.hostname || 'Windows PC';
-    document.getElementById('osBadge').textContent = (data.system.windowsVersion || 'Windows').replace('Microsoft ', '');
+    document.getElementById('osBadge').textContent = (data.system.windowsVersion || data.system.distro || (data.system.platform === 'Linux' ? 'Linux' : 'Windows')).replace('Microsoft ', '');
     document.getElementById('tailscaleIpText').textContent = `Tailscale: ${data.system.tailscaleIP || 'N/A'}`;
 
-    document.getElementById('specOs').textContent = data.system.windowsVersion || 'Windows 11';
+    document.getElementById('specOs').textContent = data.system.windowsVersion || data.system.osVersion || (data.system.platform === 'Linux' ? 'Linux' : 'Windows 11');
     document.getElementById('specCpu').textContent = data.cpu.model || data.system.cpuModel;
     document.getElementById('specGpu').textContent = (data.system.gpuModels && data.system.gpuModels.length > 0)
       ? data.system.gpuModels.join(' + ')
@@ -401,20 +401,28 @@ function updateUI(data) {
   document.getElementById('uptimeText').textContent = `Uptime: ${data.uptime}`;
   if (document.getElementById('lastUpdated')) document.getElementById('lastUpdated').textContent = data.timestamp;
 
-  // PC Health Card
-  const health = data.health;
-  if (health) {
-    const healthBadge = document.getElementById('healthBadge');
+  // Render badge, collapsed count and details from the same snapshot.
+  const health = summarizeHealth(data.health);
+  const healthBadge = document.getElementById('healthBadge');
+  if (healthBadge) {
     healthBadge.textContent = health.rating;
     healthBadge.className = `health-status-badge ${health.badgeColor}`;
-
-    const checklistEl = document.getElementById('healthChecklist');
-    checklistEl.innerHTML = health.issues.map(item => `
-      <div class="health-check-item">
-        <span class="indicator ${item.level}"></span>
-        <span>${item.text}</span>
-      </div>
-    `).join('');
+  }
+  updateHealthSubText(health);
+  const checklistEl = document.getElementById('healthChecklist');
+  if (checklistEl) {
+    checklistEl.replaceChildren(...health.issues.map(item => {
+      const row = document.createElement('div'); row.className = 'health-check-item';
+      const indicator = document.createElement('span'); indicator.className = `indicator ${item.level}`;
+      const text = document.createElement('span'); text.textContent = item.text;
+      row.append(indicator, text); return row;
+    }));
+    if (data.system?.platform === 'Windows' && data.health && data.drives?.some(drive => drive.mount !== 'C:')) {
+      const scope = document.createElement('p');
+      scope.className = 'val-sub';
+      scope.textContent = 'Storage health checks cover C:. See Drive Storage for usage on all drives.';
+      checklistEl.append(scope);
+    }
   }
 
   // CPU
@@ -1043,32 +1051,17 @@ function setMonitoringProfile(profile = 'dashboard') {
 window.setMonitoringProfile = setMonitoringProfile;
 Object.defineProperty(window, 'monitoringLeaseId', { get: () => monitoringLeaseId });
 
-const appPageHistory = ['dashboardPage'];
-let appPageHistoryIndex = 0;
-function updatePageHistoryControls() {
-  const back = document.getElementById('nativeBackButton');
-  const forward = document.getElementById('nativeForwardButton');
-  if (back) back.disabled = appPageHistoryIndex === 0;
-  if (forward) forward.disabled = appPageHistoryIndex === appPageHistory.length - 1;
-}
 const pageScrollPositions = new Map();
-function showAppPage(pageId, recordHistory = true) {
+function showAppPage(pageId) {
   const nextPage = ['processesPage', 'appsPage', 'maintenancePage', 'powerPage', 'diagnosticsPage'].includes(pageId) ? pageId : 'dashboardPage';
 
-  if (recordHistory && appPageHistory[appPageHistoryIndex] !== nextPage) {
-    appPageHistory.splice(appPageHistoryIndex + 1);
-    appPageHistory.push(nextPage);
-    if (appPageHistory.length > 100) appPageHistory.shift();
-    appPageHistoryIndex = appPageHistory.length - 1;
-  }
-  updatePageHistoryControls();
   if (currentAppPage) {
     pageScrollPositions.set(currentAppPage, window.scrollY || document.documentElement.scrollTop || 0);
   }
   currentAppPage = nextPage;
   const sectionTitle = { dashboardPage: 'Dashboard', processesPage: 'Processes', appsPage: 'Applications', maintenancePage: 'Maintenance', powerPage: 'Power', diagnosticsPage: 'Settings' }[nextPage];
   document.getElementById('appSectionTitle').textContent = sectionTitle;
-  document.title = 'Rovarin · ' + sectionTitle;
+  document.title = document.documentElement.classList.contains('native-shell') ? 'Rovarin' : 'Rovarin · ' + sectionTitle;
   document.querySelectorAll('.app-page').forEach(page => {
     const active = page.id === nextPage;
     page.hidden = !active;
@@ -1286,13 +1279,75 @@ function setSidebarOpen(open) {
 }
 document.getElementById('sidebarToggle')?.addEventListener('click', () => setSidebarOpen(!document.body.classList.contains('sidebar-expanded')));
 document.getElementById('sidebarBackdrop')?.addEventListener('click', () => setSidebarOpen(false));
-// Hover expansion is transient and shares the sidebar/content width transition.
+
+let healthCardCollapsed = false;
+try {
+  healthCardCollapsed = localStorage.getItem('rovarin.healthCardCollapsed') === 'true';
+} catch (_) {}
+
+// Severity comes from the existing assessment, never new sensor thresholds.
+function summarizeHealth(health) {
+  const issues = Array.isArray(health?.issues) ? health.issues : [];
+  const count = Array.isArray(health?.issues)
+    ? issues.filter(item => item.level === 'warning' || item.level === 'critical').length
+    : Number.isInteger(health?.advisoriesCount) && health.advisoriesCount >= 0 ? health.advisoriesCount : null;
+  const critical = Array.isArray(health?.issues) ? issues.some(item => item.level === 'critical') : health?.badgeColor === 'rose';
+  const advisory = count > 0 || (!Array.isArray(health?.issues) && health?.badgeColor === 'amber');
+  return {
+    issues,
+    advisoriesCount: count === 0 && (critical || advisory) ? null : count,
+    rating: critical ? 'Attention Needed' : advisory ? (count > 1 ? `${count} Advisories` : 'Advisory') : count === 0 ? 'Healthy' : 'Unavailable',
+    badgeColor: critical ? 'rose' : advisory ? 'amber' : count === 0 ? 'emerald' : '',
+  };
+}
+
+function updateHealthSubText(health) {
+  const subText = document.getElementById('healthSubText');
+  if (!subText || !health) return;
+  if (healthCardCollapsed) {
+    const count = health.advisoriesCount;
+    subText.textContent = count === null ? 'Assessment unavailable · waiting for telemetry' : count === 0
+      ? 'All hardware systems running smoothly'
+      : `${count} active ${count === 1 ? 'advisory' : 'advisories'} detected`;
+  } else {
+    subText.textContent = 'Real-time sensor assessment';
+  }
+}
+
+function setHealthCollapsed(collapsed) {
+  healthCardCollapsed = !!collapsed;
+  const card = document.getElementById('healthCard');
+  const toggle = document.getElementById('healthToggle');
+  const checklist = document.getElementById('healthChecklist');
+  if (card) card.classList.toggle('is-collapsed', healthCardCollapsed);
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(!healthCardCollapsed));
+    toggle.setAttribute('title', healthCardCollapsed ? 'Expand details' : 'Collapse details');
+    toggle.setAttribute('aria-label', healthCardCollapsed ? 'Expand system health details' : 'Collapse system health details');
+  }
+  if (checklist) checklist.hidden = healthCardCollapsed;
+  updateHealthSubText(summarizeHealth(latestDashboardMetrics?.health));
+  try {
+    localStorage.setItem('rovarin.healthCardCollapsed', String(healthCardCollapsed));
+  } catch (_) {}
+}
+
+document.getElementById('healthToggle')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  setHealthCollapsed(!healthCardCollapsed);
+});
+document.getElementById('healthCard')?.querySelector('.health-header')?.addEventListener('click', (e) => {
+  if (e.target.closest('#healthToggle')) return;
+  setHealthCollapsed(!healthCardCollapsed);
+});
+setHealthCollapsed(healthCardCollapsed);
+// Hover expansion is transient; desktop geometry keeps the page stationary.
 const desktopSidebar = document.getElementById('appSidebar');
 const desktopSidebarHover = matchMedia('(hover: hover) and (pointer: fine) and (min-width: 700px)');
 let sidebarPointerInside = false;
 let sidebarHoverTimer = null;
 function desktopSidebarHoverEnabled() {
-  return document.documentElement.classList.contains('native-shell') && desktopSidebarHover.matches;
+  return desktopSidebarHover.matches;
 }
 function setDesktopSidebarHover(open) {
   clearTimeout(sidebarHoverTimer);
@@ -1305,7 +1360,7 @@ function scheduleDesktopSidebarHover() {
   const focused = desktopSidebar.contains(document.activeElement) && document.activeElement.matches(':focus-visible');
   if (focused) { setDesktopSidebarHover(true); return; }
   const open = sidebarPointerInside;
-  sidebarHoverTimer = setTimeout(() => setDesktopSidebarHover(open), open ? 100 : 180);
+  sidebarHoverTimer = setTimeout(() => setDesktopSidebarHover(open), open ? 170 : 220);
 }
 desktopSidebar.addEventListener('pointerenter', event => {
   if (event.pointerType !== 'mouse') return;
@@ -1320,7 +1375,7 @@ desktopSidebar.addEventListener('focusin', scheduleDesktopSidebarHover);
 desktopSidebar.addEventListener('focusout', event => {
   if (!desktopSidebar.contains(event.relatedTarget)) {
     clearTimeout(sidebarHoverTimer);
-    sidebarHoverTimer = setTimeout(() => setDesktopSidebarHover(sidebarPointerInside), 180);
+    sidebarHoverTimer = setTimeout(() => setDesktopSidebarHover(sidebarPointerInside), 220);
   }
 });
 desktopSidebarHover.addEventListener('change', () => {
@@ -1508,7 +1563,7 @@ if (nativeSecurity) window.chrome.webview.addEventListener('message', event => {
   feedback.textContent = status.error || messages[status.state] || 'Administrator maintenance status could not be confirmed. Reopen Settings to retry.';
 });
 
-document.getElementById('generateDesktopPin').addEventListener('click', () => { if (nativeSecurity) window.chrome.webview.postMessage('security-rotate'); });
+document.getElementById('generateDesktopPin').addEventListener('click', () => { if (nativeSecurity) window.dispatchEvent(new Event('rovarin-change-pin')); });
 if (nativeSecurity) window.chrome.webview.addEventListener('message', event => {
   if (event.data?.kind !== 'security-state' || typeof event.data.requireDesktopPin !== 'boolean') return;
   document.getElementById('desktopPinPreference').checked = event.data.requireDesktopPin;
@@ -1588,16 +1643,6 @@ if (nativeSecurity) window.chrome.webview.addEventListener('message', event => {
   }
 });
 window.showAppPage = showAppPage;
-document.getElementById('nativeBackButton')?.addEventListener('click', () => {
-  if (appPageHistoryIndex === 0) return;
-  showAppPage(appPageHistory[--appPageHistoryIndex], false);
-  window.scrollTo(0, 0);
-});
-document.getElementById('nativeForwardButton')?.addEventListener('click', () => {
-  if (appPageHistoryIndex >= appPageHistory.length - 1) return;
-  showAppPage(appPageHistory[++appPageHistoryIndex], false);
-  window.scrollTo(0, 0);
-});
 document.getElementById('nativeSettingsButton')?.addEventListener('click', () => {
   showAppPage('diagnosticsPage');
   if (matchMedia('(max-width: 699px)').matches) setSidebarOpen(false);

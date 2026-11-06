@@ -11,8 +11,12 @@ $exe = Join-Path $preview 'Rovarin.exe'
 if (Test-Path -LiteralPath $exe) {
     # IPC acknowledgement precedes shutdown. Wait on only this preview image.
     $previewProcesses = @(Get-Process -Name Rovarin -ErrorAction SilentlyContinue | Where-Object { try { $_.MainModule.FileName -eq $exe } catch { $false } })
-    $close = Start-Process -FilePath $exe -ArgumentList 'close-desktop' -WorkingDirectory $preview -WindowStyle Hidden -Wait -PassThru
-    try { if ($close.ExitCode -ne 0) { throw 'Development desktop did not confirm closure; refusing to replace its files.' } } finally { $close.Dispose() }
+    # An older idle preview may not understand the current storage policy.
+    # Only ask it to close when its exact image is actually running.
+    if ($previewProcesses.Count -gt 0) {
+        $close = Start-Process -FilePath $exe -ArgumentList 'close-desktop' -WorkingDirectory $preview -WindowStyle Hidden -Wait -PassThru
+        try { if ($close.ExitCode -ne 0) { throw 'Development desktop did not confirm closure; refusing to replace its files.' } } finally { $close.Dispose() }
+    }
     foreach ($previewProcess in $previewProcesses) {
         try { if (-not $previewProcess.WaitForExit(10000)) { throw 'Development desktop is still closing; preview was not overwritten.' } }
         finally { $previewProcess.Dispose() }
