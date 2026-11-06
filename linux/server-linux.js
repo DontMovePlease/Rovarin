@@ -50,8 +50,8 @@ const MIME_TYPES = {
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.txt': 'text/plain; charset=UTF-8'
 };
 // Reviewed canonical frontend assets only; never auto-publish arbitrary files.
-const PUBLIC_FILES = new Set(['liquid-bootstrap.js', 'liquid-glass.css', 'liquid-glass.js', 'liquid-shaders.js', 'three-glass.module.js', 'power.js', 'power.css', 'index.html', 'login.html', 'app.css', 'maintenance.css', 'processes.css', 'desktop.css', 'app.js', 'maintenance.js', 'processes.js', 'pin-lifecycle.js', 'pin-lifecycle.css', 'login.js', 'diagnostics.js', 'diagnostics.css', 'enhanced-support.js', 'uninstall.js', 'apps.js', 'apps.css', 'app-leftovers.js']);
-const STATIC_ASSET_PATHS = new Set([...PUBLIC_FILES].filter(f => f.endsWith('.css') || f.endsWith('.js')).map(f => '/' + f));
+const PUBLIC_FILES = new Set(['rovarin-icon.png', 'rovarin-touch.png', 'liquid-bootstrap.js', 'liquid-glass.css', 'liquid-glass.js', 'liquid-shaders.js', 'three-glass.module.js', 'power.js', 'power.css', 'index.html', 'login.html', 'app.css', 'maintenance.css', 'processes.css', 'desktop.css', 'app.js', 'maintenance.js', 'processes.js', 'pin-lifecycle.js', 'pin-lifecycle.css', 'login.js', 'diagnostics.js', 'diagnostics.css', 'enhanced-support.js', 'uninstall.js', 'apps.js', 'apps.css', 'app-leftovers.js']);
+const STATIC_ASSET_PATHS = new Set([...PUBLIC_FILES].filter(f => f === 'rovarin-icon.png' || f === 'rovarin-touch.png' || f.endsWith('.css') || f.endsWith('.js')).map(f => '/' + f));
 
 // ---- Monitoring leases / samplers (Windows MONITORING_PROFILES, verbatim) ----
 const MONITORING_PROFILES = {

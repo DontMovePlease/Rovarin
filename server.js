@@ -1277,7 +1277,7 @@ const MIME_TYPES = {
   '.png': 'image/png',
   '.ico': 'image/x-icon'
 };
-const PUBLIC_FILES = new Set(["liquid-bootstrap.js","liquid-glass.css","liquid-glass.js","liquid-shaders.js","three-glass.module.js",'power.js', 'power.css', 'index.html', 'login.html', 'app.css', 'maintenance.css', 'processes.css', 'desktop.css', 'app.js', 'maintenance.js', 'processes.js', 'pin-lifecycle.js', 'pin-lifecycle.css', 'login.js', 'diagnostics.js', 'diagnostics.css', 'enhanced-support.js', 'uninstall.js', 'apps.js', 'apps.css', 'app-leftovers.js']);
+const PUBLIC_FILES = new Set(["rovarin-icon.png","rovarin-touch.png","liquid-bootstrap.js","liquid-glass.css","liquid-glass.js","liquid-shaders.js","three-glass.module.js",'power.js', 'power.css', 'index.html', 'login.html', 'app.css', 'maintenance.css', 'processes.css', 'desktop.css', 'app.js', 'maintenance.js', 'processes.js', 'pin-lifecycle.js', 'pin-lifecycle.css', 'login.js', 'diagnostics.js', 'diagnostics.css', 'enhanced-support.js', 'uninstall.js', 'apps.js', 'apps.css', 'app-leftovers.js']);
 
 let dashboardAssetSignature = '';
 let dashboardAssetRevision = '';
@@ -1564,7 +1564,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const isStaticAsset = ["/liquid-bootstrap.js","/liquid-glass.css","/liquid-glass.js","/liquid-shaders.js","/three-glass.module.js",'/power.css', '/power.js', '/app.css', '/maintenance.css', '/processes.css', '/app.js', '/maintenance.js', '/processes.js', '/apps.js', '/apps.css', '/app-leftovers.js', '/pin-lifecycle.js', '/pin-lifecycle.css', '/login.js'].includes(pathname);
+  const isStaticAsset = ["/rovarin-icon.png","/rovarin-touch.png","/liquid-bootstrap.js","/liquid-glass.css","/liquid-glass.js","/liquid-shaders.js","/three-glass.module.js",'/power.css', '/power.js', '/app.css', '/maintenance.css', '/processes.css', '/app.js', '/maintenance.js', '/processes.js', '/apps.js', '/apps.css', '/app-leftovers.js', '/pin-lifecycle.js', '/pin-lifecycle.css', '/login.js'].includes(pathname);
 
   // Reuse authenticated lease traffic to detect UI edits without another poller.
   if (session && pathname === '/api/monitoring/lease') {

@@ -1,7 +1,7 @@
 <div align="center">
 
 
-<img src="docs/images/icon.png" width="64" height="64" alt="Rovarin icon">
+<img src="docs/images/brand-banner.png" width="960" alt="Rovarin — Your PC in your pocket. PC monitoring and control for Windows, with an experimental Linux preview.">
 
 
 # Rovarin

@@ -8,16 +8,10 @@ foreach($size in @(16,32,48,256)) {
     $graphics=[Drawing.Graphics]::FromImage($bitmap)
     try {
         $graphics.SmoothingMode=[Drawing.Drawing2D.SmoothingMode]::AntiAlias
-        $graphics.Clear([Drawing.Color]::FromArgb(255,15,22,34))
-        $scale=$size/64.0
-        $graphics.ScaleTransform($scale,$scale)
-        $pen=New-Object Drawing.Pen([Drawing.Color]::FromArgb(255,74,209,223),3)
-        try {
-            $graphics.DrawRectangle($pen,9,12,46,34)
-            $points=[Drawing.PointF[]]@((New-Object Drawing.PointF(14,31)),(New-Object Drawing.PointF(23,31)),(New-Object Drawing.PointF(28,22)),(New-Object Drawing.PointF(34,39)),(New-Object Drawing.PointF(39,29)),(New-Object Drawing.PointF(50,29)))
-            $graphics.DrawLines($pen,$points)
-            $graphics.DrawLine($pen,32,46,32,53);$graphics.DrawLine($pen,23,54,41,54)
-        } finally {$pen.Dispose()}
+        $graphics.Clear([Drawing.Color]::Transparent)
+        $graphics.InterpolationMode=[Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $source=[Drawing.Image]::FromFile((Join-Path (Split-Path -Parent $PSScriptRoot) 'public\rovarin-icon.png'))
+        try { $graphics.DrawImage($source,0,0,$size,$size) } finally { $source.Dispose() }
         $memory=New-Object IO.MemoryStream
         try {$bitmap.Save($memory,[Drawing.Imaging.ImageFormat]::Png);$frames+=,@{size=$size;bytes=$memory.ToArray()}} finally {$memory.Dispose()}
     } finally {$graphics.Dispose();$bitmap.Dispose()}

@@ -18,7 +18,7 @@ function permitted(file) {
   if (!file || file.includes('\\') || file.includes(':') || file.split('/').some(p => !p || p === '.' || p === '..') || PRIVATE.test(file) || PRIVATE_TOOLS.has(file)) return false;
   if (linuxPreview.sourceFiles.includes(file)) return true;
   if (/\.md$/i.test(file)) return file === 'README.md' || file === 'vendor/LibreHardwareMonitor/0.9.6/README.md';
-  return /^[^/]+\.(?:js|bat|vbs)$/.test(file) || ['.gitignore','LICENSE','package.json','public/three-LICENSE.txt','public/three-glass.NOTICE.txt','public/three-glass.module.js'].includes(file) ||
+  return /^[^/]+\.(?:js|bat|vbs)$/.test(file) || ['.gitignore','LICENSE','package.json','public/rovarin-icon.png','public/rovarin-touch.png','public/three-LICENSE.txt','public/three-glass.NOTICE.txt','public/three-glass.module.js'].includes(file) ||
     /^scripts\/[a-z0-9_-]+\.(?:js|ps1|cs|json)$/.test(file) || /^public\/[a-z0-9-]+\.(?:html|css|js)$/.test(file) ||
     /^packaging\/[A-Za-z0-9.-]+\.(?:cs|ps1|iss|vbs|manifest)$/.test(file) || /^\.github\/ISSUE_TEMPLATE\/[a-z0-9_-]+\.yml$/.test(file) ||
     /^docs\/images\/[a-z0-9-]+\.png$/.test(file) || /^vendor\/(?:LibreHardwareMonitor\/0\.9\.6|QRCode\/1\.8\.0)\/[A-Za-z0-9/_.-]+$/.test(file);

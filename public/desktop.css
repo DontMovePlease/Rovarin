@@ -330,3 +330,6 @@
   html:not(.native-shell) .mobile-brand { display: block; color: var(--text-secondary); font-size: 10px; font-weight: 500; letter-spacing: .055em; line-height: 1.15; }
   html:not(.native-shell) .app-identity-copy { gap: 1px; }
 }
+
+/* A1 Live Dashboard brand: decorative identity, shared across desktop and phone. */
+.native-app-identity .rovarin-brand-mark,.sidebar-phone-brand .rovarin-brand-mark{width:28px;height:28px;min-width:28px;stroke:none}.desktop-brand,.mobile-brand,.sidebar-phone-brand>span{font-family:"Trebuchet MS","Segoe UI",sans-serif;letter-spacing:-.035em;font-weight:700}
