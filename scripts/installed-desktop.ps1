@@ -2,9 +2,14 @@ param([switch]$Setup)
 $ErrorActionPreference = 'Stop'
 $appDir = Split-Path -Parent $PSScriptRoot
 $dataDir = Join-Path (Split-Path -Parent $appDir) 'data'
-& (Join-Path $PSScriptRoot 'start.ps1') | Out-Null
+$legacy=$false;$native=$null
+if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'standby-runtime.ps1')){
+    . (Join-Path $PSScriptRoot 'standby-runtime.ps1')
+    if(Test-StandbyAvailable){$native=Start-StandbyRuntime -Wake;$legacy=[bool]$native.legacyFallback}
+}
+if(-not $native -or $legacy){& (Join-Path $PSScriptRoot 'start.ps1') -Legacy:$legacy | Out-Null}
 . (Join-Path $PSScriptRoot 'dashboard-runtime.ps1')
-$runtime = Get-DashboardRuntime $appDir
+$runtime = Get-DashboardRuntime $appDir -IgnoreStandby:$legacy
 if ($runtime.state -ne 'owned' -or -not $runtime.healthy) {
     try { [IO.File]::AppendAllText((Join-Path $dataDir 'launcher-error.log'), "[Launcher] Dashboard was not ready: $($runtime.state); $($runtime.reason)`r`n") } catch { }
     Add-Type -AssemblyName System.Windows.Forms

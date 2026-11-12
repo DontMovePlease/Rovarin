@@ -15,10 +15,10 @@ node scripts/diagnostics-smoke-test.js
 node linux/test-control.js
 ```
 
-On Ubuntu, Muse additionally runs `node linux/test-linux.js`. The added natural
+On Ubuntu, the runtime verification command is `node linux/test-linux.js`. The natural
 lease-expiration assertion waits the advertised TTL (currently 45 seconds).
 No production timing override was added. Windows cannot validate Linux runtime.
-Ubuntu source/backend/browser and shared HTTP contract verification are user-reported passed; this is separate from clean extracted-package acceptance.
+Ubuntu source/backend/browser and shared HTTP contract verification were reported passed by Muse. Clean extracted-package acceptance also passed for the exact published ea969a5d archive; that evidence does not certify later source edits.
 
 The shared contract covers successful login/session cookie protection; JSON auth
 errors; lease acquisition/TTL and expired heartbeat; core metrics and history;
@@ -37,7 +37,7 @@ assertions; the new shared assertions add no host/distro assumptions.
 
 ## Verification scope
 
-Windows: final complete security suite passed (including shared HTTP assertions,
+Recorded Windows evidence for the v0.6.0 contract implementation: complete security suite passed (including shared HTTP assertions,
 72 PIN lifecycle assertions and real lockout/lease/session expiry); diagnostics
 regression passed; shared negative/framing/release-exclusion fixtures passed;
 37 Linux control/POSIX fixture assertions passed. All five changed/new JavaScript

@@ -1,63 +1,85 @@
-# Rovarin Linux experimental preview
+# Rovarin v0.6.1 Linux experimental candidate
 
-Portable preview for local evaluation, not a supported production release.
-No installer, background service or automatic startup is included.
+This is a candidate for independent package acceptance, not a published release.
+Muse reported acceptance of November 7 desktop source on Ubuntu 24.04.5 LTS with
+Node 24.22.1. That does not certify these newly packaged bytes. Debian and Fedora
+remain untested. No performance or Windows feature-parity claim is made.
 
-1. Install/use Node.js 24.x (the project's tested runtime line) and confirm
-   `node --version`. Node is not bundled. No npm install is required.
-2. Extract `rovarin-0.6.0-linux-preview.tar.gz` and open a terminal in its
-   `rovarin-0.6.0-linux-preview` directory.
-3. As your normal Linux user, without sudo, run:
+## Verify and extract
 
-   ```sh
-   node linux/rovarin.js setup
-   node linux/rovarin.js start
-   ```
+Use Node.js 24.x (24.22.1 was used for source acceptance), system tar and a normal
+desktop user with a working user systemd session. Node is not bundled; no npm
+install is needed. Keep the downloaded checksum beside the archive:
 
-Setup hides PIN input and asks for confirmation. Six digits, including leading
-zeros, are supported; existing 8- and 12-digit policy is retained. Never put a
-PIN in arguments, shell commands, environment variables or files. Existing
-credentials, even corrupt ones, are never overwritten. Credential storage is
-`~/.config/rovarin-linux/config.json` (directory 0700, file 0600). Leave
-`ROVARIN_LINUX_CONFIG_DIR` unset for ordinary use. Stop the backend before any
-explicit repair of storage permissions or restoration of a known-good backup;
-there is no automatic PIN reset or recovery bypass.
+```sh
+sha256sum -c rovarin-0.6.1-linux-preview.tar.gz.sha256
+tar -xzf rovarin-0.6.1-linux-preview.tar.gz
+cd rovarin-0.6.1-linux-preview
+```
 
-Open the localhost address printed by start in your browser and sign in.
-Default ports are 7331–7335; `PORT=7331 node linux/rovarin.js start` requests
-only that port. Keep the terminal open; Ctrl+C stops the server and cleans up
-monitoring resources. Start again with the same command and saved PIN.
-The existing server permits only loopback/Tailscale clients. This is not a
-public Internet deployment package. No runtime state belongs in this folder.
+preview-manifest.json records SHA-256, size and mode for every payload file,
+excluding itself. Only README, LICENSE, that manifest, linux/ and public/ belong
+in the root. linux/install.sh is 0755; other files are 0644. No links, Node or
+Windows binaries, tests, credentials, logs or developer tools ship.
+
+## Install or upgrade
+
+Stop a manually launched source/portable backend first. As the same normal user,
+without sudo, run from the new extracted directory:
+
+```sh
+./linux/install.sh
+~/.local/bin/rovarin status
+~/.local/bin/rovarin open
+```
+
+Fresh installation asks for and confirms a hidden six-digit PIN and must return
+to the shell. Upgrades preserve existing PIN/preferences; do not uninstall or
+use remove-all to upgrade. Damaged credentials are refused, never reset. Never
+put PINs in commands, arguments, environment variables or logs.
+
+The menu entry opens the browser UI. Code is under ~/.local/share/rovarin/app;
+the unit is ~/.config/systemd/user/rovarin.service. Credentials are separate under
+~/.config/rovarin-linux (directory 0700, credential file 0600). Keep the existing
+Node executable installed. Requires systemctl --user, flock, gio, systemd-run and
+xdg-open. No sudo, root service or lingering-user setting is needed.
+
+```sh
+~/.local/bin/rovarin start
+~/.local/bin/rovarin stop
+~/.local/bin/rovarin restart
+~/.local/bin/rovarin enable-startup
+~/.local/bin/rovarin disable-startup
+~/.local/bin/rovarin uninstall
+# Deliberately remove known PIN/preferences too:
+~/.local/bin/rovarin remove-all
+```
+
+Startup is opt-in. Closing the browser leaves the service running. Normal
+uninstall retains settings and unknown files; failed-upgrade backups remain for
+inspection. Shared Node and Tailscale installations are never removed.
 
 ## Capabilities and limits
 
-Core monitoring, process lists/single-process termination, diagnostics and
-browser authentication are experimental Linux implementations. Availability
-depends on Linux permissions and hardware; unavailable readings stay unavailable.
+Includes monitoring, Processes, Diagnostics, authentication/SSE/leases, desktop
+installation, desktop-entry Quick Launch and fresh-PIN management of eligible
+user autostart entries. AMD/Intel DRM and recognized CPU hwmon depend on hardware
+and permissions; missing readings remain unavailable. Windows maintenance/power,
+product updater, native DPAPI and package application removal remain unsupported.
+One canonical frontend serves both platforms. Access remains authenticated and
+restricted to loopback/Tailscale; do not expose it publicly.
 
-Unsupported Linux capabilities return authenticated HTTP 501: Windows application
-inventory/launch/startup/uninstall management, maintenance, product updates,
-Rovarin uninstall, power controls, native desktop/DPAPI functions, enhanced
-Windows sensors and process-tree inspection/termination. There is no Linux
-desktop shell or installer. Some shared frontend controls may remain visible.
+Physical iPhone/Tailscale, broad CPU/GPU hardware and other distributions need
+separate evidence. Tests are deliberately absent from the archive.
 
-Real iPhone-over-Tailscale connectivity and hardware GPU/temperature paths
-remain **unverified**, not confirmed failures. Do not infer those results from
-loopback, browser emulation or Windows-hosted fixture tests.
+## Muse package acceptance
 
-## Muse: clean Ubuntu extraction test
-
-Use a disposable Linux user for genuinely fresh storage. Verify the external
-archive SHA-256, extract as that user, and confirm the folder contains only
-README, LICENSE, preview-manifest.json, linux/ and public/ files. Test hidden
-entry, confirmation mismatch, cancellation, successful setup returning to the
-shell (stdin cleanup), refused repeat setup, private ownership/modes, login,
-monitoring/idle behavior, diagnostics, unsupported controls, Ctrl+C/SIGTERM and
-restart with unchanged credentials. Confirm no PIN appears in output/history.
-Record Node/Ubuntu versions. Test actual iPhone/Tailscale and hardware readings
-separately when available; report untested paths explicitly.
-
-Tests and development tools are deliberately absent. Run repository regression
-suites from the full development checkout separately. This archive has been
-content/extraction-verified on Windows; clean Ubuntu package acceptance is pending.
+Record the exact archive hash, Ubuntu/Node versions, inventory/modes and manifest
+checks before testing. Use disposable state for fresh install: hidden enrollment
+must return, menu launch must produce one managed backend, and startup must be
+opt-in/reversible. Upgrade an accepted-source installation and confirm unchanged
+PIN/preferences. Check rollback, stop/restart and retained/default uninstall.
+Confirm no PIN disclosure. Focus on package/installation differences; prior broad
+source tests need not be repeated without a changed path. Report archive
+acceptance separately from source acceptance and mark untested device/hardware
+paths explicitly.

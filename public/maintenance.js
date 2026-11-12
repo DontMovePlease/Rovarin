@@ -12,6 +12,7 @@
     isAdmin: false,
     isRunning: false,
     unsupported: false,
+    platform: 'windows',
     isLocal: (!window.location.hostname || ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname)),
     serviceEnabled: false,
     serviceState: 'disabled',
@@ -20,12 +21,20 @@
     runningActionId: null,
     pendingToastActionId: null,
     toastTimer: null,
+    boostHudTimer: null,
+    boostAnimFrame: null,
+    boostBadgeTimer: null,
     resetNetworkOfflineCount: 0
   };
 
   // ── Action Definitions (mirrors server ACTIONS) ───────────────────────────
 
   const ACTIONS = [
+    {
+      id:'boost', emoji:'✦', title:'Boost', category:'Quick actions', requiresAdmin:false,
+      confirm:false,
+      desc:'Free background RAM and clean temporary files.'
+    },
     // Cleanup
     {
       id: 'clean_temp',
@@ -66,6 +75,7 @@
       desc: 'Runs a full repair sequence: DISM CheckHealth → ScanHealth → RestoreHealth, then SFC system file check. Can take 5–20 minutes.',
       category: 'Windows Repair',
       requiresAdmin: true,
+      platform: 'windows',
       confirm: true,
       confirmTitle: 'Start Windows System Repair?',
       confirmBody: 'This will run DISM and SFC to check and repair Windows system components. Your PC will stay on — no restart will happen automatically. This process can take 5–20 minutes.',
@@ -79,6 +89,7 @@
       desc: 'Runs SFC /scannow to verify and restore protected Windows system files. Requires Administrator.',
       category: 'Windows Repair',
       requiresAdmin: true,
+      platform: 'windows',
       confirm: false
     },
     {
@@ -88,6 +99,7 @@
       desc: 'Diagnostic scan of the Windows Component Store (DISM CheckHealth + ScanHealth). Does not modify any files.',
       category: 'Windows Repair',
       requiresAdmin: true,
+      platform: 'windows',
       confirm: false
     },
     // Network
@@ -98,6 +110,7 @@
       desc: 'Resets the Winsock catalog and TCP/IP stack to factory defaults. Useful for resolving persistent network errors.',
       category: 'Network',
       requiresAdmin: true,
+      platform: 'windows',
       confirm: true,
       confirmTitle: 'Reset Network Settings?',
       confirmBody: 'This resets Winsock and TCP/IP. Your current network connections will be interrupted. A restart is recommended after the reset to fully apply changes.',
@@ -112,6 +125,7 @@
       desc: 'Refreshes your DHCP IP address lease without touching Tailscale or other virtual adapters.',
       category: 'Network',
       requiresAdmin: false,
+      platform: 'windows',
       confirm: false
     },
     // Explorer
@@ -122,6 +136,32 @@
       desc: 'Restarts explorer.exe. Your taskbar and desktop will briefly disappear and come back. Useful for fixing a frozen shell.',
       category: 'Explorer',
       requiresAdmin: false,
+      platform: 'windows',
+      confirm: false
+    },
+    // Linux-specific actions
+    {
+      id: 'systemd_journal_vacuum',
+      emoji: '📜',
+      title: 'Vacuum User Journal',
+      desc: 'Reduces user systemd journal disk consumption to 50 MB.',
+      category: 'Cleanup',
+      requiresAdmin: false,
+      platform: 'linux',
+      confirm: true,
+      confirmTitle: 'Vacuum User Journal?',
+      confirmBody: 'This will vacuum the user systemd journal to reduce disk space to 50 MB.',
+      confirmBtnLabel: 'Vacuum Journal',
+      confirmDanger: false
+    },
+    {
+      id: 'package_cache_clean',
+      emoji: '📦',
+      title: 'Package Cache Analysis',
+      desc: 'Analyzes safe package cache cleanup in dry-run mode.',
+      category: 'Cleanup',
+      requiresAdmin: false,
+      platform: 'linux',
       confirm: false
     }
   ];
@@ -201,9 +241,40 @@
         <button id="maintToastClose" class="maint-toast-close" type="button" aria-label="Dismiss result">×</button>
       </div>
 
+      <!-- PC Manager-style Boost HUD Card -->
+      <div id="boostHudCard" class="boost-hud-card" role="status" aria-live="polite" aria-atomic="true" hidden>
+        <div class="boost-hud-glow" aria-hidden="true"></div>
+        <div class="boost-hud-top">
+          <div class="boost-hud-gauge-wrap" aria-hidden="true">
+            <svg class="boost-hud-gauge" viewBox="0 0 64 64">
+              <circle class="boost-hud-track" cx="32" cy="32" r="26"/>
+              <circle id="boostHudArc" class="boost-hud-arc" cx="32" cy="32" r="26" stroke-dasharray="163.36" stroke-dashoffset="163.36"/>
+            </svg>
+            <div id="boostHudCoreIcon" class="boost-hud-core-icon">⚡</div>
+          </div>
+          <div class="boost-hud-heading">
+            <div id="boostHudTitle" class="boost-hud-title">Boosting PC…</div>
+            <div id="boostHudStep" class="boost-hud-step">Reclaiming background memory &amp; temp files</div>
+          </div>
+          <button id="boostHudClose" class="boost-hud-close" type="button" aria-label="Dismiss Boost summary">×</button>
+        </div>
+        <div id="boostHudMetrics" class="boost-hud-metrics">
+          <div class="boost-hud-metric">
+            <span id="boostHudRamLabel" class="boost-hud-metric-label">Working Set</span>
+            <strong id="boostHudRamVal" class="boost-hud-metric-val">Scanning…</strong>
+            <small id="boostHudRamSub" class="boost-hud-metric-sub">Working set memory</small>
+          </div>
+          <div class="boost-hud-metric">
+            <span class="boost-hud-metric-label">Temp Cleaned</span>
+            <strong id="boostHudTempVal" class="boost-hud-metric-val">Scanning…</strong>
+            <small id="boostHudTempSub" class="boost-hud-metric-sub">Temporary cache files</small>
+          </div>
+        </div>
+      </div>
+
       <!-- Confirmation Modal (outside maint-section so it overlays correctly) -->
       <div id="maintModal" class="maint-modal-overlay" style="display:none">
-        <div class="maint-modal">
+        <div class="maint-modal" role="dialog" aria-modal="true" aria-labelledby="maintModalTitle" aria-describedby="maintModalBody maintModalWarn">
           <div id="maintModalIcon" class="maint-modal-icon"></div>
           <div id="maintModalTitle" class="maint-modal-title"></div>
           <div id="maintModalBody" class="maint-modal-body"></div>
@@ -224,6 +295,52 @@
     return html;
   }
 
+  function updateActionCardsForPlatform() {
+    const isLinux = state.platform === 'linux';
+    ACTIONS.forEach(a => {
+      const btn = qs(`#maint-btn-${a.id}`);
+      if (!btn) return;
+      let visible = true;
+      if (isLinux) {
+        if (a.platform === 'windows') visible = false;
+      } else {
+        if (a.platform === 'linux') visible = false;
+      }
+      if (btn.style) btn.style.display = visible ? '' : 'none';
+
+      if (isLinux) {
+        const desc = typeof btn.querySelector === 'function' ? btn.querySelector('.maint-card-desc') : qs(`#maint-btn-${a.id} .maint-card-desc`);
+        if (desc) {
+          if (a.id === 'clean_temp') desc.textContent = 'Safely analyzes and removes user thumbnail caches and owned temporary files.';
+          else if (a.id === 'empty_recycle_bin') desc.textContent = 'Permanently deletes files from user XDG Trash.';
+          else if (a.id === 'clear_dns') desc.textContent = 'Flushes the systemd-resolved DNS cache if available.';
+        }
+        if (a.id === 'clear_dns') {
+          const req = typeof btn.querySelector === 'function' ? btn.querySelector('.maint-requires-admin') : qs('#maint-btn-clear_dns .maint-requires-admin');
+          if (req && req.style) req.style.display = 'none';
+        }
+      } else {
+        if (a.id === 'clear_dns') {
+          const req = typeof btn.querySelector === 'function' ? btn.querySelector('.maint-requires-admin') : qs('#maint-btn-clear_dns .maint-requires-admin');
+          if (req && req.style) req.style.display = '';
+        }
+      }
+    });
+
+    if (typeof document.querySelectorAll === 'function') {
+      const groups = document.querySelectorAll('.maint-group');
+      if (Array.isArray(groups) || (groups && typeof groups.forEach === 'function')) {
+        groups.forEach(group => {
+          if (group && typeof group.querySelectorAll === 'function') {
+            const cards = group.querySelectorAll('.maint-action-card');
+            const hasVisible = Array.from(cards).some(c => c.style && c.style.display !== 'none');
+            if (group.style) group.style.display = hasVisible ? '' : 'none';
+          }
+        });
+      }
+    }
+  }
+
   // ── Render & Mount ─────────────────────────────────────────────────────────
 
   function mount() {
@@ -231,10 +348,11 @@
     if (!mountDiv || mountDiv.dataset.initialized === 'true') return;
     mountDiv.innerHTML = buildMaintenanceHTML();
     mountDiv.dataset.initialized = 'true';
+    updateActionCardsForPlatform();
 
     // Results remain visible after navigating away from Maintenance. Global
     // overlays also avoid being clipped by the page's glass styling.
-    document.body.append(qs('#maintToast'), qs('#maintModal'));
+    document.body.append(qs('#maintToast'), qs('#boostHudCard'), qs('#maintModal'));
 
     // Wire button clicks
     ACTIONS.forEach(a => {
@@ -244,14 +362,17 @@
 
     // Wire modal buttons
     qs('#maintModalCancel').addEventListener('click', closeModal);
+    qs('#liquidOverviewSettings')?.addEventListener('click', () => onActionClick(ACTIONS.find(a => a.id === 'boost')));
     qs('#maintToastClose').addEventListener('click', dismissMaintenanceToast);
+    qs('#boostHudClose')?.addEventListener('click', dismissBoostHud);
+    window.addEventListener('resize', positionBoostHud, { passive: true });
     qs('#maintModalConfirm').addEventListener('click', () => {
       const modal = qs('#maintModal');
       const actionId = modal.dataset.pendingAction;
       if (!actionId) { closeModal(); return; }
       const action = ACTIONS.find(a => a.id === actionId);
       let pin = undefined;
-      if (action && action.requiresAdmin && !state.isLocal) {
+      if ((action && action.requiresAdmin && !state.isLocal) || state.platform === 'linux') {
         const pinInput = qs('#maintModalPin');
         const pinError = qs('#maintModalPinError');
         const val = pinInput ? pinInput.value.trim() : '';
@@ -292,12 +413,252 @@
     }
   }
 
+  // ── Boost HUD & Animation ──────────────────────────────────────────────────
+
+  function formatBoostBytesUI(bytes) {
+    const n = Number(bytes) || 0;
+    if (n <= 0) return '0 MB';
+    const gb = n / (1024 * 1024 * 1024);
+    if (gb >= 1) return `${gb.toFixed(gb >= 10 ? 1 : 2)} GB`;
+    const mb = n / (1024 * 1024);
+    if (mb >= 1) return `${mb >= 10 ? Math.round(mb) : mb.toFixed(1)} MB`;
+    const kb = Math.max(1, Math.round(n / 1024));
+    return `${kb} KB`;
+  }
+
+  function parseBoostFallbackBytes(summary) {
+    let ramBytes = 0;
+    let tempBytes = 0;
+    if (typeof summary === 'string') {
+      const ramMatch = summary.match(/([\d.]+)\s*(GB|MB|KB)\s*(?:of\s+)?(?:RAM|resident-memory|working[\s-]set)/i);
+      if (ramMatch) {
+        const val = parseFloat(ramMatch[1]);
+        const unit = ramMatch[2].toUpperCase();
+        ramBytes = Math.round(val * (unit === 'GB' ? 1073741824 : unit === 'MB' ? 1048576 : 1024));
+      }
+      let tempMatch = summary.match(/([\d.]+)\s*(GB|MB|KB)\s*(?:of\s+)?(?:old\s+)?temp/i);
+      if (!tempMatch) {
+        tempMatch = summary.match(/(?:temporary files(?: removed)?:\s*)([\d.]+)\s*(GB|MB|KB)/i);
+      }
+      if (tempMatch) {
+        const val = parseFloat(tempMatch[1]);
+        const unit = tempMatch[2].toUpperCase();
+        tempBytes = Math.round(val * (unit === 'GB' ? 1073741824 : unit === 'MB' ? 1048576 : 1024));
+      }
+    }
+    return { ramBytes, tempBytes };
+  }
+
+  function positionBoostHud() {
+    const hud = qs('#boostHudCard');
+    const btn = qs('#liquidOverviewSettings');
+    if (!hud || hud.hidden || !btn) return;
+    const rect = btn.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return;
+    const vw = window.innerWidth;
+    if (vw <= 699) {
+      hud.style.top = Math.max(64, Math.round(rect.bottom + 10)) + 'px';
+      hud.style.right = '12px';
+      hud.style.left = '12px';
+    } else {
+      hud.style.top = Math.max(14, Math.round(rect.bottom + 10)) + 'px';
+      hud.style.right = Math.max(16, Math.round(vw - rect.right)) + 'px';
+      hud.style.left = 'auto';
+    }
+  }
+
+  function startBoostVisuals() {
+    clearTimeout(state.boostHudTimer);
+    clearTimeout(state.boostBadgeTimer);
+    if (state.boostAnimFrame) cancelAnimationFrame(state.boostAnimFrame);
+
+    const btn = qs('#liquidOverviewSettings');
+    const label = qs('#boostBtnLabel');
+    const sub = qs('#boostBtnSub');
+    if (btn) {
+      btn.classList.remove('is-boost-complete');
+      btn.classList.add('is-boosting');
+    }
+    if (label) label.textContent = 'Boosting…';
+    if (sub) { sub.hidden = true; sub.textContent = ''; }
+
+    const ramCard = qs('.overview-ram-card');
+    if (ramCard) ramCard.classList.add('is-boosting-ram');
+
+    const hud = qs('#boostHudCard');
+    if (!hud) return;
+    hud.hidden = false;
+    hud.classList.remove('is-complete', 'is-failed');
+    hud.classList.add('is-running', 'is-visible');
+    qs('#boostHudTitle').textContent = 'Boosting PC…';
+    qs('#boostHudStep').textContent = 'Trimming background memory & sweeping temp cache…';
+    qs('#boostHudCoreIcon').textContent = '⚡';
+    qs('#boostHudRamVal').textContent = 'Scanning…';
+    qs('#boostHudRamSub').textContent = 'Working set memory';
+    qs('#boostHudTempVal').textContent = 'Scanning…';
+    qs('#boostHudTempSub').textContent = 'Temporary cache';
+    const arc = qs('#boostHudArc');
+    if (arc) arc.style.strokeDashoffset = '48';
+    positionBoostHud();
+  }
+
+  function updateBoostVisualsProgress(task) {
+    if (!task || task.id !== 'boost') return;
+    const stepEl = qs('#boostHudStep');
+    if (stepEl && task.stepTitle) stepEl.textContent = task.stepTitle;
+    const arc = qs('#boostHudArc');
+    if (arc && task.totalSteps > 0) {
+      const pct = Math.min(0.92, Math.max(0.25, task.currentStep / task.totalSteps));
+      arc.style.strokeDashoffset = String(Math.round(163.36 * (1 - pct)));
+    }
+  }
+
+  function completeBoostVisuals(result, title) {
+    const btn = qs('#liquidOverviewSettings');
+    const label = qs('#boostBtnLabel');
+    const sub = qs('#boostBtnSub');
+    const ramCard = qs('.overview-ram-card');
+    if (ramCard) ramCard.classList.remove('is-boosting-ram');
+
+    const success = Boolean(result && result.success !== false);
+    const details = (result && result.detailedResult) || {};
+    const fallback = parseBoostFallbackBytes(result?.summary || '');
+    const wsTrimmedBytes = Number.isFinite(details.workingSetTrimmedBytes)
+      ? details.workingSetTrimmedBytes
+      : (Number.isFinite(details.workingSetReductionBytes)
+          ? details.workingSetReductionBytes
+          : (Number.isFinite(details.workingSetReducedBytes)
+              ? details.workingSetReducedBytes
+              : (Number.isFinite(details.ramFreedBytes) ? details.ramFreedBytes : fallback.ramBytes)));
+    const availableChange=Number.isFinite(details.availableChangeBytes)?details.availableChangeBytes:null;
+    const observedMemory=availableChange===null?'Unavailable':`${availableChange<0?'-':'+'}${formatBoostBytesUI(Math.abs(availableChange))} observed (not attributable)`;
+    const tempFreedBytes = Number.isFinite(details.tempFreedBytes)
+      ? details.tempFreedBytes
+      : (Number.isFinite(details.bytesFreed)
+          ? details.bytesFreed
+          : (Number.isFinite(details.reclaimedBytes)
+              ? details.reclaimedBytes
+              : (Number.isFinite(details.tempDeletedBytes)
+                  ? details.tempDeletedBytes
+                  : (Number.isFinite(result?.summary?.reclaimedBytes) ? result.summary.reclaimedBytes : fallback.tempBytes))));
+    const trimmedProcesses = Number.isFinite(details.trimmedProcesses) ? details.trimmedProcesses : 0;
+    const isNoOp = success && (details.code === 'no-eligible-items' || details.code === 'already-optimized' || (wsTrimmedBytes === 0 && tempFreedBytes === 0 && trimmedProcesses === 0));
+    const scannedItems = Number.isFinite(details.scannedCount) ? details.scannedCount : 0;
+    const deletedItems = Number.isFinite(details.deletedCount) ? details.deletedCount : 0;
+    const summaryText = result?.summary || (
+      isNoOp
+        ? `No optimization needed: background apps within optimal bounds and ${scannedItems ? `${scannedItems} inspected temporary files` : 'temporary files'} within retention limits.`
+        : `Boost complete: ${formatBoostBytesUI(wsTrimmedBytes)} trimmed · ${formatBoostBytesUI(tempFreedBytes)} temp cleaned (${deletedItems} items).`
+    );
+
+    // Populate #maintToastMessage silently for test/accessibility compatibility
+    const toastTitle = qs('#maintToastTitle');
+    const toastMsg = qs('#maintToastMessage');
+    if (toastTitle) toastTitle.textContent = isNoOp ? 'PC Boost Checked' : `${title || 'Boost'} ${success ? 'succeeded' : 'failed'}`;
+    if (toastMsg) toastMsg.textContent = summaryText;
+
+    if (btn) {
+      btn.classList.remove('is-boosting');
+      if (success) btn.classList.add('is-boost-complete');
+    }
+    if (label) label.textContent = success ? (isNoOp ? 'Checked' : 'Boosted') : 'Boost';
+    if (sub && success) {
+      sub.textContent = isNoOp ? 'No cleanup needed' : `${formatBoostBytesUI(wsTrimmedBytes)} trimmed · ${formatBoostBytesUI(tempFreedBytes)} temp`;
+      sub.hidden = false;
+    }
+
+    const hud = qs('#boostHudCard');
+    if (!hud) return;
+    hud.hidden = false;
+    hud.classList.remove('is-running', 'is-complete', 'is-failed');
+    hud.classList.add(success ? 'is-complete' : 'is-failed', 'is-visible');
+    positionBoostHud();
+
+    const arc = qs('#boostHudArc');
+    if (arc) arc.style.strokeDashoffset = '0';
+    qs('#boostHudCoreIcon').textContent = success ? '✓' : '!';
+    qs('#boostHudTitle').textContent = success ? (isNoOp ? 'No Cleanup Needed' : 'PC Boost Complete') : 'Boost Failed';
+    qs('#boostHudStep').textContent = success
+      ? (isNoOp
+          ? (scannedItems > 0
+              ? `Inspected ${scannedItems} items in temp & cache; evaluated background apps`
+              : 'Evaluated background apps; temporary files within retention limits')
+          : (trimmedProcesses > 0 && deletedItems > 0
+              ? `Optimized ${trimmedProcesses} background app${trimmedProcesses === 1 ? '' : 's'} (${formatBoostBytesUI(wsTrimmedBytes)}) · Removed ${deletedItems} temp items (${formatBoostBytesUI(tempFreedBytes)})`
+              : (trimmedProcesses > 0
+                  ? `Optimized ${trimmedProcesses} background app${trimmedProcesses === 1 ? '' : 's'} (${formatBoostBytesUI(wsTrimmedBytes)} trimmed)`
+                  : `Removed ${deletedItems} temporary items (${formatBoostBytesUI(tempFreedBytes)})`)))
+      : summaryText;
+
+    const ramLabel = qs('#boostHudRamLabel');
+    if (ramLabel) ramLabel.textContent = 'Working Set';
+
+    const ramEl = qs('#boostHudRamVal');
+    const ramSub = qs('#boostHudRamSub');
+    const tempEl = qs('#boostHudTempVal');
+    const tempSub = qs('#boostHudTempSub');
+
+    if (ramSub) {
+      ramSub.textContent = isNoOp
+        ? 'No apps eligible to trim'
+        : (trimmedProcesses > 0
+            ? `${trimmedProcesses} background app${trimmedProcesses === 1 ? '' : 's'} (${observedMemory})`
+            : 'No memory trimming performed');
+    }
+    if (tempSub) {
+      tempSub.textContent = isNoOp
+        ? (scannedItems > 0 ? `Inspected ${scannedItems} items in temp & cache` : 'Temporary files within retention limits')
+        : (deletedItems > 0 ? `${deletedItems} temporary item${deletedItems === 1 ? '' : 's'} removed` : 'Temporary cache cleared');
+    }
+
+    const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (prefersReducedMotion || !success || isNoOp) {
+      if (ramEl) ramEl.textContent = formatBoostBytesUI(wsTrimmedBytes);
+      if (tempEl) tempEl.textContent = formatBoostBytesUI(tempFreedBytes);
+    } else {
+      const start = performance.now();
+      const duration = 680;
+      const tick = (now) => {
+        const t = Math.min(1, (now - start) / duration);
+        const ease = 1 - Math.pow(1 - t, 3);
+        if (ramEl) ramEl.textContent = formatBoostBytesUI(Math.round(wsTrimmedBytes * ease));
+        if (tempEl) tempEl.textContent = formatBoostBytesUI(Math.round(tempFreedBytes * ease));
+        if (t < 1) {
+          state.boostAnimFrame = requestAnimationFrame(tick);
+        } else {
+          if (ramEl) ramEl.textContent = formatBoostBytesUI(wsTrimmedBytes);
+          if (tempEl) tempEl.textContent = formatBoostBytesUI(tempFreedBytes);
+        }
+      };
+      state.boostAnimFrame = requestAnimationFrame(tick);
+    }
+
+    clearTimeout(state.boostHudTimer);
+    state.boostHudTimer = setTimeout(dismissBoostHud, 2800);
+    clearTimeout(state.boostBadgeTimer);
+    state.boostBadgeTimer = setTimeout(() => {
+      if (btn) btn.classList.remove('is-boost-complete');
+      if (label) label.textContent = 'Boost';
+      if (sub) sub.hidden = true;
+    }, 3600);
+  }
+
+  function dismissBoostHud() {
+    clearTimeout(state.boostHudTimer);
+    state.boostHudTimer = null;
+    const hud = qs('#boostHudCard');
+    if (hud) {
+      hud.classList.remove('is-visible', 'is-running', 'is-complete', 'is-failed');
+      hud.hidden = true;
+    }
+  }
+
   // ── Action Click Handler ──────────────────────────────────────────────────
 
   function onActionClick(action) {
-    if (state.isRunning || state.unsupported) return;
+    if (!action || state.isRunning || state.unsupported) return;
 
-    if (action.confirm || action.requiresAdmin) {
+    if (action.confirm || action.requiresAdmin || state.platform === 'linux') {
       showConfirmModal(action);
     } else {
       executeAction(action.id);
@@ -320,7 +681,7 @@
     if (pinInput) { pinInput.value = ''; }
 
     // If remote caller and action requires admin but service is disabled
-    if (action.requiresAdmin && !state.isLocal && !state.serviceEnabled) {
+    if (action.requiresAdmin && !state.isLocal && !state.serviceEnabled && state.platform !== 'linux') {
       qs('#maintModalTitle').textContent = 'Administrator Maintenance Disabled';
       qs('#maintModalBody').textContent = 'Administrator maintenance is disabled on this PC. Turn on "Enable administrator maintenance" in Settings from the Rovarin desktop app before running privileged actions from your phone.';
       warnEl.style.display = 'none';
@@ -334,10 +695,33 @@
 
     confirmBtn.style.display = '';
     cancelBtn.textContent = 'Cancel';
-    qs('#maintModalTitle').textContent = action.confirmTitle || `Run: ${action.title}?`;
+
+    if (state.platform === 'linux') {
+      if (action.id === 'empty_recycle_bin') {
+        qs('#maintModalTitle').textContent = 'Empty Trash?';
+        confirmBtn.textContent = 'Empty Trash';
+      } else {
+        qs('#maintModalTitle').textContent = action.confirmTitle || `Run: ${action.title}?`;
+        confirmBtn.textContent = action.confirmBtnLabel || 'Confirm';
+      }
+    } else {
+      qs('#maintModalTitle').textContent = action.confirmTitle || `Run: ${action.title}?`;
+      confirmBtn.textContent = action.confirmBtnLabel || 'Confirm';
+    }
 
     let bodyText = action.confirmBody || action.desc;
-    if (action.requiresAdmin) {
+    if (state.platform === 'linux') {
+      if (action.id === 'clean_temp') {
+        bodyText = 'Safely analyzes and removes user thumbnail caches and owned temporary files.';
+      } else if (action.id === 'empty_recycle_bin') {
+        bodyText = 'Permanently deletes files from user XDG Trash. They cannot be recovered afterward.';
+      } else if (action.id === 'clear_dns') {
+        bodyText = 'Flushes the systemd-resolved DNS cache if available.';
+      } else if (action.id === 'boost') {
+        bodyText = 'Frees temporary user cache files and reclaims disposable memory.';
+      }
+      bodyText += ' Enter your Rovarin PIN to authorize execution.';
+    } else if (action.requiresAdmin) {
       if (!state.isLocal) {
         bodyText += ' Enter your Rovarin PIN to authorize execution on this PC.';
       } else if (!state.serviceEnabled) {
@@ -353,14 +737,14 @@
       warnEl.style.display = 'none';
     }
 
-    if (action.requiresAdmin && !state.isLocal) {
+    const needsPin = (action.requiresAdmin && !state.isLocal) || state.platform === 'linux';
+    if (needsPin) {
       if (pinSection) pinSection.style.display = 'block';
       setTimeout(() => { if (pinInput) pinInput.focus(); }, 50);
     } else {
       if (pinSection) pinSection.style.display = 'none';
     }
 
-    confirmBtn.textContent = action.confirmBtnLabel || 'Confirm';
     confirmBtn.className = 'maint-btn maint-btn-confirm' + (action.confirmDanger ? ' danger' : '');
 
     modal.dataset.pendingAction = action.id;
@@ -375,6 +759,15 @@
     const pinInput = qs('#maintModalPin');
     if (pinInput) pinInput.value = '';
   }
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      const hud = qs('#boostHudCard');
+      if (hud && !hud.hidden && !state.isRunning) {
+        dismissBoostHud();
+      }
+    }
+  });
 
   // Click outside modal to dismiss
   document.addEventListener('click', (e) => {
@@ -391,9 +784,12 @@
     state.isRunning = true;
     showProgressPanel(actionId);
     setAllButtonsDisabled(true, actionId);
+    if (actionId === 'boost') {
+      startBoostVisuals();
+    }
 
     const action = ACTIONS.find(a => a.id === actionId);
-    const payload = (action && (action.confirm || action.requiresAdmin))
+    const payload = (action && (action.confirm || action.requiresAdmin || actionId === 'boost'))
       ? { action: actionId, confirmed: true }
       : { action: actionId };
     if (pin) {
@@ -416,7 +812,11 @@
         if (pill) { pill.textContent = 'Failed'; pill.className = 'maint-status-pill failed'; }
         const banner = qs('#maintResultBanner');
         if (banner) { banner.textContent = data.error || 'Failed to start operation.'; banner.className = 'maint-result-banner failed'; }
-        showMaintenanceToast(false, data.error || 'Failed to start operation.', actionTitle(actionId));
+        if (actionId === 'boost') {
+          completeBoostVisuals({ success: false, summary: data.error || 'Failed to start Boost.' }, 'Boost');
+        } else {
+          showMaintenanceToast(false, data.error || 'Failed to start operation.', actionTitle(actionId));
+        }
         state.pendingToastActionId = null;
         setAllButtonsDisabled(false);
         document.querySelectorAll('.maint-action-card.running').forEach(b => b.classList.remove('running'));
@@ -436,7 +836,11 @@
       if (pill) { pill.textContent = 'Failed'; pill.className = 'maint-status-pill failed'; }
       const banner = qs('#maintResultBanner');
       if (banner) { banner.textContent = 'Could not contact the maintenance service.'; banner.className = 'maint-result-banner failed'; }
-      showMaintenanceToast(false, 'Could not contact the maintenance service.', actionTitle(actionId));
+      if (actionId === 'boost') {
+        completeBoostVisuals({ success: false, summary: 'Could not contact the maintenance service.' }, 'Boost');
+      } else {
+        showMaintenanceToast(false, 'Could not contact the maintenance service.', actionTitle(actionId));
+      }
       state.pendingToastActionId = null;
       setAllButtonsDisabled(false);
       document.querySelectorAll('.maint-action-card.running').forEach(b => b.classList.remove('running'));
@@ -485,6 +889,10 @@
   function updateProgressPanel(task) {
     if (!task) return;
 
+    if (task.id === 'boost' && task.status === 'running') {
+      updateBoostVisualsProgress(task);
+    }
+
     qs('#maintProgressTitle').textContent = task.title || 'Running…';
     qs('#maintProgressStep').textContent = task.stepTitle || '';
 
@@ -524,13 +932,13 @@
     clearTimeout(state.pollTimer);
     if (window.pcMonitorUninstalling || state.unsupported) return;
     if (typeof window.dashboardClientVisible === 'function' && !window.dashboardClientVisible()) return;
-    state.pollTimer = setTimeout(fetchStatus, state.isRunning ? 1000 : 4000);
+    state.pollTimer = setTimeout(fetchStatus, state.isRunning ? 450 : 4000);
   }
 
   function startFastPoll() {
     clearTimeout(state.pollTimer);
     if (state.unsupported) return;
-    state.pollTimer = setTimeout(fetchStatus, 800);
+    state.pollTimer = setTimeout(fetchStatus, 320);
   }
 
   function markMaintenanceUnsupported() {
@@ -541,6 +949,7 @@
     state.runningActionId = null;
     state.pendingToastActionId = null;
     closeModal();
+    dismissBoostHud();
     const panel = qs('#maintProgressPanel');
     if (panel) panel.classList.add('active');
     const pill = qs('#maintStatusPill');
@@ -582,7 +991,16 @@
   }
 
   function applyStatus(data) {
+    state.boostAdviceAvailable=Boolean(data.boostAdvice&&typeof data.boostAdvice.suggested==='boolean');
+    const boostButton=qs('#liquidOverviewSettings');
+    const suggested=data.boostAdvice?.suggested===true&&!data.isRunning;
+    if(boostButton){boostButton.classList.toggle('is-boost-suggested',suggested);boostButton.setAttribute('aria-label',suggested?'PC Boost: sustained memory pressure; eligible minimized apps available':'PC Boost');}
+
     if (state.unsupported) return;
+    if (data.platform) {
+      state.platform = data.platform;
+    }
+    updateActionCardsForPlatform();
     if (typeof data.isLocal === 'boolean') {
       state.isLocal = data.isLocal;
     }
@@ -595,7 +1013,11 @@
     // Admin badge
     const badge = qs('#maintAdminBadge');
     if (badge) {
-      if (state.serviceEnabled) {
+      if (data.platform === 'linux') {
+        badge.textContent = 'Standard User';
+        badge.className = 'maint-admin-badge not-admin';
+        badge.title = 'Linux user-level maintenance actions. Actions run safely within user permissions.';
+      } else if (state.serviceEnabled) {
         badge.textContent = '🛡 Administrator Maintenance Enabled';
         badge.className = 'maint-admin-badge is-admin';
         badge.title = 'Authorized maintenance actions can run from your phone without repeated Windows administrator prompts.';
@@ -612,17 +1034,24 @@
 
     state.isRunning = data.isRunning;
 
-    if (data.currentTask) {
-      updateProgressPanel(data.currentTask);
+    const activeTask = data.currentTask || data.currentJob;
 
-      if (data.currentTask.status !== 'running') {
-        if (state.pendingToastActionId && data.currentTask.id === state.pendingToastActionId) {
-          const result = data.currentTask.result || {};
-          const isCancelled = result.detailedResult?.code === 'uac-cancelled' || data.currentTask.status === 'cancelled';
-          const isPartial = data.currentTask.status === 'partially-completed' || result.detailedResult?.code === 'partially-completed' || result.detailedResult?.code === 'locked-files-only';
-          const isUnverified = data.currentTask.status === 'unverified' || result.detailedResult?.code === 'verification-unavailable';
-          const isAlreadyClean = result.detailedResult?.code === 'already-empty' || result.detailedResult?.code === 'already-clean';
-          showMaintenanceToast(result.success, result.summary || (result.success ? 'Operation completed.' : 'Operation failed.'), data.currentTask.title || actionTitle(state.pendingToastActionId), isCancelled, isPartial, isUnverified, isAlreadyClean);
+    if (activeTask) {
+      updateProgressPanel(activeTask);
+
+      if (activeTask.status !== 'running') {
+        const taskId = activeTask.id || activeTask.action;
+        if (state.pendingToastActionId && (taskId === state.pendingToastActionId)) {
+          const result = activeTask.result || {};
+          if (taskId === 'boost') {
+            completeBoostVisuals(result, activeTask.title || 'Boost');
+          } else {
+            const isCancelled = result.detailedResult?.code === 'uac-cancelled' || activeTask.status === 'cancelled';
+            const isPartial = activeTask.status === 'partially-completed' || result.detailedResult?.code === 'partially-completed' || result.detailedResult?.code === 'locked-files-only';
+            const isUnverified = activeTask.status === 'unverified' || result.detailedResult?.code === 'verification-unavailable';
+            const isAlreadyClean = result.detailedResult?.code === 'already-empty' || result.detailedResult?.code === 'already-clean';
+            showMaintenanceToast(result.success, result.summary || (result.success ? 'Operation completed.' : 'Operation failed.'), activeTask.title || actionTitle(state.pendingToastActionId), isCancelled, isPartial, isUnverified, isAlreadyClean);
+          }
           state.pendingToastActionId = null;
         }
         // Task finished
@@ -634,7 +1063,8 @@
     } else if (!data.isRunning) {
       if (state.runningActionId && data.history && data.history.length > 0) {
         const last = data.history[0];
-        if (last && last.id === state.runningActionId) {
+        const lastId = last ? (last.id || last.action) : null;
+        if (last && lastId === state.runningActionId) {
           const pill = qs('#maintStatusPill');
           if (pill) {
             pill.textContent = last.status === 'completed' ? 'Done' : last.status === 'partially-completed' ? 'Partial' : last.status === 'unverified' ? 'Unverified' : last.status === 'cancelled' ? 'Cancelled' : 'Failed';
@@ -647,11 +1077,15 @@
             banner.textContent = last.summary;
             banner.className = 'maint-result-banner ' + (last.status === 'cancelled' ? 'cancelled' : last.status === 'partially-completed' ? 'partially-completed' : last.status === 'unverified' ? 'unverified' : last.success ? 'success' : 'failed');
           }
-          if (state.pendingToastActionId && last.id === state.pendingToastActionId) {
-            const isCancelled = last.status === 'cancelled';
-            const isPartial = last.status === 'partially-completed';
-            const isUnverified = last.status === 'unverified';
-            showMaintenanceToast(last.success, last.summary, last.title || actionTitle(last.id), isCancelled, isPartial, isUnverified);
+          if (state.pendingToastActionId && lastId === state.pendingToastActionId) {
+            if (lastId === 'boost') {
+              completeBoostVisuals({ success: last.success, summary: last.summary, detailedResult: last.detailedResult }, last.title || 'Boost');
+            } else {
+              const isCancelled = last.status === 'cancelled';
+              const isPartial = last.status === 'partially-completed';
+              const isUnverified = last.status === 'unverified';
+              showMaintenanceToast(last.success, last.summary, last.title || actionTitle(lastId), isCancelled, isPartial, isUnverified);
+            }
             state.pendingToastActionId = null;
           }
           state.runningActionId = null;
@@ -692,6 +1126,15 @@
 
   function setAllButtonsDisabled(disabled, activeId) {
     disabled = disabled || state.unsupported;
+    const boost = qs('#liquidOverviewSettings');
+    if (boost) {
+      boost.disabled = disabled || state.boostAdviceAvailable!==true;
+      boost.title = state.unsupported ? 'PC Boost is Windows-only' : disabled ? 'PC Boost running' : 'PC Boost';
+      boost.setAttribute('aria-busy', String(disabled && activeId === 'boost'));
+      if (!disabled) {
+        boost.classList.remove('is-boosting');
+      }
+    }
     ACTIONS.forEach(a => {
       const btn = qs(`#maint-btn-${a.id}`);
       if (!btn) return;
@@ -715,15 +1158,21 @@
       return;
     }
 
-    list.innerHTML = historyItems.slice(0, 10).map(item => `
+    list.innerHTML = historyItems.slice(0, 10).map(item => {
+      const title = item.title || actionTitle(item.id || item.action);
+      const date = item.date || (item.completedAt ? new Date(item.completedAt).toLocaleDateString('en-US') : '');
+      const time = item.timestamp || (item.completedAt ? new Date(item.completedAt).toLocaleTimeString('en-US', { hour12: false }) : '');
+      const duration = item.duration || (item.durationMs !== undefined ? `${Math.round(item.durationMs / 1000)}s` : '0s');
+      return `
       <div class="maint-history-item">
         <div class="maint-history-dot ${item.status === 'unverified' ? 'unverified' : item.status === 'partially-completed' ? 'partial' : item.success ? 'success' : 'failed'}"></div>
         <div class="maint-history-body">
-          <div class="maint-history-name">${escHtml(item.title)}</div>
-          <div class="maint-history-meta">${escHtml(item.date)} ${escHtml(item.timestamp)} · ${escHtml(item.duration)} · ${item.status === 'cancelled' ? 'Cancelled' : item.status === 'partially-completed' ? 'Partial (Restart Required)' : item.status === 'unverified' ? 'Unverified' : item.success ? 'Succeeded' : 'Failed'}</div>
+          <div class="maint-history-name">${escHtml(title)}</div>
+          <div class="maint-history-meta">${escHtml(date)} ${escHtml(time)} · ${escHtml(duration)} · ${item.status === 'cancelled' ? 'Cancelled' : item.status === 'partially-completed' ? 'Partial (Restart Required)' : item.status === 'unverified' ? 'Unverified' : item.success ? 'Succeeded' : 'Failed'}</div>
         </div>
       </div>
-    `).join('');
+    `;
+    }).join('');
   }
 
   // ── Utilities ──────────────────────────────────────────────────────────────

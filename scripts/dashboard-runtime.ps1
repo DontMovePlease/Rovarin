@@ -76,7 +76,18 @@ function Test-DashboardHttpResponsive([int]$Port) {
     } catch { return $false }
 }
 
-function Get-DashboardRuntime([string]$ProjectDir) {
+function Get-DashboardRuntime([string]$ProjectDir,[switch]$IgnoreStandby) {
+    $standbyHelper=Join-Path $ProjectDir 'scripts\standby-runtime.ps1'
+    if(-not $IgnoreStandby -and (Test-Path -LiteralPath (Join-Path $ProjectDir 'RovarinStandby.exe')) -and (Test-Path -LiteralPath $standbyHelper)){
+        . $standbyHelper
+        $native=Invoke-StandbyCommand status
+        if($native){return @{state=$(if($native.backendReady){'owned'}else{'standby'});pid=[int]$native.backendPid;port=[int]$native.port;healthy=[bool]$native.backendReady;stale=$false;reason='Per-user native supervisor verified';standby=$true}}
+        $nativeExe=Join-Path $ProjectDir 'RovarinStandby.exe'
+        $running=@(Get-CimInstance Win32_Process -Filter "Name='RovarinStandby.exe'" -ErrorAction SilentlyContinue|Where-Object {$_.ExecutablePath -ieq $nativeExe})
+        if($running.Count -gt 0){return @{state='unsafe';reason='Native supervisor ownership could not be verified.'}}
+        # A compatible always-running fallback still uses the original held-PID,
+        # command, listener, fingerprint and HTTP checks below.
+    }
     $applicationDir = $ProjectDir
     $candidate = $null
     try { $ProjectDir = Get-RovarinDataDirectory $ProjectDir }
@@ -144,10 +155,10 @@ function Get-DashboardRuntime([string]$ProjectDir) {
     finally { if ($candidate) { $candidate.Dispose() } }
 }
 
-function Wait-DashboardRuntime([string]$ProjectDir, [int]$TimeoutSeconds = 12) {
+function Wait-DashboardRuntime([string]$ProjectDir, [int]$TimeoutSeconds = 12,[switch]$IgnoreStandby) {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
-        $runtime = Get-DashboardRuntime $ProjectDir
+        $runtime = Get-DashboardRuntime $ProjectDir -IgnoreStandby:$IgnoreStandby
         if ($runtime.state -eq 'owned' -and $runtime.healthy) { return $runtime }
         if ((Get-Date) -ge $deadline) { return $runtime }
         Start-Sleep -Milliseconds 300

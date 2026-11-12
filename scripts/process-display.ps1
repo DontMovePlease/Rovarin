@@ -91,13 +91,15 @@ try {
                 if(-not $packageName){
                     if($registrations.ContainsKey($exeLower)){
                         $registered=@($registrations[$exeLower] | Where-Object {$_} | Select-Object -Unique)
-                        if($registered.Count -ge 1){$packageName=$registered[0];$groupSource='app|'+$registered[0]}
+                        if($registered.Count -eq 1){$packageName=$registered[0];$groupSource='app|'+$exeLower}
+                        elseif($registered.Count -gt 1){$packageName=$registered[0];$groupSource='app|'+$exeLower}
                     }
                     if(-not $packageName -and $sortedPrefixes){
                         foreach($prefix in $sortedPrefixes){
                             if($exeLower.StartsWith($prefix)){
                                 $matched=@($dirRegistrations[$prefix] | Where-Object {$_} | Select-Object -Unique)
-                                if($matched.Count -ge 1){$packageName=$matched[0];$groupSource='app|'+$matched[0]}
+                                if($matched.Count -eq 1){$packageName=$matched[0];$groupSource='app|'+$prefix}
+                                elseif($matched.Count -gt 1){$packageName=$matched[0];$groupSource='app|'+$exeLower}
                                 break
                             }
                         }

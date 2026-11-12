@@ -1,6 +1,6 @@
 {
   "name": "rovarin-dashboard",
-  "version": "0.6.0",
+  "version": "0.6.2",
   "description": "Lightweight personal Rovarining dashboard for Windows accessible via Tailscale",
   "main": "server.js",
   "scripts": {
@@ -27,7 +27,9 @@
     "test:power": "node scripts/power-controls-smoke-test.js",
     "test:glass": "node scripts/liquid-glass-smoke-test.js",
     "test:glass:native": "node scripts/native-desktop-test.js --glass",
-    "test:mobile-auth": "node scripts/mobile-auth-smoke-test.js"
+    "test:mobile-auth": "node scripts/mobile-auth-smoke-test.js",
+    "test:architecture": "node scripts/architecture-smoke-test.js",
+    "test:startup": "node scripts/startup-manager-smoke-test.js"
   },
   "keywords": [
     "system-monitor",

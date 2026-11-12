@@ -1,6 +1,7 @@
+param([switch]$RebuildCompanion)
 $ErrorActionPreference = 'Stop'
 $projectDir = Split-Path -Parent $PSScriptRoot
-$preview = Join-Path $projectDir 'packaging\cache\desktop-preview'
+$preview = if ($env:ROVARIN_PREVIEW_DIR) { $env:ROVARIN_PREVIEW_DIR } else { Join-Path $env:LOCALAPPDATA 'RovarinDevelopment\preview' }
 $payload = Join-Path $projectDir 'packaging\payload\app'
 $compiler = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 foreach ($file in @('Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','Rovarin.ico','Rovarin.exe.config')) {
@@ -25,36 +26,38 @@ if (Test-Path -LiteralPath $exe) {
 foreach ($file in @('Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','Rovarin.ico','Rovarin.exe.config')) {
     Copy-Item -LiteralPath (Join-Path $payload $file) -Destination (Join-Path $preview $file) -Force
 }
-# Build the existing unsigned Inno companion without installing anything.
-$serviceStage = Join-Path $env:TEMP ('rovarin-preview-service-' + [Guid]::NewGuid().ToString('N'))
-try {
-    & (Join-Path $projectDir 'packaging\build-maintenance-service.ps1') -OutputDirectory $serviceStage -Installer
-    $setup = Join-Path $serviceStage 'RovarinMaintenanceSetup.exe'
-    $maintenanceHash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($maintenanceHash -ne ([IO.File]::ReadAllText($setup+'.sha256')).Trim()) { throw 'Maintenance companion integrity mismatch.' }
-    Copy-Item -LiteralPath $setup,($setup+'.sha256') -Destination $preview -Force
-} finally {
-    if (Test-Path -LiteralPath $serviceStage) { Remove-Item -LiteralPath $serviceStage -Recurse -Force }
+# Generate the current source brand instead of retaining the preserved payload icon.
+$previewIcon = Join-Path $preview 'Rovarin.ico'
+if (-not (Test-Path -LiteralPath $previewIcon)) {
+    & (Join-Path $projectDir 'packaging\create-icon.ps1') -Output $previewIcon
+}
+$previewSetup = Join-Path $preview 'RovarinMaintenanceSetup.exe'
+$previewSetupSha = $previewSetup + '.sha256'
+$maintenanceHash = ''
+if (-not $RebuildCompanion -and (Test-Path -LiteralPath $previewSetup) -and (Test-Path -LiteralPath $previewSetupSha)) {
+    $existingHash = ([IO.File]::ReadAllText($previewSetupSha)).Trim().ToLowerInvariant()
+    $actualHash = (Get-FileHash -LiteralPath $previewSetup -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($existingHash -eq $actualHash) {
+        $maintenanceHash = $existingHash
+    }
+}
+if (-not $maintenanceHash) {
+    # Build the existing unsigned Inno companion without installing anything.
+    $serviceStage = Join-Path $env:TEMP ('rovarin-preview-service-' + [Guid]::NewGuid().ToString('N'))
+    try {
+        & (Join-Path $projectDir 'packaging\build-maintenance-service.ps1') -OutputDirectory $serviceStage -Installer
+        $setup = Join-Path $serviceStage 'RovarinMaintenanceSetup.exe'
+        $maintenanceHash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($maintenanceHash -ne ([IO.File]::ReadAllText($setup+'.sha256')).Trim()) { throw 'Maintenance companion integrity mismatch.' }
+        Copy-Item -LiteralPath $setup,($setup+'.sha256') -Destination $preview -Force
+    } finally {
+        if (Test-Path -LiteralPath $serviceStage) { Remove-Item -LiteralPath $serviceStage -Recurse -Force }
+    }
 }
 # Compile the canonical shell with development storage/lifecycle paths only.
 # No backend or public/ files are copied: it serves the live source checkout.
-$source = [IO.File]::ReadAllText((Join-Path $projectDir 'packaging\DesktopShell.cs'))
-$hashAnchor = 'internal const string MaintenanceSetupHash = "";'
-if (-not $source.Contains($hashAnchor)) { throw 'Maintenance installer binding anchor changed.' }
-$source = $source.Replace($hashAnchor,('internal const string MaintenanceSetupHash = "'+$maintenanceHash+'";'))
-$patches = @(
-    @("AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\')", 'Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", ".."))'),
-    @('Path.GetDirectoryName(AppDirectory)', "AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\')"),
-    @('File.Exists(Path.Combine(AppDirectory, "installation.json"))', 'File.Exists(Path.Combine(AppDirectory, "server.js"))'),
-    @('"desktop-host.ps1"', '"desktop-preview-host.ps1"'),
-    @('Path.Combine(DesktopShell.AppDirectory, "Rovarin.ico")', 'Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Rovarin.ico")')
-)
-foreach ($patch in $patches) {
-    if (-not $source.Contains($patch[0])) { throw 'Native development adapter anchor changed; refusing an incomplete build.' }
-    $source = $source.Replace($patch[0],$patch[1])
-}
 $generated = Join-Path $preview 'DesktopShell.preview.cs'
-[IO.File]::WriteAllText($generated,$source)
-& $compiler /nologo /target:winexe /platform:x64 /optimize+ /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll "/r:$(Join-Path $preview 'Microsoft.Web.WebView2.Core.dll')" "/r:$(Join-Path $preview 'Microsoft.Web.WebView2.WinForms.dll')" "/win32manifest:$(Join-Path $projectDir 'packaging\desktop.manifest')" "/win32icon:$(Join-Path $preview 'Rovarin.ico')" "/out:$exe" (Join-Path $projectDir 'packaging\RovarinLauncher.cs') $generated
+[IO.File]::WriteAllText($generated,('internal static partial class DesktopShell { internal const string MaintenanceSetupHash = "'+$maintenanceHash+'"; }'))
+& $compiler "/define:ROVARIN_PREVIEW,ROVARIN_BOUND_MAINTENANCE" /nologo /target:winexe /platform:x64 /optimize+ /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll "/r:$(Join-Path $preview 'Microsoft.Web.WebView2.Core.dll')" "/r:$(Join-Path $preview 'Microsoft.Web.WebView2.WinForms.dll')" "/win32manifest:$(Join-Path $projectDir 'packaging\desktop.manifest')" "/win32icon:$(Join-Path $preview 'Rovarin.ico')" "/out:$exe" (Join-Path $projectDir 'packaging\RovarinLauncher.cs') (Join-Path $projectDir 'packaging\DesktopShell.cs') $generated
 if ($LASTEXITCODE -ne 0) { throw 'Native development desktop compilation failed.' }
 Start-Process -FilePath $exe -WorkingDirectory $preview -WindowStyle Normal

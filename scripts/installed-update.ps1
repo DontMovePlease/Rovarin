@@ -80,8 +80,22 @@ try {
     $state.phase = 'cancelled'; [IO.File]::WriteAllText($result, ($state|ConvertTo-Json -Compress))
     if ($reopen) {
         # Reopen only when the installed product actually reached the expected version.
-        $updated = Get-Content -LiteralPath (Join-Path $app 'package.json') -Raw | ConvertFrom-Json
-        if ($updated.version -ne $verified.version) { throw 'upgrade-unconfirmed' }
+        $updatedPkg = Join-Path $app 'package.json'
+        $installedVersion = $null
+        if (Test-Path -LiteralPath $updatedPkg) {
+            try {
+                $updated = Get-Content -LiteralPath $updatedPkg -Raw | ConvertFrom-Json
+                $installedVersion = $updated.version
+            } catch {}
+        }
+        if (-not $installedVersion) {
+            $installedExe = Join-Path $app 'Rovarin.exe'
+            if (Test-Path -LiteralPath $installedExe) {
+                $vi = [Diagnostics.FileVersionInfo]::GetVersionInfo($installedExe)
+                $installedVersion = "$($vi.FileMajorPart).$($vi.FileMinorPart).$($vi.FileBuildPart)"
+            }
+        }
+        if ($installedVersion -ne $verified.version) { throw 'upgrade-unconfirmed' }
         $state.phase = 'complete'; [IO.File]::WriteAllText($result, ($state|ConvertTo-Json -Compress))
         Assert-Plain (Join-Path $app 'Rovarin.exe')
         Start-Process -FilePath (Join-Path $app 'Rovarin.exe') -WorkingDirectory $app -WindowStyle Normal

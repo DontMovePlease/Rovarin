@@ -9,6 +9,9 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
   const temp=fs.mkdtempSync(path.join(temporaryRoot,'rovarin-native-'));
   fs.cpSync(payload,temp,{recursive:true});
   const app=path.join(temp,'app'),data=path.join(temp,'data');fs.mkdirSync(data);
+  // This suite retains the always-running/legacy shell contract. The separate
+  // standby-desktop suite exercises the complete native listener and X shutdown.
+  for(const name of ['RovarinStandby.exe','standby-runtime.json']){const file=path.join(app,name);if(fs.existsSync(file))fs.unlinkSync(file);}
   const pins = require('../pin-manager'); const testConfig = path.join(data,'config.json');
   if(options.pinLifecycleOnly)pins.prepareEnrollment(testConfig,true);
   else pins.writeConfig(testConfig,{...pins.loadConfig(testConfig),...(process.env.ROVARIN_NATIVE_TEST_PIN_LENGTH==='12'?{pin:pins.generatePin(undefined,12)}:{}),autoCheckUpdates:false});
@@ -22,7 +25,7 @@ module.exports=async function testNativeDesktop(root,payload,options={}){
     if(options.currentSource){
       // Local shell QA without rebuilding or touching the installer payload.
       fs.cpSync(path.join(root,'public'),path.join(app,'public'),{recursive:true});
-      for (const name of ['power-controls.js','server.js','server-lifecycle.js','diagnostics.js','pin-manager.js','update-manager.js','app-manager.js','leftover-manager.js','process-termination.js','process-stats.js','maintenance.js','maintenance-service.js']) fs.copyFileSync(path.join(root,name),path.join(app,name));
+      for (const name of require('../server-lifecycle').ROOT_SERVER_FILES) fs.copyFileSync(path.join(root,name),path.join(app,name));
       for(const name of ['setup.ps1','desktop-host.ps1','dashboard-runtime.ps1','start.ps1','stop.ps1','terminate-process.ps1','app-manager.ps1','app-uninstall.cs','app-metadata.cs','process-tree.ps1','process-tree.cs','process-display.ps1','application-display.ps1'])fs.copyFileSync(path.join(root,'scripts',name),path.join(app,'scripts',name));
       fs.copyFileSync(path.join(root,'scripts/native-trust.ps1'),path.join(app,'scripts/native-trust.ps1'));
       let shell=path.join(root,'packaging/DesktopShell.cs');

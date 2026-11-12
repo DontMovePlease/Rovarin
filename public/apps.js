@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const get=id=>document.getElementById(id),list=get('appsList'),status=get('appsStatus'),dialog=get('appsConfirmDialog'),form=get('appsConfirmForm'),pin=get('appsConfirmPin');
-  let apps=[],loading=false,operationBusy=false,sortDirection=1,review=null,selectionMode=false,appsLoadError=false;
+  let apps=[],loading=false,operationBusy=false,sortDirection=1,review=null,appsLoadError=false;
   const selected=new Set();
   const APPS_SESSION_CACHE_KEY='rovarin.cachedApps.v1';
   let appsFetchSeq=0;
@@ -119,9 +119,30 @@
     control.value=[...control.options].some(x=>x.value===value)?value:'';
   }
 
-  /* Subnav tabs */
+  /* Temporary Expanded View & Subnav tabs */
+  let appsExpandedView=false;
+  function setAppsExpandedView(expanded){
+    appsExpandedView=Boolean(expanded);
+    const appsPageEl=get('appsPage');
+    if(appsPageEl)appsPageEl.classList.toggle('is-view-expanded',appsExpandedView);
+    for(const btnId of ['appsExpandViewBtn','startupExpandViewBtn']){
+      const btn=get(btnId);
+      if(btn){
+        btn.setAttribute('aria-pressed',String(appsExpandedView));
+        btn.textContent=appsExpandedView?'Compact':'Expand';
+      }
+    }
+  }
+  get('appsExpandViewBtn')?.addEventListener('click',()=>setAppsExpandedView(!appsExpandedView));
+  get('startupExpandViewBtn')?.addEventListener('click',()=>setAppsExpandedView(!appsExpandedView));
+
   function setTab(tab){
+    if(activeTab!==tab)setAppsExpandedView(false);
     activeTab=tab;
+    const appsPageEl=get('appsPage');
+    if(appsPageEl)appsPageEl.dataset.activeTab=tab;
+    const qlSection=document.querySelector('#appsPage .quick-launch-section');
+    if(qlSection)qlSection.hidden=(tab==='startup');
     get('appsTabInstalled').classList.toggle('is-active',tab==='installed');
     get('appsTabInstalled').setAttribute('aria-selected',String(tab==='installed'));
     get('appsTabStartup').classList.toggle('is-active',tab==='startup');
@@ -432,7 +453,12 @@
     const info=node('div',undefined,'apps-info');
     const title=node('h2',app.name);title.title=app.name;info.append(title);
     if(app.description&&app.description!==app.name)info.append(node('p',app.description,'apps-description'));
-    const pubText=[cleanPublisher(app.publisher)||'Publisher unavailable',app.version].filter(Boolean).join(' · ');
+    const metaParts=[cleanPublisher(app.publisher)||'Publisher unavailable',app.version];
+    if(app.installDate){
+      const d=app.installDate.replace(/^(\d{4})(\d{2})(\d{2})$/,'$1-$2-$3');
+      metaParts.push(d);
+    }
+    const pubText=metaParts.filter(Boolean).join(' · ');
     const pubEl=node('p',pubText,'apps-publisher');pubEl.title=pubText;info.append(pubEl);
     cardHeader.append(icon,info);
 
@@ -444,10 +470,10 @@
 
     const actionsWrap=node('div',undefined,'apps-row-actions');
     if(app.uninstallCapable){
-      const uninstallBtn=node('button','Uninstall','apps-row-action apps-uninstall-btn');
+      const uninstallBtn=node('button',app.batchCapable?'Uninstall':'Open uninstaller','apps-row-action apps-uninstall-btn');
       uninstallBtn.type='button';
       uninstallBtn.disabled=operationBusy;
-      uninstallBtn.title='Uninstall '+app.name;
+      uninstallBtn.title=app.batchCapable?'Uninstall '+app.name:'Opens '+app.name+' removal on your Windows PC; follow its prompts there';
       uninstallBtn.addEventListener('click',e=>{e.stopPropagation();openReview([app.id],false);});
       actionsWrap.append(uninstallBtn);
     }else{
@@ -461,7 +487,7 @@
     row.append(selectArea,cardHeader,cardMeta,actionsWrap);
 
     row.addEventListener('click',e=>{
-      if((selectionMode||selected.size>0)&&!e.target.closest('button, a, input, select')){
+      if(selected.size>0&&!e.target.closest('button, a, input, select')){
         check.checked=!check.checked;
         check.checked?selected.add(app.id):selected.delete(app.id);
         row.classList.toggle('is-selected',check.checked);
@@ -472,8 +498,14 @@
   }
   function getAppRow(app){
     let row=appRowCache.get(app.id);
+    const snapshot=JSON.stringify(app);
+    if(row&&row._appSnapshot!==snapshot){
+      for(const image of row.querySelectorAll('img'))iconObserver?.unobserve(image);
+      row=null;
+    }
     if(!row){
       row=createAppRow(app);
+      row._appSnapshot=snapshot;
       appRowCache.set(app.id,row);
     }else{
       const isSel=selected.has(app.id);
@@ -486,19 +518,9 @@
     }
     return row;
   }
-  function setSelectionMode(enabled){
-    selectionMode=Boolean(enabled);
-    if(!selectionMode)selected.clear();
-    setTrayExpanded(false);
-    for(const r of appRowCache.values()){
-      const isSel=selected.has(r.dataset.appId);
-      r.classList.toggle('is-selected',isSel);
-      const c=r.querySelector('input[type="checkbox"]');
-      if(c)c.checked=isSel;
-    }
-    selection();
-  }
+  let appsRenderSeq=0;
   function render(){
+    const currentSeq=++appsRenderSeq;
     const sort=get('appsSort').value,shown=visibleApps();
     shown.sort((a,b)=>{
       let value;
@@ -528,7 +550,7 @@
     if(shown.length>40){
       const remaining=shown.slice(40);
       requestAnimationFrame(()=>{
-        if(!list)return;
+        if(!list||currentSeq!==appsRenderSeq)return;
         const remainingFrag=document.createDocumentFragment();
         for(const app of remaining)remainingFrag.append(getAppRow(app));
         list.append(remainingFrag);
@@ -550,10 +572,8 @@
     if(tray)tray.hidden=!showTray;
     if(page){
       page.classList.toggle('has-selection-tray',showTray);
-      page.classList.toggle('is-selecting',selectionMode||hasSelection);
+      page.classList.toggle('is-selecting',hasSelection);
     }
-    const modeBtn=get('appsSelectModeBtn');
-    if(modeBtn)modeBtn.textContent=(selectionMode||hasSelection)?'Cancel':'Select apps';
 
     if(!showTray&&trayExpanded){
       setTrayExpanded(false);
@@ -623,7 +643,7 @@
     const expReviewBtn=get('appsTrayExpandedReview');
     if(expReviewBtn)expReviewBtn.disabled=!selected.size||operationBusy;
     const refreshBtn=get('appsRefresh');
-    if(refreshBtn)refreshBtn.disabled=loading||operationBusy;
+    if(refreshBtn)refreshBtn.disabled=loading||Boolean(operationBusy&&progressTracking);
 
     if(trayExpanded)renderExpandedTrayList();
   }
@@ -656,7 +676,7 @@
   let lastAppsLoadedAt = 0;
   const APPS_STALE_MS = 300000;
   async function refresh(force=false, silent=false){
-    if(loading)return;loading=true;
+    if(loading&&!force)return;loading=true;
     const fetchSeq = ++appsFetchSeq;
     selection();list.setAttribute('aria-busy','true');
     if(!silent){status.textContent=apps.length?'Refreshing installed applications…':'Reading installed applications…';if(!apps.length)render();}
@@ -669,11 +689,12 @@
       appsLoadError=false;
       apps=data.apps;
       try{sessionStorage.setItem(APPS_SESSION_CACHE_KEY,JSON.stringify({apps,sampledAt:data.sampledAt}));}catch(_){}
-      for(const cachedRow of appRowCache.values())for(const image of cachedRow.querySelectorAll('img'))iconObserver?.unobserve(image);
-      appRowCache.clear();
       const validIds = new Set(apps.map(a => a.id));
       for (const id of appRowCache.keys()) {
-        if (!validIds.has(id)) appRowCache.delete(id);
+        if (!validIds.has(id)) {
+          for(const image of appRowCache.get(id).querySelectorAll('img'))iconObserver?.unobserve(image);
+          appRowCache.delete(id);
+        }
       }
       for(const id of selected)if(!apps.some(app=>app.id===id))selected.delete(id);
       status.textContent=`${apps.length} applications · loaded ${new Date(data.sampledAt).toLocaleTimeString()}${data.packagesAvailable?'':' · Store inventory unavailable'}`;
@@ -706,7 +727,36 @@
       );
 
       if(!app.uninstallCapable){
-        info.append(node('div','ℹ️ Cannot be removed automatically. If supported, remove this component through Windows Settings → Apps on your PC.','apps-removal-notice apps-notice-manual'));
+        const reasonText={
+          'system-component':'⚙️ Windows system component: Windows manages this component as part of the operating system and does not support remote or standard removal.',
+          'protected-application':'🛡️ Protected application: Protected by Rovarin safety policy to keep your remote connection operational.',
+          'missing-executable':'⚠️ Missing uninstaller: The uninstaller executable registered with Windows could not be found on disk.',
+          'unsupported-syntax':'⚠️ Custom uninstaller command: This uninstaller uses command syntax or script parameters that cannot be safely executed unattended.',
+          'no-uninstall-string':'ℹ️ No registered uninstaller: Windows does not have a removal command registered for this item.',
+          'outside-system-roots':'🛡️ Unverified location: Uninstaller executable is outside verified system application directories.'
+        }[app.unsupportedReason]||'ℹ️ Cannot be removed automatically. Manage this application on the PC through Windows Settings → Installed apps.';
+        const noticeEl=node('div',reasonText,'apps-removal-notice apps-notice-manual');
+        const settingsBtn=node('button','Manage in Windows','processes-freeze');
+        settingsBtn.type='button';
+        settingsBtn.style.marginTop='6px';
+        settingsBtn.title='Open Windows Installed apps on the PC';
+        settingsBtn.addEventListener('click',async()=>{
+          settingsBtn.disabled=true;
+          settingsBtn.textContent='Opening Settings on PC…';
+          try{
+            const res=await fetch('/api/apps/settings',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:app.id,confirmation:'open-installed-apps-settings'})});
+            const d=await res.json();
+            if(!res.ok)throw Error(d.error||'Could not open Settings');
+            settingsBtn.textContent='Settings opened on PC';
+            get('appsReviewLimitations').textContent='Windows Settings opened on the PC. Manage '+app.name+' there. Use Check again to verify any removal.';
+          }catch(err){
+            settingsBtn.disabled=false;
+            settingsBtn.textContent='Manage in Windows';
+            get('appsConfirmError').textContent=err.message;
+          }
+        });
+        noticeEl.append(node('br'),settingsBtn);
+        info.append(noticeEl);
       }else if(isInteractive){
         info.append(node('div','🖥️ Action required on PC: This uninstaller has an interactive setup window that will open on your PC screen. Please complete it on the computer.','apps-removal-notice apps-notice-interactive'));
       }else if(isSilent){
@@ -838,15 +888,19 @@
             badge.textContent='⏳ Working';
             label='uninstalling';
           }else if(item.state==='unconfirmed'){
-            badge.className='apps-prog-badge apps-prog-reboot';badge.textContent='? Unconfirmed';label='removal could not be verified';
+            badge.className='apps-prog-badge apps-prog-reboot';badge.textContent='? Unconfirmed';
+            if(item.code==='still-installed')label='outcome unconfirmed · still installed; uninstaller may still be running or require manual completion on PC';
+            else if(item.code==='operation-unconfirmed')label='outcome unconfirmed · backend restarted or uninstaller state is unknown; check PC';
+            else if(item.code==='timed-out')label='outcome unconfirmed · Windows did not finish within the observation limit; check PC';
+            else label='outcome unconfirmed · removal could not be verified; check PC';
           }else if(item.state==='failed'){
             badge.className='apps-prog-badge apps-prog-failed';
             badge.textContent='✕ Failed';
             if(item.code==='cancelled')label='failed · cancelled on PC';
-            else if(item.code==='still-running')label='failed · still running on PC';
-            else if(item.code==='timed-out')label='outcome unconfirmed · Windows did not finish within the observation limit';
+            else if(item.code==='still-running')label='failed · uninstaller still running on PC';
+            else if(item.code==='timed-out')label='outcome unconfirmed · Windows did not finish within the observation limit; check PC';
             else if(item.code==='removal-unconfirmed')label='failed · removal unconfirmed';
-            else label='failed'+(item.code?' · '+({'user-mismatch':'Package belongs to a different Windows user','access-denied':'Windows denied access','removal-denied':'Windows refused package removal','package-in-use':'Close the application on the PC and retry','package-removal-failed':'Windows package removal failed','still-installed':'Still installed; no uninstall is running'}[item.code]||item.code.replaceAll('-',' ')):'')+(item.hresult?' ('+item.hresult+')':'');
+            else label='failed'+(item.code?' · '+({'user-mismatch':'Package belongs to a different Windows user','access-denied':'Windows denied access','removal-denied':'Windows refused package removal','package-in-use':'Close the application on the PC and retry','package-removal-failed':'Windows package removal failed','still-installed':'Still installed; uninstaller may still be running or requires attention on this PC'}[item.code]||item.code.replaceAll('-',' ')):'')+(item.hresult?' ('+item.hresult+')':'');
           }else if(item.state==='queued'){
             badge.className='apps-prog-badge apps-prog-queued';
             badge.textContent='⋯ Queued';
@@ -889,7 +943,7 @@
     }catch(e){stopProgressTracking();get('appsConfirmError').textContent=e.message;}
     finally{get('appsConfirmSubmit').disabled=!canRemove()||operationBusy;pin.value='';}
   });
-  dialog.addEventListener('close',()=>{pin.value='';review=null;});get('appsConfirmCancel').addEventListener('click',()=>dialog.close());get('appsRefresh').addEventListener('click',()=>{refresh(true);refreshQuickLaunch();});get('appsProgressRefresh').addEventListener('click',()=>{readStatus(true);refresh(true);});get('appsProgressDismiss')?.addEventListener('click',()=>{const p=get('appsProgress');if(p)p.hidden=true;dismissedProgressJob=currentProgressJob;stopProgressTracking();});get('appsBatchUninstall').addEventListener('click',()=>{setTrayExpanded(false);openReview([...selected],true);});get('appsClearSelection').addEventListener('click',()=>{selected.clear();setTrayExpanded(false);render();});get('appsSearch').addEventListener('input',render);get('appsType').addEventListener('change',render);get('appsSort').addEventListener('change',()=>{sortDirection=get('appsSort').value==='size'?-1:1;get('appsSortDirection').textContent=sortDirection===1?'↑':'↓';render();});get('appsSortDirection').addEventListener('click',()=>{sortDirection*=-1;get('appsSortDirection').textContent=sortDirection===1?'↑':'↓';render();});get('appsShowSystem')?.addEventListener('change',()=>{filters();render();});
+  dialog.addEventListener('close',()=>{pin.value='';review=null;});get('appsConfirmCancel').addEventListener('click',()=>dialog.close());get('appsRefresh').addEventListener('click',async()=>{if(operationBusy)await readStatus(true);await refresh(true);refreshQuickLaunch();});get('appsProgressRefresh').addEventListener('click',async()=>{await readStatus(true);await refresh(true);refreshQuickLaunch();});get('appsProgressDismiss')?.addEventListener('click',()=>{const p=get('appsProgress');if(p)p.hidden=true;dismissedProgressJob=currentProgressJob;stopProgressTracking();});get('appsBatchUninstall').addEventListener('click',()=>{setTrayExpanded(false);openReview([...selected],true);});get('appsClearSelection').addEventListener('click',()=>{selected.clear();setTrayExpanded(false);render();});get('appsSearch').addEventListener('input',render);get('appsType').addEventListener('change',render);get('appsSort').addEventListener('change',()=>{sortDirection=get('appsSort').value==='size'?-1:1;get('appsSortDirection').textContent=sortDirection===1?'↑':'↓';render();});get('appsSortDirection').addEventListener('click',()=>{sortDirection*=-1;get('appsSortDirection').textContent=sortDirection===1?'↑':'↓';render();});get('appsShowSystem')?.addEventListener('change',()=>{filters();render();});
   get('appsTraySummaryBtn')?.addEventListener('click',()=>setTrayExpanded(!trayExpanded));
   get('appsTrayCollapseBtn')?.addEventListener('click',()=>setTrayExpanded(false));
   get('appsTrayExpandedClear')?.addEventListener('click',()=>{selected.clear();setTrayExpanded(false);render();});
@@ -900,8 +954,6 @@
   get('qlPickerClose').addEventListener('click',()=>qlDialog.close());
   get('qlPickerDone').addEventListener('click',()=>qlDialog.close());
   get('qlPickerSearch').addEventListener('input',renderQuickLaunchPicker);
-  get('appsSelectModeBtn').addEventListener('click',()=>setSelectionMode(!selectionMode));
-  get('appsDoneSelection').addEventListener('click',()=>setSelectionMode(false));
 
   // Native mobile pickers choose their own placement. This shared listbox stays
   // below its trigger; original selects retain the existing value/change contract.
@@ -927,7 +979,7 @@
     button.setAttribute('aria-controls',filterMenu.id);button.setAttribute('aria-expanded','false');
     select.classList.add('apps-filter-source');select.tabIndex=-1;select.setAttribute('aria-hidden','true');
     label.htmlFor=button.id;label.append(button);
-    const sync=()=>{const text=select.selectedOptions[0]?.textContent||'';button.textContent=text;button.setAttribute('aria-label',name+': '+text);button.disabled=select.disabled;};
+    const sync=()=>{const text=select.selectedOptions[0]?.textContent||'';button.textContent=id==='appsSort'?'Sort: '+text:text;button.setAttribute('aria-label',name+': '+text);button.disabled=select.disabled;};
     const observer=new MutationObserver(sync);observer.observe(select,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','selected']});
     select.addEventListener('change',sync);sync();
     function open(){
@@ -980,13 +1032,22 @@
     });
   }
   const startupSources={'registry-user':'Sign-in registry','registry-user32':'32-bit sign-in registry','registry-machine':'Sign-in registry','registry-machine32':'32-bit sign-in registry','folder-user':'Startup folder','folder-machine':'Startup folder','scheduled-task':'Scheduled task','packaged-startup':'Packaged app','app-service':'App background service'};
+  let startupNotice='',startupVerification=null,startupWarnings=false,startupNavigationBusy=false;
+  function startupCoverage(){
+    const ordinary=startupApps.filter(item=>item.source!=='app-service');
+    const direct=ordinary.filter(item=>!item.readOnly&&!item.requiresElevation).length;
+    const approval=ordinary.filter(item=>!item.readOnly&&item.requiresElevation).length;
+    const settings=ordinary.filter(item=>item.controlMode==='windows-settings').length;
+    const unsupported=ordinary.length-direct-approval-settings;
+    return ordinary.length+' startup entries · '+direct+' direct · '+approval+' need PC approval · '+settings+' in Windows Settings · '+unsupported+' unsupported'+(startupApps.length>ordinary.length?' · '+(startupApps.length-ordinary.length)+' background services':'');
+  }
   function renderStartup(){
     const shown=visibleStartupApps();
     shown.sort((a,b)=>compareAppNames(a.displayName||a.name,b.displayName||b.name));
     if(!startupLoading&&!startupLoadError){
-      const count=shown.length===startupApps.length?`${startupApps.length} startup entries`:`Showing ${shown.length} of ${startupApps.length} startup entries`;
-      startupStatus.textContent=startupStatus.textContent.replace(/^(?:Showing \d+ of \d+ startup entries|\d+ startup entries)/,count);
+      startupStatus.textContent=(shown.length===startupApps.length?'':'Showing '+shown.length+' of '+startupApps.length+' entries · ')+startupCoverage()+(lastStartupLoadedAt?' · loaded '+new Date(lastStartupLoadedAt).toLocaleTimeString():'')+(startupWarnings?' · Some startup sources could not be fully read':'')+(startupNotice?' · '+startupNotice:'');
     }
+    for(const image of startupList.querySelectorAll('img'))iconObserver?.unobserve(image);
     startupList.replaceChildren();
     if(!shown.length){
       const query=get('startupSearch').value.trim();
@@ -994,6 +1055,7 @@
       return;
     }
     const services=node('details',undefined,'startup-associated-services');
+    services.open=true;
     const serviceCount=shown.filter(item=>item.source==='app-service').length;
     services.append(node('summary',`App background services (${serviceCount}) — read-only`));
     for(const item of shown){
@@ -1001,7 +1063,7 @@
       const icon=startupIcon(item);
       const info=node('div',undefined,'startup-info');
       info.append(node('h2',item.displayName||item.name));
-      const sub=[item.publisher||'',item.method||startupSources[item.source]||'Windows startup registration'].filter(Boolean).join(' · ');
+      const sub=[item.publisher||'',item.executable||'',item.method||startupSources[item.source]||'Windows startup registration'].filter(Boolean).join(' · ');
       if(sub)info.append(node('p',sub));
       const details=node('details',undefined,'startup-entry-details');
       details.append(node('summary','Startup information'),node('p','Source: '+(startupSources[item.source]||'Windows registration')),node('p','Entry: '+item.name));
@@ -1010,18 +1072,22 @@
       if(item.readOnly)info.append(node('p',item.blockedReason||(item.source==='scheduled-task'?'Cannot safely manage this task':item.source==='packaged-startup'?'Packaged startup state cannot safely be changed here.':item.source==='app-service'?'Service controls are not supported.':item.scope==='machine'?'All-users startup changes require administrator support.':item.enabled===null?'Windows startup state is unavailable.':'This startup file type is not supported.'),'startup-control-reason'));
       if(item.source==='packaged-startup')details.append(node('p','Manage this entry in Windows Settings → Apps → Startup.'));
       info.append(details);
+      if(item.requiresElevation)info.append(node('p','Requires visible administrator approval on this PC; affects '+(item.scope==='user'?'the current user.':'all users.'),'startup-control-reason'));
       const badges=node('div',undefined,'startup-badges');
       badges.append(
         node('span',item.scope==='user'?'Current User':'All Users (System)','startup-scope-badge startup-scope-'+item.scope),
         node('span',item.source==='app-service'?(item.serviceState||'Unknown')+' · '+(item.startupMode||'Unknown'):item.enabled===null?'State unavailable':item.enabled?'Enabled':'Disabled','startup-status-badge startup-status-'+(item.enabled===null?'unknown':item.enabled?'enabled':'disabled'))
       );
-      const toggle=node('button',item.readOnly?'View information':item.enabled?'Disable':'Enable','startup-toggle-btn');
+      const windowsSettings=item.controlMode==='windows-settings';
+      badges.append(node('span',item.source==='app-service'?'Read-only service':windowsSettings?'Windows Settings':item.readOnly?'Unsupported':item.requiresElevation?'PC approval required':'Manage here','startup-scope-badge'));
+      const toggle=node('button',windowsSettings?'Manage in Windows':item.readOnly?'View information':item.enabled?'Disable':'Enable','startup-toggle-btn');
       toggle.type='button';
-      toggle.disabled=operationBusy;
-      toggle.title=item.readOnly?'View startup source and Windows management guidance':(item.enabled?'Disable ':'Enable ')+(item.displayName||item.name);
-      toggle.setAttribute('aria-label',(item.readOnly?'View startup information for ':(item.enabled?'Disable ':'Enable '))+(item.displayName||item.name));
-      toggle.addEventListener('click',()=>{if(item.readOnly){details.open=!details.open;}else openStartupConfirm(item);});
+      toggle.disabled=operationBusy||startupNavigationBusy;
+      toggle.title=windowsSettings?'Open Windows Startup settings on this PC; change the entry there and verify its state here':item.readOnly?'View startup source and Windows management guidance':(item.enabled?'Disable ':'Enable ')+(item.displayName||item.name)+(item.requiresElevation?' — local administrator approval required':'');
+      toggle.setAttribute('aria-label',(windowsSettings?'Manage in Windows settings: ':item.readOnly?'View startup information for ':(item.enabled?'Disable ':'Enable '))+(item.displayName||item.name));
+      toggle.addEventListener('click',()=>{if(windowsSettings)navigateStartupSettings(item);else if(item.readOnly){details.open=!details.open;}else openStartupConfirm(item);});
       const actions=node('div',undefined,'startup-actions');actions.append(toggle);
+      if(windowsSettings&&startupVerification?.id===item.id){const verify=node('button','Verify Windows state','startup-toggle-btn');verify.type='button';verify.disabled=startupLoading;verify.addEventListener('click',()=>refreshStartup(true));actions.append(verify);}
       if(item.canRestore&&!item.readOnly){const restore=node('button','Restore original','startup-toggle-btn');restore.type='button';restore.disabled=operationBusy;restore.addEventListener('click',()=>openStartupConfirm(item,true));actions.append(restore);}
       row.append(icon,info,badges,actions);
       if(item.source==='app-service')services.append(row);else startupList.append(row);
@@ -1044,21 +1110,44 @@
       lastStartupLoadedAt = Number.isFinite(data.sampledAt)?data.sampledAt:Date.now();
       startupLoadError=false;
       startupApps=data.items;
+      startupWarnings=Boolean(data.warnings?.length);
+      if(startupVerification){
+        const current=startupApps.find(item=>item.id===startupVerification.id);
+        startupNotice=current&&typeof current.enabled==='boolean'?'Verified Windows state for '+startupVerification.name+': '+(current.enabled?'Enabled':'Disabled')+(current.enabled===startupVerification.before?' (unchanged).':'.'):'Windows could not confirm the current state for '+startupVerification.name+'.';
+        startupVerification=null;
+      }
       startupStatus.textContent=`${startupApps.length} startup entries · loaded ${new Date(data.sampledAt).toLocaleTimeString()}${data.warnings?.length?' · Some startup sources could not be fully read':''}`;
     }catch(e){startupLoadError=true;startupStatus.textContent=(startupApps.length?'Refresh failed; showing the previous inventory. ':'')+e.message;}
     finally{startupLoading=false;startupList.setAttribute('aria-busy','false');get('startupRefresh').disabled=false;renderStartup();}
+  }
+  async function navigateStartupSettings(item){
+    if(operationBusy||startupNavigationBusy||item.controlMode!=='windows-settings')return;
+    startupNavigationBusy=true;
+    startupNotice='Opening Windows Startup settings on the PC...';renderStartup();
+    try{
+      const response=await fetch('/api/apps/startup/settings',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id,confirmation:'open-startup-settings'})});
+      if(response.status===401){(window.redirectToLogin||(()=>window.location.replace('/')))('startup-settings-401');return;}
+      const data=await response.json();
+      if(!response.ok||data.code!=='settings-opened'||data.changed!==false)throw Error(data.error||'Windows Settings launch could not be confirmed.');
+      startupVerification={id:item.id,name:item.displayName||item.name,before:item.enabled};
+      startupNotice='Settings opened on the PC. Change '+startupVerification.name+' there, then choose Verify Windows state. No startup change has been confirmed.';
+    }catch(error){startupNotice=error.message;}
+    finally{startupNavigationBusy=false;renderStartup();}
   }
   function openStartupConfirm(item,restore=false){
     if(item.readOnly||operationBusy)return;
     startupTarget={...item,restore};
     get('startupConfirmPin').value='';
     get('startupConfirmTitle').textContent=(restore?'Restore original state for ':item.enabled?'Disable ':'Enable ')+(item.displayName||item.name);
+    get('startupConfirmNote').textContent='This changes whether the application starts automatically. The app itself is not modified or deleted.';
     get('startupConfirmDetails').replaceChildren(
       node('p',`Application: ${item.displayName||item.name}`),
       node('p',`Scope: ${item.scope==='user'?'Current User':'All Users'}`),
       node('p',`Action: ${restore?'Restore the enabled/disabled state saved before Rovarin changed this task':item.enabled?'Prevent starting at the next sign-in; this does not stop a running app':'Allow starting at the next sign-in'}`)
     );
     get('startupConfirmError').textContent='';
+    get('startupConfirmSubmit').textContent=item.requiresElevation?'Request approval on PC':'Apply change';
+    if(item.requiresElevation)get('startupConfirmDetails').append(node('p','This requests a visible Windows UAC prompt on the PC. No change is made unless a local administrator approves.'));
     if(!startupDialog.open)startupDialog.showModal();
     get('startupConfirmPin').focus();
   }
@@ -1071,14 +1160,13 @@
     if(!/^(?:\d{6}|\d{8}|\d{12})$/.test(currentPin))return;
     get('startupConfirmPin').value='';
     get('startupConfirmSubmit').disabled=true;
-    get('startupConfirmError').textContent='Applying changes…';
+    get('startupConfirmError').textContent=target.requiresElevation?'Waiting for Windows administrator approval on the PC…':'Applying changes…';
     try {
-      const r=await fetch('/api/apps/startup/toggle',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:target.id,enabled:nextEnabled,pin:currentPin,confirmation:'change-startup'})});
+      const r=await fetch('/api/apps/startup/toggle',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:target.id,enabled:nextEnabled,pin:currentPin,confirmation:target.requiresElevation?'change-startup-with-local-approval':'change-startup'})});
       const data=await r.json();
-      if(!r.ok)throw Error(data.error||'Failed to update startup configuration.');
-      startupDialog.close();
-      await refreshStartup(true);
-    }catch(err){get('startupConfirmError').textContent=err.message;}
+        if(!r.ok)throw Error(data.code==='startup-state-unconfirmed'?'Windows did not confirm the change. Refresh startup entries before trying again.':data.error||'Failed to update startup configuration.');
+      startupDialog.close();await refreshStartup(true);
+    }catch(err){get('startupConfirmError').textContent=err.message;await refreshStartup(true);}
     finally{get('startupConfirmSubmit').disabled=false;}
   });
   get('startupConfirmCancel').addEventListener('click',()=>startupDialog.close());
@@ -1089,10 +1177,21 @@
   get('startupStatusFilter').addEventListener('change',renderStartup);
   get('startupControlFilter').addEventListener('change',renderStartup);
 
+  function trimInactiveAppDom(){
+    if(!get('appsPage')?.hidden&&(typeof window.dashboardClientVisible!=='function'||window.dashboardClientVisible()))return;
+    if(selected.size>0||operationBusy||review)return;
+    for(const cachedRow of appRowCache.values())for(const image of cachedRow.querySelectorAll('img'))iconObserver?.unobserve(image);
+    appRowCache.clear();
+    list.replaceChildren();
+      for(const image of startupList.querySelectorAll('img'))iconObserver?.unobserve(image);
+    startupList.replaceChildren();
+  }
   window.addEventListener('pc-monitor-pagechange',event=>{
+    setAppsExpandedView(false);
     selection();
     if(event.detail.page==='appsPage'){
       if(apps.length > 0){
+        if(!list.children.length)render();
         if(Date.now() - lastAppsLoadedAt > APPS_STALE_MS){
           refresh(false, true);
         }
@@ -1103,7 +1202,20 @@
       if(!quickLaunchData || !Array.isArray(quickLaunchData.pins) || !quickLaunchData.pins.length || Date.now() - lastQlLoadedAt > APPS_STALE_MS){
         refreshQuickLaunch();
       }
-      if(activeTab==='startup'&&(!startupApps.length || Date.now() - lastStartupLoadedAt > APPS_STALE_MS))refreshStartup();
+      if(activeTab==='startup'){
+        if(!startupApps.length || Date.now() - lastStartupLoadedAt > APPS_STALE_MS)refreshStartup();
+        else if(!startupList.children.length)renderStartup();
+      }
+    }else{
+      trimInactiveAppDom();
+    }
+  });
+  window.addEventListener('pc-monitor-desktop-visibility',event=>{
+    if(event.detail?.visible===false){
+      trimInactiveAppDom();
+    }else if(event.detail?.visible===true&&!get('appsPage').hidden){
+      if(apps.length&&!list.children.length)render();
+      if(activeTab==='startup'&&startupApps.length&&!startupList.children.length)renderStartup();
     }
   });
   window.addEventListener('rovarin-apps-refresh-status',readStatus);

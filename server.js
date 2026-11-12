@@ -1,4 +1,6 @@
 const http = require('http');
+const nativeStandbySecret=process.env.ROVARIN_STANDBY_SECRET;
+delete process.env.ROVARIN_STANDBY_SECRET;
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
@@ -18,6 +20,67 @@ const { UpdateManager } = require('./update-manager');
 const { createDiagnostics } = require('./diagnostics');
 const { PowerControls } = require('./power-controls');
 const { createLocalLifecycleClient } = require('./maintenance-service');
+const {
+  createCpuUsageSampler,
+  scanDrivesInfo,
+  parseNetworkCounters,
+  parsePingLatency,
+  parseGpuTelemetry,
+  sampleRamSnapshot,
+  assessHealth,
+  formatUptime
+} = require('./hardware-telemetry');
+
+function isTailscaleIP(ip) {
+  if (!ip) return false;
+  // Tailscale IPv6 (fd7a:115c:a1e0::/48)
+  if (ip.toLowerCase().startsWith('fd7a:115c:a1e0:')) {
+    return true;
+  }
+  // Tailscale IPv4 (100.64.0.0/10)
+  const parts = ip.split('.').map(Number);
+  if (parts.length === 4 && parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) {
+    return true;
+  }
+  return false;
+}
+
+function getTailscaleIP() {
+  const nets = os.networkInterfaces();
+  for (const addrs of Object.values(nets)) {
+    if (!addrs) continue;
+    for (const addr of addrs) {
+      if (addr.family === 'IPv4' || addr.family === 4) {
+        // Tailscale CGNAT subnet is 100.64.0.0/10 (100.64.0.0 to 100.127.255.255)
+        // A disconnected named adapter can have an APIPA address instead.
+        if (isTailscaleIP(addr.address)) {
+          return addr.address;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function isAllowedClient(remoteAddress) {
+  if (!remoteAddress) return false;
+  // Normalize IPv6 mapped IPv4 addresses (e.g., ::ffff:127.0.0.1 or ::ffff:100.x.x.x)
+  let cleanIp = remoteAddress;
+  if (cleanIp.startsWith('::ffff:')) {
+    cleanIp = cleanIp.slice(7);
+  }
+  // Localhost
+  if (cleanIp === '127.0.0.1' || cleanIp === '::1' || cleanIp === 'localhost') {
+    return true;
+  }
+  // Tailscale IP range
+  if (isTailscaleIP(cleanIp)) {
+    return true;
+  }
+  return false;
+}
+
+const { versionAssets, renderLogin } = require('./web-assets');
 
 // Configuration
 const PORT = process.env.PORT || 7331;
@@ -124,6 +187,7 @@ function refreshAccessPin(force = false) {
 
 const bindingState = { sourceFingerprint: runtimeFingerprint(), status: 'starting', preferredPort: Number(PORT), defaultPort: 7331, actualPort: null, fallbackRequired: false };
 let serverInstance;
+let standbyBridge=null;
 try { portCandidates(PORT); serverInstance = claimInstance(DATA_DIR, PORT); serverInstance.write(bindingState); }
 catch (_) { console.error('[Startup] Could not claim this server instance or preferred port is invalid. No second instance was started.'); process.exit(1); }
 function cleanupPid() { try { serverInstance.cleanup(); } catch (_) {} }
@@ -132,59 +196,9 @@ process.on('exit', cleanupPid);
 process.on('SIGINT', () => { cleanupPid(); process.exit(0); });
 process.on('SIGTERM', () => { cleanupPid(); process.exit(0); });
 
-// Find Tailscale IPv4 address
-function getTailscaleIP() {
-  const nets = os.networkInterfaces();
-  for (const addrs of Object.values(nets)) {
-    if (!addrs) continue;
-    for (const addr of addrs) {
-      if (addr.family === 'IPv4' || addr.family === 4) {
-        // Tailscale CGNAT subnet is 100.64.0.0/10 (100.64.0.0 to 100.127.255.255)
-        // A disconnected named adapter can have an APIPA address instead.
-        if (isTailscaleIP(addr.address)) {
-          return addr.address;
-        }
-      }
-    }
-  }
-  return null;
-}
-
 function readBoundedDuration(value, fallback, minimum, maximum) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
-}
-
-function isTailscaleIP(ip) {
-  if (!ip) return false;
-  // Tailscale IPv6 (fd7a:115c:a1e0::/48)
-  if (ip.toLowerCase().startsWith('fd7a:115c:a1e0:')) {
-    return true;
-  }
-  // Tailscale IPv4 (100.64.0.0/10)
-  const parts = ip.split('.').map(Number);
-  if (parts.length === 4 && parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) {
-    return true;
-  }
-  return false;
-}
-
-function isAllowedClient(remoteAddress) {
-  if (!remoteAddress) return false;
-  // Normalize IPv6 mapped IPv4 addresses (e.g., ::ffff:127.0.0.1 or ::ffff:100.x.x.x)
-  let cleanIp = remoteAddress;
-  if (cleanIp.startsWith('::ffff:')) {
-    cleanIp = cleanIp.slice(7);
-  }
-  // Localhost
-  if (cleanIp === '127.0.0.1' || cleanIp === '::1' || cleanIp === 'localhost') {
-    return true;
-  }
-  // Tailscale IP range
-  if (isTailscaleIP(cleanIp)) {
-    return true;
-  }
-  return false;
 }
 
 // Global System Info (cached)
@@ -310,7 +324,7 @@ function sampleProcesses() {
   if (!monitoringActive || !hasActiveMonitoringLease() || !effectiveSamplingInterval('processesMs')) return;
   runTelemetryCommand('processes', 'powershell.exe', [
     '-NoProfile', '-NonInteractive', '-Command',
-    "$ErrorActionPreference='Stop'; $items=@(foreach($p in Get-Process){try{$id=$p.Id;$name=$p.ProcessName;$cpu=$null;$ram=$null;$startedAt=$null;$exePath=$null;try{$exePath=$p.Path}catch{};try{$cpu=$p.CPU}catch{};try{$ram=$p.WorkingSet64}catch{};try{$startedAt=$p.StartTime.ToUniversalTime().ToString('o')}catch{};if($null -ne $ram){[pscustomobject]@{Id=$id;ProcessName=$name;CPU=$cpu;WorkingSet64=$ram;StartedAt=$startedAt;ExecutablePath=$exePath}}}catch{}}); ConvertTo-Json -InputObject $items -Compress"
+    "$ErrorActionPreference='Stop'; $items=@(foreach($p in Get-Process){try{$id=$p.Id;$name=$p.ProcessName;$cpu=$null;$ram=$null;$startedAt=$null;$exePath=$null;try{$exePath=$p.Path}catch{};try{$cpu=$p.CPU}catch{};try{$ram=$p.WorkingSet64}catch{};try{$startedAt=$p.StartTime.ToUniversalTime().ToString('o')}catch{};[pscustomobject]@{Id=$id;ProcessName=$name;CPU=$cpu;WorkingSet64=$ram;StartedAt=$startedAt;ExecutablePath=$exePath}}catch{}}); ConvertTo-Json -InputObject $items -Compress"
   ], { windowsHide: true, timeout: PROCESS_COMMAND_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
     if (!effectiveSamplingInterval('processesMs')) return;
     const sampledAt = Date.now();
@@ -334,10 +348,11 @@ function sampleProcesses() {
     previousProcessCpuTimes = normalized.nextCpuTimes;
     const cachedLabels=processDisplayCache.cached(records);
     for(const item of normalized.processes){const key=item.pid+'|'+item.name+'|'+item.startedAt;item.displayName=cachedLabels.get(key)||item.name;item.hasFriendlyName=cachedLabels.metadataAvailable.has(key);item.displayGroup=cachedLabels.groupKeys.get(key)||null;}
-    processSnapshot = { processes: normalized.processes.filter(item => !wasRecentlyKilled(item.pid, item.startedAt, item.name)).slice(0, 50), sampledAt, error: null };
+    const eligibleProcesses = normalized.processes.filter(item => !wasRecentlyKilled(item.pid, item.startedAt, item.name)).slice(0, 2048);
+    processSnapshot = { processes: eligibleProcesses, totalCount: records.length, accessibleCount: eligibleProcesses.length, sampledAt, error: null };
     broadcastProcessSnapshot();
-    const visibleIdentities=new Set(processSnapshot.processes.map(item=>item.pid+'|'+item.name+'|'+item.startedAt));
-    processDisplayCache.enrich(records.filter(row=>visibleIdentities.has(row.Id+'|'+row.ProcessName+'|'+row.StartedAt))).then(labels=>{
+    const topIdentities=new Set(eligibleProcesses.slice(0, 60).map(item=>item.pid+'|'+item.name+'|'+item.startedAt));
+    processDisplayCache.enrich(records.filter(row=>topIdentities.has(row.Id+'|'+row.ProcessName+'|'+row.StartedAt))).then(labels=>{
       if(processSnapshot.sampledAt!==sampledAt)return;
       processSnapshot={...processSnapshot,processes:processSnapshot.processes.map(item=>({...item,displayName:labels.get(item.pid+'|'+item.name+'|'+item.startedAt)||item.name,hasFriendlyName:labels.metadataAvailable.has(item.pid+'|'+item.name+'|'+item.startedAt),displayGroup:labels.groupKeys.get(item.pid+'|'+item.name+'|'+item.startedAt)||null}))};
       broadcastProcessSnapshot();
@@ -404,62 +419,7 @@ function pushHistory(entry) {
   }
 }
 
-// CPU Delta calculation
-let prevCpuTimes = os.cpus();
-function getCpuUsage() {
-  const currentCpuTimes = os.cpus();
-  let idleDelta = 0;
-  let totalDelta = 0;
-  const perCore = [];
-
-  for (let i = 0; i < currentCpuTimes.length; i++) {
-    const cur = currentCpuTimes[i].times;
-    const prev = prevCpuTimes[i] ? prevCpuTimes[i].times : cur;
-    const coreIdle = cur.idle - prev.idle;
-    const coreTotal = (cur.user - prev.user) +
-                      (cur.nice - prev.nice) +
-                      (cur.sys - prev.sys) +
-                      (cur.irq - prev.irq) +
-                      coreIdle;
-    idleDelta += coreIdle;
-    totalDelta += coreTotal;
-
-    const corePercent = coreTotal > 0 ? Math.max(0, Math.min(100, Math.round((1 - coreIdle / coreTotal) * 100))) : 0;
-    perCore.push(corePercent);
-  }
-  prevCpuTimes = currentCpuTimes;
-
-  const overall = totalDelta > 0 ? Math.max(0, Math.min(100, Math.round((1 - idleDelta / totalDelta) * 1000) / 10)) : 0;
-  return { overall, perCore };
-}
-
-// Drive Storage detection (C:, D:, etc.)
-function scanDrivesInfo() {
-  const drives = [];
-  const candidateLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-  for (const letter of candidateLetters) {
-    const rootPath = `${letter}:\\`;
-    try {
-      const stat = fs.statfsSync(rootPath);
-      if (stat && stat.blocks > 0) {
-        const totalBytes = stat.blocks * stat.bsize;
-        const freeBytes = stat.bavail * stat.bsize;
-        const usedBytes = totalBytes - freeBytes;
-        const usedPercent = totalBytes > 0 ? Math.round((usedBytes / totalBytes) * 1000) / 10 : 0;
-        drives.push({
-          mount: `${letter}:`,
-          totalGB: Math.round((totalBytes / (1024 ** 3)) * 10) / 10,
-          freeGB: Math.round((freeBytes / (1024 ** 3)) * 10) / 10,
-          usedGB: Math.round((usedBytes / (1024 ** 3)) * 10) / 10,
-          usedPercent
-        });
-      }
-    } catch (e) {
-      // Drive not present or unreadable, ignore
-    }
-  }
-  return drives;
-}
+const getCpuUsage = createCpuUsageSampler();
 
 function getDrivesInfo() {
   const refreshMs = effectiveSamplingInterval('drivesMs') || MONITORING_PROFILES.dashboard.drivesMs;
@@ -474,23 +434,6 @@ function getDrivesInfo() {
 let prevNetSample = null;
 let currentNetSpeed = { downSpeedKB: 0, upSpeedKB: 0, sampledAt: null };
 let networkCollectionStatus = null;
-
-function parseNetworkCounters(stdout) {
-  // Windows netstat -e emits a title, column heading, then byte counters.
-  // Ignore translated labels; never substitute a later packet counter row
-  // when the byte row is malformed. A single counter row is also accepted.
-  const lines = String(stdout || '').split(/\r?\n/).filter(line => line.trim());
-  const row = (lines.length >= 3 ? lines[2] : lines[0] || '').match(/^\s*\S.*?\s+(\d+)\s+(\d+)\s*$/);
-  if (!row) return null;
-  const rx = Number(row[1]), tx = Number(row[2]);
-  return Number.isSafeInteger(rx) && Number.isSafeInteger(tx) ? { rx, tx } : null;
-}
-
-function parsePingLatency(stdout) {
-  // The unit and comparison operator are stable across Windows translations.
-  const match = String(stdout || '').match(/[=<]\s*(\d+)\s*ms\b/i);
-  return match ? Number(match[1]) : null;
-}
 
 function hasActiveMonitoringLease() {
   return monitoringLeases.size > 0;
@@ -590,55 +533,60 @@ let currentGpuData = {
 
 function sampleGpu() {
   runTelemetryCommand('gpu', NVIDIA_SMI_COMMAND, [
-    '--query-gpu=name,utilization.gpu,utilization.memory,memory.total,memory.used,memory.free,temperature.gpu',
+    '--query-gpu=index,name,utilization.gpu,utilization.memory,memory.total,memory.used,memory.free,temperature.gpu,clocks.current.graphics,clocks.current.memory,power.draw,fan.speed',
     '--format=csv,noheader,nounits'
   ], { windowsHide: true, timeout: 5000 }, (err, stdout) => {
-    const fields = String(stdout || '').trim().split(/\r?\n/)[0].split(',').map(field => field.trim());
-    const valid = fields.length >= 7 && fields[0] && [1, 3, 4, 5].every(index => fields[index] !== '' && Number.isFinite(Number(fields[index])) && Number(fields[index]) >= 0);
-    if (err || !valid) {
+    const parsed = parseGpuTelemetry(err, stdout, Date.now());
+    if (!parsed.available) {
       currentGpuData.available = false;
-      // Distinguish a missing tool (typical on PCs without an NVIDIA GPU or
-      // driver) from a tool that exists but failed to answer.
-      currentGpuData.statusNote = err && err.code === 'ENOENT'
-        ? 'Sensor unavailable (nvidia-smi not found on this PC)'
-        : 'Sensor unavailable (nvidia-smi not responding)';
-      currentGpuData.sampledAt = Date.now();
+      currentGpuData.statusNote = parsed.statusNote;
+      currentGpuData.sampledAt = parsed.sampledAt;
       temperatureManager.setUnavailable('gpu', 'NVIDIA NVML via nvidia-smi', currentGpuData.statusNote);
       publishMetricsSnapshot();
       return;
     }
-    const parts = fields;
-    if (parts.length >= 7) {
-      const totalVram = parseFloat(parts[3]);
-      const usedVram = parseFloat(parts[4]);
-      const freeVram = parseFloat(parts[5]);
-      currentGpuData = {
-        name: parts[0] || 'NVIDIA GeForce GPU',
-        available: true,
-        utilizationPercent: parseFloat(parts[1]) || 0,
-        temperatureC: parseFloat(parts[6]) || null,
-        vramTotalMB: totalVram,
-        vramUsedMB: usedVram,
-        vramFreeMB: freeVram,
-        vramPercent: totalVram > 0 ? Math.round((usedVram / totalVram) * 100) : 0,
-        statusNote: 'Active (NVIDIA NVML)',
-        sampledAt: Date.now()
-      };
-      temperatureManager.setReading('gpu', {
-        available: true,
-        temperatureC: currentGpuData.temperatureC,
-        source: 'NVIDIA NVML via nvidia-smi',
-        sampledAt: currentGpuData.sampledAt,
-        note: currentGpuData.statusNote
-      });
-      publishMetricsSnapshot();
-    } else {
-      currentGpuData.available = false;
-      currentGpuData.statusNote = 'Sensor returned malformed GPU telemetry';
-      currentGpuData.sampledAt = Date.now();
-      temperatureManager.setUnavailable('gpu', 'NVIDIA NVML via nvidia-smi', currentGpuData.statusNote);
-      publishMetricsSnapshot();
+    const allGpus = Array.isArray(parsed.gpus) ? [...parsed.gpus] : [parsed];
+    if (Array.isArray(systemInfo.gpuModels)) {
+      for (const model of systemInfo.gpuModels) {
+        if (!allGpus.some(g => g.name === model || (g.name && model.includes(g.name)) || (model && g.name.includes(model)))) {
+          const isAmd = /amd|radeon/i.test(model);
+          const isIntel = /intel|iris|uhd|arc/i.test(model);
+          allGpus.push({
+            name: model,
+            vendor: isAmd ? 'AMD' : (isIntel ? 'Intel' : 'Display Adapter'),
+            available: true,
+            utilizationPercent: null,
+            temperatureC: null,
+            vramTotalMB: null,
+            vramUsedMB: null,
+            vramFreeMB: null,
+            vramPercent: null,
+            clockGraphicsMHz: null,
+            clockMemoryMHz: null,
+            powerDrawW: null,
+            fanSpeedPercent: null,
+            fanSpeedRpm: null,
+            statusNote: 'Secondary adapter detected; counters unexposed without vendor CLI',
+            sampledAt: parsed.sampledAt
+          });
+        }
+      }
     }
+    currentGpuData = {
+      ...parsed,
+      gpus: allGpus
+    };
+    if (!systemInfo.gpuModels || !systemInfo.gpuModels.length) {
+      systemInfo.gpuModels = allGpus.map(g => g.name);
+    }
+    temperatureManager.setReading('gpu', {
+      available: true,
+      temperatureC: currentGpuData.temperatureC,
+      source: 'NVIDIA NVML via nvidia-smi',
+      sampledAt: currentGpuData.sampledAt,
+      note: currentGpuData.statusNote
+    });
+    publishMetricsSnapshot();
   });
 }
 
@@ -674,102 +622,11 @@ function sampleCpuTemperature() {
 const diagnostics = createDiagnostics({
   rootDirectory: __dirname, PORT, NVIDIA_SMI_COMMAND,
   getState: () => ({ systemInfo, windowsCaptionDetected, currentGpuData, processSnapshot, networkCollectionStatus, currentNetSpeed, bindingState }),
-  getServerPort: () => server.address().port,
+  getServerPort: () => bindingState.actualPort ?? server.address()?.port,
   getTailscaleIP, isTailscaleIP, parseNetworkCounters,
   activeTelemetryJobs, terminatingTelemetryJobs, diagnosticToolJobs,
   cpuTemperatureProvider, temperatureManager, enhancedSupport
 });
-
-// Health Assessment Logic
-function assessHealth(cpu, ram, gpu, drives, latency) {
-  const issues = [];
-  let score = 100;
-
-  // CPU Assessment
-  if (cpu.overall > 90) {
-    issues.push({ level: 'critical', text: `Heavy CPU load (${cpu.overall}%)` });
-    score -= 25;
-  } else if (cpu.overall > 75) {
-    issues.push({ level: 'warning', text: `Elevated CPU load (${cpu.overall}%)` });
-    score -= 10;
-  }
-
-  // RAM Assessment
-  if (ram.usedPercent > 92) {
-    issues.push({ level: 'critical', text: `High RAM pressure (${ram.usedPercent}%)` });
-    score -= 25;
-  } else if (ram.usedPercent > 82) {
-    issues.push({ level: 'warning', text: `Elevated RAM usage (${ram.usedPercent}%)` });
-    score -= 10;
-  }
-
-  // GPU Temperature Assessment
-  if (gpu.available && gpu.temperatureC !== null) {
-    if (gpu.temperatureC >= 85) {
-      issues.push({ level: 'critical', text: `GPU running hot (${gpu.temperatureC}°C)` });
-      score -= 20;
-    } else if (gpu.temperatureC >= 78) {
-      issues.push({ level: 'warning', text: `GPU warm (${gpu.temperatureC}°C)` });
-      score -= 8;
-    }
-  }
-
-  // Storage Assessment (C: drive)
-  const cDrive = drives.find(d => d.mount === 'C:');
-  if (cDrive) {
-    if (cDrive.usedPercent > 92) {
-      issues.push({ level: 'critical', text: `Low disk space on C: (${cDrive.freeGB} GB free)` });
-      score -= 20;
-    } else if (cDrive.usedPercent > 85) {
-      issues.push({ level: 'warning', text: `C: drive getting full (${cDrive.freeGB} GB free)` });
-      score -= 8;
-    }
-  }
-
-  // Latency Assessment
-  if (latency !== null && latency > 150) {
-    issues.push({ level: 'warning', text: `High network latency (${latency} ms)` });
-    score -= 5;
-  }
-
-  let rating = 'Healthy';
-  let badgeColor = 'emerald';
-  const hasCritical = issues.some(i => i.level === 'critical');
-  const warningCount = issues.filter(i => i.level === 'warning').length;
-
-  if (hasCritical || score < 60) {
-    rating = 'Attention Needed';
-    badgeColor = 'rose';
-  } else if (warningCount > 0 || score < 85) {
-    rating = warningCount === 1 ? '1 Advisory' : (warningCount > 1 ? `${warningCount} Advisories` : 'Advisory');
-    badgeColor = 'amber';
-  }
-
-  return {
-    score: Math.max(0, score),
-    rating,
-    badgeColor,
-    advisoriesCount: warningCount + (hasCritical ? issues.filter(i => i.level === 'critical').length : 0),
-    issues: issues.length > 0 ? issues : [{ level: 'optimal', text: 'All hardware systems running smoothly' }]
-  };
-}
-
-// Uptime formatter
-function formatUptime(seconds) {
-  const days = Math.floor(seconds / (24 * 3600));
-  seconds %= (24 * 3600);
-  const hours = Math.floor(seconds / 3600);
-  seconds %= 3600;
-  const minutes = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-
-  const parts = [];
-  if (days > 0) parts.push(`${days}d`);
-  if (hours > 0 || days > 0) parts.push(`${hours}h`);
-  parts.push(`${minutes}m`);
-  parts.push(`${secs}s`);
-  return parts.join(' ');
-}
 
 // Latest state remains cached while the server is idle; no sampling timers run
 // until a dashboard lease is created.
@@ -793,16 +650,7 @@ function sampleCpuMetrics() {
 
 function sampleRamMetrics() {
   if (!monitoringActive || !hasActiveMonitoringLease()) return;
-  const totalMem = os.totalmem();
-  const freeMem = os.freemem();
-  const usedMem = totalMem - freeMem;
-  currentRamMetrics = {
-    totalGB: Math.round((totalMem / (1024 ** 3)) * 10) / 10,
-    usedGB: Math.round((usedMem / (1024 ** 3)) * 10) / 10,
-    freeGB: Math.round((freeMem / (1024 ** 3)) * 10) / 10,
-    usedPercent: Math.round((usedMem / totalMem) * 1000) / 10,
-    sampledAt: Date.now()
-  };
+  currentRamMetrics = sampleRamSnapshot();
   publishMetricsSnapshot();
 }
 
@@ -959,7 +807,7 @@ function startMonitoring() {
   if (monitoringActive || !monitoringLeases.size) return;
   monitoringActive = true;
   monitoringGeneration++;
-  prevCpuTimes = os.cpus();
+  getCpuUsage.reset();
   currentCpuMetrics = null;
   currentRamMetrics = null;
   currentDriveMetrics = [];
@@ -1185,6 +1033,7 @@ function getAuthenticatedSession(req) {
     return null;
   }
   if (req) req.authFailureReason = 'authenticated';
+  if (standbyBridge && req) standbyBridge.touch(req);
   return session;
 }
 
@@ -1277,23 +1126,45 @@ const MIME_TYPES = {
   '.png': 'image/png',
   '.ico': 'image/x-icon'
 };
-const PUBLIC_FILES = new Set(["rovarin-icon.png","rovarin-touch.png","liquid-bootstrap.js","liquid-glass.css","liquid-glass.js","liquid-shaders.js","three-glass.module.js",'power.js', 'power.css', 'index.html', 'login.html', 'app.css', 'maintenance.css', 'processes.css', 'desktop.css', 'app.js', 'maintenance.js', 'processes.js', 'pin-lifecycle.js', 'pin-lifecycle.css', 'login.js', 'diagnostics.js', 'diagnostics.css', 'enhanced-support.js', 'uninstall.js', 'apps.js', 'apps.css', 'app-leftovers.js']);
+const PUBLIC_FILES = new Set(require('./web-assets').PUBLIC_FILES);
+const AUTHENTICATED_ONLY_ASSETS = new Set(['index.html', 'login.html', 'desktop.css', 'diagnostics.js', 'diagnostics.css', 'enhanced-support.js', 'uninstall.js']);
+const UNAUTHENTICATED_STATIC_ASSETS = new Set(Array.from(PUBLIC_FILES).filter(file => !AUTHENTICATED_ONLY_ASSETS.has(file)).map(file => `/${file}`));
 
 let dashboardAssetSignature = '';
 let dashboardAssetRevision = '';
+let sortedPublicFiles = null;
+let lastDevFreshnessCheck = 0;
+let devBackendStale = false;
+
+function checkDevBackendFreshness() {
+  if (typeof bindingState === 'undefined' || !bindingState?.sourceFingerprint) return false;
+  if (fs.existsSync(path.join(__dirname, 'installation.json'))) return false;
+  const now = Date.now();
+  if (now - lastDevFreshnessCheck < 3000) return devBackendStale;
+  lastDevFreshnessCheck = now;
+  try {
+    const currentFingerprint = runtimeFingerprint();
+    devBackendStale = currentFingerprint !== bindingState.sourceFingerprint;
+  } catch (_) {}
+  return devBackendStale;
+}
+
 function getDashboardAssetRevision() {
-  const files = Array.from(PUBLIC_FILES).sort();
   const publicDir = path.join(__dirname, 'public');
+  const files = sortedPublicFiles || (sortedPublicFiles = Object.freeze(Array.from(PUBLIC_FILES).sort()));
   const signature = files.map(file => {
     const stat = fs.lstatSync(path.join(publicDir, file));
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Invalid dashboard asset');
     return `${file}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
   }).join('|');
-  if (signature !== dashboardAssetSignature) {
+  const serverFp = typeof bindingState !== 'undefined' && bindingState?.sourceFingerprint ? bindingState.sourceFingerprint : '';
+  const fullSignature = signature + '|' + serverFp;
+  if (fullSignature !== dashboardAssetSignature) {
     const hash = crypto.createHash('sha256');
     for (const file of files) hash.update(file).update(fs.readFileSync(path.join(publicDir, file)));
+    if (serverFp) hash.update(serverFp);
     dashboardAssetRevision = hash.digest('hex');
-    dashboardAssetSignature = signature;
+    dashboardAssetSignature = fullSignature;
   }
   return dashboardAssetRevision;
 }
@@ -1302,6 +1173,7 @@ let nextReqId = 1;
 
 // HTTP Server
 const server = http.createServer((req, res) => {
+  if (standbyBridge && !standbyBridge.request(req,res)) return;
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -1328,13 +1200,13 @@ const server = http.createServer((req, res) => {
   const pathname = parsedUrl.pathname;
 
   const isLoginPost = req.method === 'POST' && pathname === '/api/login';
-  const isDesktopPost = req.method === 'POST' && ['/api/desktop/auth', '/api/desktop/pin', '/api/desktop/security', '/api/desktop/updates', '/api/desktop/maintenance'].includes(pathname);
+  const isDesktopPost = req.method === 'POST' && ['/api/desktop/auth', '/api/desktop/pin', '/api/desktop/security', '/api/desktop/updates', '/api/desktop/maintenance', '/api/desktop/standby', '/api/desktop/dev-restart'].includes(pathname);
   const isLogoutPost = req.method === 'POST' && pathname === '/api/logout';
   const isMaintenancePost = req.method === 'POST' && pathname === '/api/maintenance/run';
   const isMonitoringLeasePost = req.method === 'POST' && pathname === '/api/monitoring/lease';
   const isTreePreviewPost = req.method === 'POST' && pathname === '/api/processes/tree';
   const isProcessTreePost = req.method === 'POST' && pathname === '/api/processes/kill-tree';
-  const isAppsPost = req.method === 'POST' && ['/api/apps/removal-security', '/api/apps/uninstall', '/api/apps/quick-launch', '/api/apps/launch', '/api/apps/startup/toggle', '/api/apps/leftovers/scan', '/api/apps/leftovers/delete', '/api/apps/leftovers/cancel'].includes(pathname);
+  const isAppsPost = req.method === 'POST' && ['/api/apps/removal-security', '/api/apps/uninstall', '/api/apps/quick-launch', '/api/apps/launch', '/api/apps/startup/toggle', '/api/apps/startup/settings', '/api/apps/leftovers/scan', '/api/apps/leftovers/delete', '/api/apps/leftovers/cancel'].includes(pathname);
   const isProcessKillPost = req.method === 'POST' && ['/api/processes/kill','/api/processes/kill-tree','/api/processes/tree'].includes(pathname);
   const isTemperatureSettingsPost = req.method === 'POST' && pathname === '/api/temperature/settings';
   const isEnhancedInstallPost = req.method === 'POST' && pathname === '/api/temperature/enhanced/install';
@@ -1364,6 +1236,17 @@ const server = http.createServer((req, res) => {
         let data; try { data = JSON.parse(body); } catch (_) {}
         if (err || !data || typeof data !== 'object' || Array.isArray(data)) { reply(400, { success: false, error: 'Invalid request.' }); return; }
         if (!refreshAccessPin(true)) { reply(503, { success: false, error: 'Access configuration unavailable.' }); return; }
+        if(pathname==='/api/desktop/standby'){
+          const fields=Object.keys(data).sort().join(',');
+          if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')||parsedUrl.search||!((data.action==='status'&&fields==='action')||(data.action==='preference'&&fields==='action,enabled'&&typeof data.enabled==='boolean'))){reply(400,{success:false,error:'Fixed standby preference required.'});return;}
+          const available=Boolean(standbyBridge);
+          if(data.action==='preference'){
+            if(!available){reply(409,{success:false,error:'Smart Standby runtime unavailable.'});return;}
+            if(!getAuthenticatedSession(req)){reply(401,{success:false,error:'Authentication required.'});return;}
+            try{const saved=readConfig(CONFIG_FILE);writeConfig(CONFIG_FILE,{...saved,smartStandby:data.enabled});config.smartStandby=data.enabled;}catch(_){reply(503,{success:false,error:'Preference could not be saved.'});return;}
+          }
+          reply(200,{success:true,available,enabled:available&&config.smartStandby!==false});return;
+        }
         if (pathname === '/api/desktop/pin') {
           const fields = Object.keys(data).sort().join(',');
           if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '') || parsedUrl.search) { reply(400, {success:false,error:'Invalid PIN request.'}); return; }
@@ -1445,6 +1328,28 @@ const server = http.createServer((req, res) => {
             localMaintenanceClient.revoke().then(res => reply(200, { success: !res.enabled, ...res })).catch(() => reply(503, { success: false, error: 'Could not disable administrator maintenance.' }));
             return;
           }
+        }
+        if (pathname === '/api/desktop/dev-restart') {
+          if (fs.existsSync(path.join(__dirname, 'installation.json'))) {
+            reply(403, { success: false, error: 'Forbidden in production.' });
+            return;
+          }
+          if (clientIP !== '127.0.0.1' && clientIP !== '::1' && clientIP !== '::ffff:127.0.0.1') {
+            reply(403, { success: false, error: 'Local access only.' });
+            return;
+          }
+          reply(200, { success: true, message: 'Restarting development server...' });
+          setTimeout(() => {
+            const { spawn } = require('child_process');
+            const startPs1 = path.join(__dirname, 'scripts', 'start.ps1');
+            spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', startPs1], {
+              cwd: __dirname,
+              detached: true,
+              stdio: 'ignore',
+              windowsHide: true
+            }).unref();
+          }, 100);
+          return;
         }
         const fields = Object.keys(data);
         if (data.action === 'status' && fields.length === 1) { reply(200, { success: true, requireDesktopPin: config.requireDesktopPin !== false }); return; }
@@ -1564,11 +1469,14 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const isStaticAsset = ["/rovarin-icon.png","/rovarin-touch.png","/liquid-bootstrap.js","/liquid-glass.css","/liquid-glass.js","/liquid-shaders.js","/three-glass.module.js",'/power.css', '/power.js', '/app.css', '/maintenance.css', '/processes.css', '/app.js', '/maintenance.js', '/processes.js', '/apps.js', '/apps.css', '/app-leftovers.js', '/pin-lifecycle.js', '/pin-lifecycle.css', '/login.js'].includes(pathname);
+  const isStaticAsset = UNAUTHENTICATED_STATIC_ASSETS.has(pathname);
 
   // Reuse authenticated lease traffic to detect UI edits without another poller.
   if (session && pathname === '/api/monitoring/lease') {
-    try { res.setHeader('X-PC-Monitor-UI-Revision', getDashboardAssetRevision()); }
+    try {
+      res.setHeader('X-PC-Monitor-UI-Revision', getDashboardAssetRevision());
+      if (checkDevBackendFreshness()) res.setHeader('X-Rovarin-Dev-Stale', '1');
+    }
     catch (_) { /* A partial source save must not interrupt monitoring. */ }
   }
 
@@ -1588,15 +1496,17 @@ const server = http.createServer((req, res) => {
       // No value/hash is rendered; unhealthy configuration leaves manual entry.
       const pinMode = refreshAccessPin(true) ? String(config.pin?.length || 'manual') : 'manual';
       res.setHeader('Cache-Control', 'no-store');
-      let loginHtml = fs.readFileSync(loginHtmlPath, 'utf8').replace('<meta name="rovarin-pin-setup" content="false">', '<meta name="rovarin-pin-setup" content="' + Boolean(config.pinSetup) + '">').replace(
-        '<meta name="rovarin-pin-mode" content="manual">',
-        '<meta name="rovarin-pin-mode" content="' + pinMode + '">'
-      );
-      if(config.pinSetup)loginHtml=loginHtml.replace('id="pinInput"','id="pinInput" disabled hidden').replace('id="unlockBtn"','id="unlockBtn" disabled hidden');
+      let loginHtml;
+      try {
+        loginHtml = renderLogin(fs.readFileSync(loginHtmlPath, 'utf8'), { pinMode, pinSetup: Boolean(config.pinSetup) });
+      } catch (_) {
+        res.writeHead(503, { 'Content-Type': 'text/plain; charset=UTF-8' });
+        res.end('Login unavailable.');
+        return;
+      }
       try {
         const revision = getDashboardAssetRevision();
-        loginHtml = loginHtml.replace(/(href|src)="\/([a-z-]+\.(?:css|js))(?:\?[^" ]*)?"/g,
-          (match, attribute, asset) => PUBLIC_FILES.has(asset) ? `${attribute}="/${asset}?v=${revision}"` : match);
+        loginHtml = versionAssets(loginHtml, revision);
       } catch (_) {}
       res.end(loginHtml);
       return;
@@ -1756,23 +1666,60 @@ const server = http.createServer((req, res) => {
       res.writeHead(200,{'Content-Type':'image/png','Cache-Control':'private, max-age=3600','Content-Length':icon.length});
       res.end(icon);return;
     }
-    if(pathname==='/api/apps/startup/toggle'&&req.method==='POST'&&!parsedUrl.search){
+    if(pathname==='/api/apps/settings'&&req.method==='POST'&&!parsedUrl.search){
+      if(!getAuthenticatedSession(req)){reply(401,{success:false,code:'authentication-required',error:'Authentication required.'});return;}
+      if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')){reply(415,{success:false,code:'invalid-content-type',error:'JSON required.'});return;}
+      readRequestBody(req,1024,async(err,body)=>{
+        let data;try{data=JSON.parse(body);}catch(_){}
+        if(err||!data||typeof data!=='object'||typeof data.id!=='string'||!/^[a-f0-9]{64}$/.test(data.id)||data.confirmation!=='open-installed-apps-settings'){reply(400,{success:false,code:'invalid-request',error:'Reviewed application ID and confirmation required.'});return;}
+        try {
+          const result=await appManager.openInstalledAppsSettings(data.id,()=>Boolean(getAuthenticatedSession(req)));
+          reply(200,result);
+        }catch(e){
+          const code=e.code||e.message||'operation-failed';
+          const status=code==='authentication-required'?401:code==='not-found'?404:409;
+          reply(status,{success:false,code,error:e.message});
+        }
+      });
+      return;
+    }
+    if(pathname==='/api/apps/clear-unconfirmed'&&req.method==='POST'&&!parsedUrl.search){
+      if(!getAuthenticatedSession(req)){reply(401,{success:false,code:'authentication-required',error:'Authentication required.'});return;}
+      if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')){reply(415,{success:false,code:'invalid-content-type',error:'JSON required.'});return;}
+      readRequestBody(req,1024,async(err,body)=>{
+        let data;try{data=JSON.parse(body);}catch(_){}
+        if(err||!data||typeof data!=='object'||data.confirmation!=='clear-unconfirmed'){reply(400,{success:false,code:'invalid-request',error:'Confirmation required.'});return;}
+        try {
+          const result=appManager.clearUnconfirmed(()=>Boolean(getAuthenticatedSession(req)));
+          reply(200,result);
+        }catch(e){
+          const code=e.code||e.message||'operation-failed';
+          const status=code==='authentication-required'?401:409;
+          reply(status,{success:false,code,error:e.message});
+        }
+      });
+      return;
+    }
+    if(['/api/apps/startup/toggle','/api/apps/startup/settings'].includes(pathname)&&req.method==='POST'&&!parsedUrl.search){
+      const settingsHandoff=pathname==='/api/apps/startup/settings';
       if(!getAuthenticatedSession(req)){reply(401,{success:false,code:'authentication-required',error:'Authentication required.'});return;}
       if(appManager.busy||appManager.blocked||appManager.leftovers.busy||uninstallManager.busy||updateManager.busy){reply(409,{success:false,code:'operation-running',error:'Wait for the current operation to finish.'});return;}
       if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')){reply(415,{success:false,code:'invalid-content-type',error:'JSON required.'});return;}
       readRequestBody(req,1024,async(err,body)=>{
         let data;try{data=JSON.parse(body);}catch(_){}
-        if(err||!data||Array.isArray(data)||Object.keys(data).length!==4||!Object.keys(data).every(k=>['id','enabled','pin','confirmation'].includes(k))||typeof data.id!=='string'||!/^[a-f0-9]{64}$/.test(data.id)||(typeof data.enabled!=='boolean'&&data.enabled!=='restore')||!validPin(data.pin)||data.confirmation!=='change-startup'){reply(400,{success:false,code:'invalid-request',error:'Reviewed startup action and current PIN required.'});return;}
+        if(err||!data||Array.isArray(data)||Object.keys(data).length!==(settingsHandoff?2:4)||!Object.keys(data).every(k=>(settingsHandoff?['id','confirmation']:['id','enabled','pin','confirmation']).includes(k))||typeof data.id!=='string'||!/^[a-f0-9]{64}$/.test(data.id)||(!settingsHandoff&&(typeof data.enabled!=='boolean'&&data.enabled!=='restore'||!validPin(data.pin)))||!(settingsHandoff?['open-startup-settings']:['change-startup','change-startup-with-local-approval']).includes(data.confirmation)){reply(400,{success:false,code:'invalid-request',error:settingsHandoff?'Reviewed startup entry required.':'Reviewed startup action and current PIN required.'});return;}
         if(!getAuthenticatedSession(req)){reply(401,{success:false,code:'authentication-required',error:'Authentication required.'});return;}
-        const rate=loginRateState(req);if(rate.state.lockedUntil>rate.now){reply(429,{success:false,code:'pin-locked',error:'Too many attempts. Try again shortly.'});return;}
-        if(!safeEqualPin(data.pin)){rate.state.failures++;if(rate.state.failures>=LOGIN_FAILURE_LIMIT)rate.state.lockedUntil=Date.now()+LOGIN_LOCK_MS;reply(rate.state.lockedUntil?429:401,{success:false,code:'invalid-pin',error:'PIN not accepted.'});return;}
-        loginAttempts.delete(rate.key);
+        if(!settingsHandoff){
+          const rate=loginRateState(req);if(rate.state.lockedUntil>rate.now){reply(429,{success:false,code:'pin-locked',error:'Too many attempts. Try again shortly.'});return;}
+          if(!safeEqualPin(data.pin)){rate.state.failures++;if(rate.state.failures>=LOGIN_FAILURE_LIMIT)rate.state.lockedUntil=Date.now()+LOGIN_LOCK_MS;reply(rate.state.lockedUntil?429:401,{success:false,code:'invalid-pin',error:'PIN not accepted.'});return;}
+          loginAttempts.delete(rate.key);
+        }
         try {
-          const result=await appManager.toggleStartup(data.id,data.enabled);
+          const result=settingsHandoff?await appManager.openStartupSettings(data.id,()=>Boolean(getAuthenticatedSession(req))):await appManager.toggleStartup(data.id,data.enabled,{localApproval:data.confirmation==='change-startup-with-local-approval',authorize:()=>Boolean(getAuthenticatedSession(req))&&safeEqualPin(data.pin)});
           reply(200,result);
         }catch(e){
           const code=e.code||e.message||'operation-failed';
-          const status=code==='not-found'?404:code==='elevation-required'?403:409;
+          const status=code==='authentication-required'?401:code==='not-found'?404:code==='elevation-required'?403:409;
           reply(status,{success:false,code,error:e.message});
         }
       });
@@ -1848,7 +1795,7 @@ const server = http.createServer((req, res) => {
             // Reuse existing cancellation/lease cleanup, then exit. The helper
             // waits on this exact process; it never terminates another process.
             sessions.clear(); monitoringLeases.clear(); stopMonitoring(); cleanupPid();
-            server.close(); server.closeAllConnections();
+            if(standbyBridge)standbyBridge.retire();else {server.close();server.closeAllConnections();}
             const exitTimer = setTimeout(() => process.exit(0), 2000);
             const finishExit = () => {
               if (terminatingTelemetryJobs.size === 0) { clearTimeout(exitTimer); process.exit(0); }
@@ -2060,7 +2007,7 @@ const server = http.createServer((req, res) => {
     maintenance.getStatus((status) => {
       if (!getAuthenticatedSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Authentication required.' })); return; }
       res.writeHead(200, { 'Content-Type': 'application/json; charset=UTF-8', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ ...status, isLocal: isLocalDesktopRequest(req) }));
+      res.end(JSON.stringify({ ...status, boostAdvice:maintenance.boostAdvice(), isLocal: isLocalDesktopRequest(req) }));
     });
     return;
   }
@@ -2090,8 +2037,8 @@ const server = http.createServer((req, res) => {
         res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Unknown maintenance action.' })); return;
       }
 
-      if (maintenance.ACTIONS[actionId].requiresAdmin && parsed.confirmed !== true) {
-        res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Confirm this maintenance action before requesting administrator approval.' })); return;
+      if ((maintenance.ACTIONS[actionId].requiresAdmin || maintenance.ACTIONS[actionId].requiresConfirmation) && parsed.confirmed !== true) {
+        res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'Confirm this maintenance action before running it.' })); return;
       }
 
       const isLocal = isLocalDesktopRequest(req);
@@ -2120,7 +2067,11 @@ const server = http.createServer((req, res) => {
         }
       }
 
-      const result = maintenance.runAction(actionId, () => {}, () => {}, { isLocal });
+      const result = maintenance.runAction(actionId, () => {}, (completedTask) => {
+        if (completedTask && completedTask.id === 'boost' && monitoringActive) {
+          try { sampleRamMetrics(); } catch (_) {}
+        }
+      }, { isLocal });
       if (!result.success) {
         res.writeHead(409, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
@@ -2375,10 +2326,8 @@ const server = http.createServer((req, res) => {
     if (relativeCheck === 'index.html') {
       try {
         const revision = getDashboardAssetRevision();
-        const html = fs.readFileSync(filePath, 'utf8')
-          .replace('</head>', `<meta name="pc-monitor-ui-revision" content="${revision}">\n</head>`)
-          .replace(/(href|src)="\/([a-z-]+\.(?:css|js))(?:\?[^" ]*)?"/g,
-            (match, attribute, asset) => PUBLIC_FILES.has(asset) ? `${attribute}="/${asset}?v=${revision}"` : match);
+        const html = versionAssets(fs.readFileSync(filePath, 'utf8')
+          .replace('</head>', `<meta name="pc-monitor-ui-revision" content="${revision}">\n</head>`), revision);
         res.setHeader('X-PC-Monitor-UI-Revision', revision);
         res.writeHead(200, { 'Content-Type': contentType });
         res.end(html);
@@ -2417,6 +2366,37 @@ pinWatcher.on('error', () => { pinConfigHealthy = false; for (const session of A
 pinWatcher.unref();
 process.on('exit', () => pinWatcher.close());
 
+// Normal Windows entry points retain their existing binding and ownership.
+if(process.env.ROVARIN_STANDBY_PIPE){
+  const secret=nativeStandbySecret;
+  const rawHash=()=>crypto.createHash('sha256').update(fs.readFileSync(CONFIG_FILE)).digest('hex');
+  standbyBridge=require('./server-lifecycle').createStandbyBridge(server,{
+    pipe:process.env.ROVARIN_STANDBY_PIPE,secret,timeoutMs:Math.max(20000,Math.min(60000,Number(process.env.ROVARIN_STANDBY_IDLE_MS)||45000)),
+    // Fresh-PIN actions share Node's existing abuse budget. Keep that budget
+    // alive until it expires or successful authentication clears it; idle exit
+    // must never become a way to reset a partially used guess window.
+    busy:(retire)=>[...loginAttempts.values()].some(s=>s.failures>0&&(s.lockedUntil?s.lockedUntil>Date.now():Date.now()-s.windowStart<=10*60*1000))||hasActiveMonitoringLease()||activeTelemetryJobs.size>0||terminatingTelemetryJobs.size>0||diagnosticToolJobs.size>0||maintenance.standbyBusy()||Boolean(appManager.loading||appManager.startupLoading||appManager.startupChanging)||appManager.busy||appManager.blocked||appManager.leftovers.busy||treeInFlight||killInFlight.size>0||pendingTerminations.size>0||uninstallManager.busy||enhancedSupport.status().installing||((updateManager.busy||updateManager.state==='handoff'||Boolean(updateManager.reservation))&&!(retire&&updateManager.state==='handoff'))||powerControls.status().busy,
+    snapshot:()=>{
+      const before=rawHash();if(!refreshAccessPin(true))throw Error('credentials unavailable');
+      const records=[...sessions].filter(([,v])=>v.expiresAt>Date.now()&&v.credentialEpoch===savedSessionEpoch).map(([token,v])=>({hash:crypto.createHash('sha256').update(token).digest('hex'),id:v.id,expiresAt:v.expiresAt,desktopAutomatic:Boolean(v.desktopAutomatic)}));
+      if(before!==rawHash()||credentialRevision(readConfig(CONFIG_FILE))!==savedPinRevision)throw Error('credentials changed');
+      return {sessions:records,configHash:before};
+    },
+    restore:r=>{
+      if(typeof r.token!=='string'||!(/^[A-Za-z0-9_-]{43}$/).test(r.token)||!(/^[a-f0-9]{32}$/).test(r.id||'')||!Number.isSafeInteger(r.expiresAt)||r.expiresAt<=Date.now()||r.expiresAt>Date.now()+SESSION_TTL_MS||sessions.size>=MAX_SESSIONS)return {success:false};
+      if(!refreshAccessPin(true)||r.configHash!==rawHash()||r.desktopAutomatic&&(config.requireDesktopPin!==false||config.desktopLocked))return {success:false};
+      sessions.set(r.token,{id:r.id,expiresAt:r.expiresAt,desktopAutomatic:r.desktopAutomatic===true,credentialEpoch:savedSessionEpoch});
+      return {success:true};
+    },stop:()=>{stopMonitoring();cleanupPid();process.exit(0);}
+  });
+  standbyBridge.listen(()=>{
+    bindingState.status='listening';bindingState.actualPort=Number(PORT);bindingState.standby=true;
+    bindingState.preferredPort=Number(process.env.ROVARIN_STANDBY_PREFERRED_PORT)||Number(PORT);
+    bindingState.fallbackRequired=bindingState.preferredPort!==bindingState.actualPort;
+    serverInstance.write(bindingState);
+    console.log('[Standby] Private backend ready.');
+  });
+}else{
 // Start listening
 bindServer(server, PORT, bindingState, () => {
   try { serverInstance.write(bindingState); } catch (_) { console.error('[Startup] Could not record the active server port.'); server.close(() => process.exit(1)); return; }
@@ -2432,6 +2412,8 @@ bindServer(server, PORT, bindingState, () => {
   console.error(`[Startup] Binding failed (${error.code || 'BIND_FAILED'}). Preferred port ${PORT}; attempted ports: ${(bindingState.attempts || []).join(', ')}.`);
   process.exit(1);
 });
+
+}
 
 server.headersTimeout = 10_000;
 server.requestTimeout = 15_000;

@@ -37,10 +37,82 @@ function validTemperature(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= -20 && value <= 125;
 }
 
+// Fixed kernel interfaces only; no commands, timers or client-selected paths.
+// Intel drivers often expose no utilization counter: frequency is not a substitute.
+function readDrmGpus(readFs = fs) {
+  const read = file => { try { return readFs.readFileSync(file, 'utf8').trim(); } catch (_) { return ''; } };
+  const list = dir => { try { return readFs.readdirSync(dir).slice(0, 64); } catch (_) { return []; } };
+  const numeric = file => { const text=read(file);return /^\d+$/.test(text)&&Number.isSafeInteger(Number(text))?Number(text):null; };
+  const devices=[];
+  for(const card of list('/sys/class/drm').filter(n=>/^card\d+$/.test(n)).slice(0,16)) {
+    const base='/sys/class/drm/'+card+'/device',vendor=read(base+'/vendor').toLowerCase();
+    if(!['0x1002','0x8086'].includes(vendor))continue;
+    const amd=vendor==='0x1002',busy=numeric(base+'/gpu_busy_percent');
+    let total=amd?numeric(base+'/mem_info_vram_total'):numeric(base+'/mem_info_lmem_total');
+    let used=amd?numeric(base+'/mem_info_vram_used'):numeric(base+'/mem_info_lmem_used');
+    let temperatureC=null;
+    let clockGraphicsMHz=numeric(base+'/gt_act_freq_mhz') || numeric('/sys/class/drm/'+card+'/gt_act_freq_mhz');
+    let powerDrawW=null;
+    let fanSpeedRpm=null;
+
+    for(const hwmon of list(base+'/hwmon').filter(n=>/^hwmon\d+$/.test(n)).slice(0,16)){
+      const dir=base+'/hwmon/'+hwmon,chip=read(dir+'/name');
+      if(!(amd?/^amdgpu$/:/^(i915|xe)$/).test(chip))continue;
+      // GPU edge/package only; do not confuse memory/hotspot readings with it.
+      const label=read(dir+'/temp1_label');
+      if(!label||/^(edge|gpu|package)$/i.test(label)){
+        const raw=numeric(dir+'/temp1_input');if(raw!==null&&validTemperature(raw/1000))temperatureC=raw/1000;
+      }
+      if(clockGraphicsMHz===null){
+        const rawFreq=numeric(dir+'/freq1_input');
+        if(rawFreq!==null&&rawFreq>0) clockGraphicsMHz=Math.round(rawFreq/1000000);
+      }
+      if(powerDrawW===null){
+        const rawPower=numeric(dir+'/power1_average') || numeric(dir+'/power1_input');
+        if(rawPower!==null&&rawPower>0) powerDrawW=Math.round((rawPower/1000000)*10)/10;
+      }
+      if(fanSpeedRpm===null){
+        const rawFan=numeric(dir+'/fan1_input');
+        if(rawFan!==null&&rawFan>=0) fanSpeedRpm=rawFan;
+      }
+    }
+    const utilizationPercent=busy!==null&&busy<=100?busy:null;
+    const validVram=total!==null&&total>0&&used!==null&&used<=total;
+    const name=(amd?'AMD':'Intel')+' graphics'+(read(base+'/device').match(/^0x[\da-f]{4}$/i)?' ('+read(base+'/device')+')':'');
+    devices.push({
+      index: devices.length,
+      name,
+      vendor: amd ? 'AMD' : 'Intel',
+      available: utilizationPercent!==null||temperatureC!==null||validVram,
+      utilizationPercent,
+      temperatureC,
+      vramTotalMB: validVram?total/1048576:null,
+      vramUsedMB: validVram?used/1048576:null,
+      vramFreeMB: validVram?(total-used)/1048576:null,
+      vramPercent: validVram?Math.round(used/total*100):null,
+      clockGraphicsMHz: clockGraphicsMHz || null,
+      powerDrawW: powerDrawW || null,
+      fanSpeedPercent: null,
+      fanSpeedRpm: fanSpeedRpm !== null ? fanSpeedRpm : null,
+      statusNote: 'Linux DRM sysfs; unsupported counters remain unavailable',
+      sampledAt: Date.now()
+    });
+  }
+  return devices;
+}
+
+function readDrmGpu(readFs = fs) {
+  const devices = readDrmGpus(readFs);
+  if (!devices.length) return null;
+  const primary = devices.find(d => d.available) || devices[0];
+  return { ...primary, gpus: devices };
+}
+
 // Read every usable Linux temperature input. Returns the best CPU-ish reading,
 // or null. Preference: a sensor whose label/type names the CPU/package/cores;
 // otherwise the first thermal zone (labelled system-thermal-zone, never CPU).
-function readLinuxTemperature() {
+function readLinuxTemperature(readFs = fs) {
+  const fs = readFs;
   const candidates = [];
   // /sys/class/thermal/thermal_zone*/{type,temp} — temp is millidegrees C.
   try {
@@ -52,7 +124,7 @@ function readLinuxTemperature() {
         const value = raw / 1000;
         if (!validTemperature(value)) continue;
         const cpuish = /cpu|package|x86_pkg|core|k10temp|zen/i.test(type);
-        candidates.push({ name: `thermal zone ${type}`, sensorType: cpuish ? 'cpu-candidate' : 'system-thermal-zone', value, rank: cpuish ? 1 : 3 });
+        candidates.push({ name: `thermal zone ${type}`, sensorType: 'system-thermal-zone', value, rank: cpuish ? 1 : 3 });
       } catch (_) {}
     }
   } catch (_) {}
@@ -72,8 +144,9 @@ function readLinuxTemperature() {
           const raw = Number(fs.readFileSync(`/sys/class/hwmon/${hwmon}/${file}`, 'utf8').trim());
           const value = raw / 1000;
           if (!validTemperature(value)) continue;
-          const hay = `${chip} ${label}`;
-          const cpuish = /cpu|package|core|tctl|tdie|k10temp|coretemp|zen/i.test(hay);
+          // A GPU's "Core" or "Package" label is not proof of a CPU sensor.
+          const cpuish = /^(coretemp|k10temp|k8temp|zenpower|cpu_thermal)$/i.test(chip)
+            && (!label || /^(Package id \d+|Core \d+|Tctl|Tdie|CPU|Package)$/i.test(label));
           candidates.push({ name: label || `${chip} temp${m[1]}`, sensorType: cpuish ? 'cpu-candidate' : 'system-thermal-zone', value, rank: cpuish ? 0 : 2 });
         } catch (_) {}
       }
@@ -291,33 +364,104 @@ function createLinuxMetrics({ onUpdate } = {}) {
 
   function sampleGpu() {
     if (gpuInFlight) return;
+    const drmGpus = readDrmGpus();
     if (!platform.toolAvailable('nvidia-smi')) {
-      gpuData = { ...gpuData, available: false, statusNote: 'Sensor unavailable (nvidia-smi not found on this system)', sampledAt: Date.now() };
+      if (drmGpus.length > 0) {
+        const primary = drmGpus.find(d => d.available) || drmGpus[0];
+        gpuData = { ...primary, gpus: drmGpus };
+        systemInfo.gpuModels = drmGpus.map(d => d.name);
+        temperature.gpu = { ...temperature.gpu, available: primary.temperatureC !== null, temperatureC: primary.temperatureC, status: primary.temperatureC !== null ? 'available' : 'unavailable', note: primary.statusNote, sampledAt: primary.sampledAt };
+        publish();
+        return;
+      }
+      gpuData = { ...gpuData, available: false, gpus: [], statusNote: 'Sensor unavailable (nvidia-smi not found on this system)', sampledAt: Date.now() };
       temperature.gpu = { ...temperature.gpu, available: false, temperatureC: null, status: 'unavailable', note: gpuData.statusNote, sampledAt: Date.now() };
       publish();
       return;
     }
     gpuInFlight = true;
-    runHelper('nvidia-smi', ['--query-gpu=name,utilization.gpu,utilization.memory,memory.total,memory.used,memory.free,temperature.gpu', '--format=csv,noheader,nounits'], { timeout: 5000, maxBuffer: 64 * 1024 }, (err, stdout) => {
+    runHelper('nvidia-smi', ['--query-gpu=index,name,utilization.gpu,utilization.memory,memory.total,memory.used,memory.free,temperature.gpu,clocks.current.graphics,clocks.current.memory,power.draw,fan.speed', '--format=csv,noheader,nounits'], { timeout: 5000, maxBuffer: 64 * 1024 }, (err, stdout) => {
       gpuInFlight = false;
-      const fields = String(stdout || '').trim().split(/\r?\n/)[0].split(',').map(f => f.trim());
-      const valid = fields.length >= 7 && fields[0] && [1, 3, 4, 5].every(i => fields[i] !== '' && Number.isFinite(Number(fields[i])) && Number(fields[i]) >= 0);
-      if (err || !valid) {
-        gpuData = { ...gpuData, available: false, statusNote: err && err.code === 'ENOENT' ? 'Sensor unavailable (nvidia-smi not found on this system)' : 'Sensor unavailable (nvidia-smi not responding)', sampledAt: Date.now() };
+      const lines = String(stdout || '').trim().split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const nvidiaGpus = [];
+
+      for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+        const fields = lines[lineIndex].split(',').map(f => f.trim());
+        if (fields.length < 7) continue;
+
+        const hasLeadingIndex = /^\d+$/.test(fields[0]) && fields.length >= 8 && fields[1].length > 0;
+        const name = hasLeadingIndex ? fields[1] : fields[0];
+        const offset = hasLeadingIndex ? 1 : 0;
+
+        const rawUtil = fields[offset + 1];
+        const rawMemTotal = fields[offset + 3];
+        const rawMemUsed = fields[offset + 4];
+        const rawMemFree = fields[offset + 5];
+        const rawTemp = fields[offset + 6];
+
+        const valid = name && name.length > 0
+          && rawUtil !== '' && Number.isFinite(Number(rawUtil)) && Number(rawUtil) >= 0
+          && rawMemTotal !== '' && Number.isFinite(Number(rawMemTotal)) && Number(rawMemTotal) >= 0
+          && rawMemUsed !== '' && Number.isFinite(Number(rawMemUsed)) && Number(rawMemUsed) >= 0
+          && rawMemFree !== '' && Number.isFinite(Number(rawMemFree)) && Number(rawMemFree) >= 0;
+
+        if (!valid) continue;
+
+        const totalVram = parseFloat(rawMemTotal);
+        const usedVram = parseFloat(rawMemUsed);
+        const freeVram = parseFloat(rawMemFree);
+        const util = parseFloat(rawUtil);
+        const temp = rawTemp !== '' && Number.isFinite(Number(rawTemp)) ? parseFloat(rawTemp) : null;
+
+        const clockGfx = fields[offset + 7] && Number.isFinite(Number(fields[offset + 7])) ? parseFloat(fields[offset + 7]) : null;
+        const clockMem = fields[offset + 8] && Number.isFinite(Number(fields[offset + 8])) ? parseFloat(fields[offset + 8]) : null;
+        const powerDraw = fields[offset + 9] && Number.isFinite(Number(fields[offset + 9])) ? parseFloat(fields[offset + 9]) : null;
+        const fanSpeed = fields[offset + 10] && Number.isFinite(Number(fields[offset + 10])) ? parseFloat(fields[offset + 10]) : null;
+
+        nvidiaGpus.push({
+          index: hasLeadingIndex ? parseInt(fields[0], 10) : lineIndex,
+          name: name || 'NVIDIA GeForce GPU',
+          vendor: 'NVIDIA',
+          available: true,
+          utilizationPercent: util,
+          temperatureC: temp,
+          vramTotalMB: totalVram,
+          vramUsedMB: usedVram,
+          vramFreeMB: freeVram,
+          vramPercent: totalVram > 0 ? Math.round((usedVram / totalVram) * 100) : 0,
+          clockGraphicsMHz: clockGfx,
+          clockMemoryMHz: clockMem,
+          powerDrawW: powerDraw,
+          fanSpeedPercent: fanSpeed,
+          fanSpeedRpm: null,
+          statusNote: 'Active (NVIDIA NVML)',
+          sampledAt: Date.now()
+        });
+      }
+
+      if (err || nvidiaGpus.length === 0) {
+        if (drmGpus.length > 0) {
+          const primary = drmGpus.find(d => d.available) || drmGpus[0];
+          gpuData = { ...primary, gpus: drmGpus };
+          systemInfo.gpuModels = drmGpus.map(d => d.name);
+          temperature.gpu = { ...temperature.gpu, available: primary.temperatureC !== null, temperatureC: primary.temperatureC, status: primary.temperatureC !== null ? 'available' : 'unavailable', note: primary.statusNote, sampledAt: primary.sampledAt };
+          publish();
+          return;
+        }
+        gpuData = { ...gpuData, available: false, gpus: [], statusNote: err && err.code === 'ENOENT' ? 'Sensor unavailable (nvidia-smi not found on this system)' : 'Sensor unavailable (nvidia-smi not responding)', sampledAt: Date.now() };
         temperature.gpu = { ...temperature.gpu, available: false, temperatureC: null, status: 'unavailable', note: gpuData.statusNote, sampledAt: Date.now() };
         publish();
         return;
       }
-      const totalVram = parseFloat(fields[3]), usedVram = parseFloat(fields[4]), freeVram = parseFloat(fields[5]);
+
+      const allGpus = [...nvidiaGpus, ...drmGpus];
+      const primary = allGpus.find(g => (g.utilizationPercent || 0) > 0) || allGpus[0];
       gpuData = {
-        name: fields[0] || 'NVIDIA GeForce GPU', available: true,
-        utilizationPercent: parseFloat(fields[1]) || 0, temperatureC: parseFloat(fields[6]) || null,
-        vramTotalMB: totalVram, vramUsedMB: usedVram, vramFreeMB: freeVram,
-        vramPercent: totalVram > 0 ? Math.round((usedVram / totalVram) * 100) : 0,
-        statusNote: 'Active (NVIDIA NVML)', sampledAt: Date.now()
+        ...primary,
+        gpus: allGpus
       };
-      if (!systemInfo.gpuModels.includes(gpuData.name)) systemInfo.gpuModels = [gpuData.name];
-      temperature.gpu = { ...temperature.gpu, available: true, temperatureC: gpuData.temperatureC, status: 'available', note: 'Active (NVIDIA NVML)', sampledAt: Date.now() };
+      systemInfo.gpuModels = allGpus.map(g => g.name);
+      temperature.gpu = { ...temperature.gpu, available: primary.temperatureC !== null, temperatureC: primary.temperatureC, status: primary.temperatureC !== null ? 'available' : 'unavailable', note: primary.statusNote, sampledAt: Date.now() };
       publish();
     });
   }
@@ -336,7 +480,7 @@ function createLinuxMetrics({ onUpdate } = {}) {
       temperature.cpu = {
         available: true, temperatureC: Math.round(reading.value * 10) / 10,
         source: 'Linux thermal zones / hwmon', status: 'available',
-        note: isCpu ? 'Validated CPU-specific temperature sensor.' : 'Experimental firmware/ACPI reading; may not represent CPU package temperature. CPU alerts are disabled.',
+        note: isCpu ? 'CPU-specific hwmon driver/label; hardware accuracy is not independently verified.' : 'Experimental firmware/ACPI reading; may not represent CPU package temperature. CPU alerts are disabled.',
         sensorName: reading.name, sensorType: reading.sensorType, sampledAt: Date.now(), stale: false
       };
     }
@@ -473,4 +617,4 @@ function createLinuxMetrics({ onUpdate } = {}) {
   };
 }
 
-module.exports = { createLinuxMetrics, readLinuxTemperature, formatUptime };
+module.exports = { createLinuxMetrics, readLinuxTemperature, readDrmGpu, readDrmGpus, formatUptime };

@@ -104,11 +104,32 @@ html.liquid-theme :is(#monitorSettings,.diagnostics-summary) {background:linear-
 html.liquid-theme #monitorSettings {border:0;padding:4px;box-shadow:none;background:transparent;}
 html.liquid-theme #monitorSettings button {min-height:44px;border-radius:12px;background:var(--surface-glass);}
 html.liquid-theme #monitorSettings .settings-tabs button[aria-selected=true] {background:linear-gradient(140deg,#78dfe02e,#aaa5ef22);color:#b8f3f8;border-color:#a2e4f352;}
-.graphics-settings {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 20px;align-items:center;padding:16px 0 18px;margin-bottom:16px;border-bottom:1px solid var(--border-card);}
-.graphics-settings label {font-size:14px;font-weight:650;}
-.graphics-settings p {font-size:12px;color:var(--text-secondary);line-height:1.45;grid-column:1/-1;margin:0;}
-.graphics-settings select {min-height:44px;padding:8px 12px;width:150px;}
-.graphics-settings #graphicsQualityStatus {font-size:11px;color:var(--text-muted);}
+.appearance-settings-group {display:flex;flex-direction:column;gap:0;margin-bottom:18px;border:1px solid var(--border-card);border-radius:16px;background:linear-gradient(145deg,rgba(182,216,248,.055),rgba(118,154,204,.02));box-shadow:inset 0 1px 0 rgba(238,250,255,.08);overflow:hidden;}
+.graphics-settings {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 18px;align-items:center;padding:14px 16px;margin:0;border-bottom:1px solid var(--border-card);}
+.graphics-settings:last-child, .graphics-settings:has(+ .graphics-settings[hidden]) {border-bottom:0;}
+.graphics-settings[hidden] {display:none!important;}
+.graphics-settings-copy {display:flex;flex-direction:column;gap:3px;min-width:0;}
+.graphics-settings label {font-size:14px;font-weight:650;color:var(--text-primary);margin:0;}
+.graphics-settings p {font-size:12px;color:var(--text-secondary);line-height:1.4;margin:0;}
+.graphics-settings select {min-height:40px;padding:6px 12px;width:154px;}
+.graphics-quality-section {display:flex;flex-direction:column;align-items:stretch;gap:12px;}
+.graphics-quality-header {display:flex;align-items:center;justify-content:space-between;gap:16px;}
+.graphics-settings #graphicsQualityStatus {font-size:11.5px;color:var(--text-muted);}
+.graphics-auto-toggle {display:inline-flex;align-items:center;gap:7px;padding:6px 11px;border-radius:999px;border:1px solid var(--border-card);background:rgba(12,24,42,.55);font-size:12px!important;font-weight:600!important;color:var(--text-secondary)!important;cursor:pointer;user-select:none;flex-shrink:0;transition:border-color .16s ease,background .16s ease,color .16s ease;}
+.graphics-auto-toggle:hover {border-color:rgba(187,231,251,.36);color:var(--text-primary)!important;}
+.graphics-auto-toggle:has(input:checked) {border-color:rgba(139,222,237,.45);background:linear-gradient(135deg,rgba(139,222,237,.18),rgba(193,171,248,.12));color:#dff7ff!important;}
+.graphics-auto-toggle input {margin:0;width:14px;height:14px;cursor:pointer;}
+.graphics-slider-wrap {display:flex;flex-direction:column;gap:8px;padding-top:2px;}
+.graphics-quality-slider {width:100%;height:6px;margin:2px 0;appearance:none;-webkit-appearance:none;border-radius:999px;background:linear-gradient(90deg,rgba(139,222,237,.22),rgba(139,222,237,.48) 50%,rgba(193,171,248,.58));border:1px solid rgba(196,226,252,.18);outline:none;cursor:pointer;}
+.graphics-quality-slider::-webkit-slider-thumb {-webkit-appearance:none;appearance:none;width:18px;height:18px;border-radius:50%;background:linear-gradient(145deg,#e8fbff,#8bdeed);border:2px solid #0c1829;box-shadow:0 2px 8px rgba(2,7,18,.55),0 0 0 1px rgba(187,236,255,.55);cursor:pointer;transition:transform .15s ease,box-shadow .15s ease;}
+.graphics-quality-slider::-webkit-slider-thumb:hover {transform:scale(1.1);}
+.graphics-quality-slider:focus-visible {outline:2px solid var(--accent-primary);outline-offset:3px;}
+.graphics-slider-stops {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;}
+.graphics-stop-btn {min-height:32px!important;padding:4px 8px;border-radius:9px!important;border:1px solid rgba(196,226,252,.14)!important;background:rgba(10,20,35,.48)!important;color:var(--text-secondary)!important;font-size:12px;font-weight:600;cursor:pointer;box-shadow:none!important;text-align:center;}
+.graphics-stop-btn:hover:not(:disabled) {border-color:rgba(187,231,251,.34)!important;color:var(--text-primary)!important;}
+.graphics-stop-btn.is-active {background:linear-gradient(135deg,rgba(139,222,237,.22),rgba(193,171,248,.16))!important;border-color:rgba(162,228,243,.48)!important;color:#e6faff!important;box-shadow:inset 0 1px 0 rgba(235,252,255,.22)!important;}
+html.liquid-theme :is(.boost-hud-card) {background:linear-gradient(132deg,rgba(234,249,255,.15) 0%,rgba(188,224,252,.045) 42%,rgba(16,28,46,0) 70%),linear-gradient(155deg,rgba(26,43,66,.84),rgba(12,22,38,.91));border:1px solid rgba(212,238,255,.30);box-shadow:inset 0 1px 0 rgba(245,253,255,.34),inset 1px 0 0 rgba(214,238,255,.16),0 22px 54px rgba(1,5,14,.68);backdrop-filter:blur(26px) saturate(1.3);-webkit-backdrop-filter:blur(26px) saturate(1.3);}
+html.liquid-theme[data-graphics-quality="minimal"] .boost-hud-card {backdrop-filter:none;-webkit-backdrop-filter:none;}
 /* Floating dialogs and overlays display the richest frosted Liquid Glass depth. */
 html.liquid-theme :is(dialog,.maint-modal,.maint-toast,.chart-tooltip,.cpu-detail-dialog,.mobile-onboarding-sheet) {background:linear-gradient(132deg,rgba(234,249,255,.15) 0%,rgba(188,224,252,.045) 42%,rgba(16,28,46,0) 70%),linear-gradient(155deg,rgba(26,43,66,.80),rgba(12,22,38,.88));color:var(--text-primary);border:1px solid rgba(212,238,255,.30);border-radius:24px;box-shadow:inset 0 1px 0 rgba(245,253,255,.34),inset 1px 0 0 rgba(214,238,255,.16),inset 0 -1px 0 rgba(154,194,245,.10),0 26px 68px rgba(1,5,14,.72),0 6px 18px rgba(1,5,14,.44);backdrop-filter:blur(28px) saturate(1.35);-webkit-backdrop-filter:blur(28px) saturate(1.35);}
 html.liquid-theme dialog::backdrop {background:radial-gradient(circle at 50% 42%,rgba(12,22,38,.58),rgba(2,7,18,.76));backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
@@ -577,13 +598,18 @@ html.liquid-theme :is(#monitorSettings,.diagnostics-summary) {background:rgba(13
 html.liquid-theme #monitorSettings {border:0;padding:4px;box-shadow:none;}
 html.liquid-theme #monitorSettings button {min-height:44px;border-radius:12px;background:var(--surface-glass);}
 html.liquid-theme #monitorSettings .settings-tabs button[aria-selected=true] {background:linear-gradient(140deg,#78dfe02a,#aaa5ef20);color:#b1f0f6;border-color:#a2e4f34a;}
-.graphics-settings {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 20px;align-items:center;padding:16px 0 18px;margin-bottom:16px;border-bottom:1px solid var(--border-card);}
+.appearance-settings-group {border-color:rgba(205,231,255,.22);background:linear-gradient(145deg,rgba(46,67,90,.48),rgba(17,28,49,.64));box-shadow:var(--shadow-card);}
+.graphics-settings {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 18px;align-items:center;padding:14px 16px;margin:0;border-bottom:1px solid var(--border-card);}
+.graphics-settings:last-child, .graphics-settings:has(+ .graphics-settings[hidden]) {border-bottom:0;}
+.graphics-settings[hidden] {display:none!important;}
 .graphics-settings label {font-size:14px;font-weight:650;}
-.graphics-settings p {font-size:12px;color:var(--text-secondary);line-height:1.45;grid-column:1/-1;margin:0;}
-.graphics-settings select {min-height:44px;padding:8px 12px;width:150px;}
-.graphics-settings #graphicsQualityStatus {font-size:11px;color:var(--text-muted);}
+.graphics-settings p {font-size:12px;color:var(--text-secondary);line-height:1.4;margin:0;}
+.graphics-settings select {min-height:40px;padding:6px 12px;width:154px;}
+.graphics-quality-section {display:flex;flex-direction:column;align-items:stretch;gap:12px;}
+.graphics-settings #graphicsQualityStatus {font-size:11.5px;color:var(--text-muted);}
 /* Top-layer dialogs use an opaque-enough CSS material; no promise of DOM refraction. */
-html.liquid-theme :is(dialog,.maint-modal,.maint-toast,.chart-tooltip,.cpu-detail-dialog,.mobile-onboarding-sheet) {background:linear-gradient(140deg,rgba(34,52,73,.98),rgba(18,29,49,.98));color:var(--text-primary);border-color:#c5e3ff45;border-radius:24px;box-shadow:inset 0 1px 0 #edffff2b,0 24px 70px #0008;}
+html.liquid-theme :is(dialog,.maint-modal,.maint-toast,.boost-hud-card,.chart-tooltip,.cpu-detail-dialog,.mobile-onboarding-sheet) {background:linear-gradient(140deg,rgba(34,52,73,.96),rgba(18,29,49,.97));color:var(--text-primary);border-color:#c5e3ff45;border-radius:24px;box-shadow:inset 0 1px 0 #edffff2b,0 24px 70px #0008;}
+html.liquid-theme.liquid-ready .boost-hud-card {background:linear-gradient(135deg,rgba(232,248,255,.15) 0%,rgba(186,222,252,.045) 42%,rgba(16,28,46,0) 72%),linear-gradient(155deg,rgba(24,42,64,.82),rgba(12,22,38,.90));backdrop-filter:blur(26px) saturate(1.3);-webkit-backdrop-filter:blur(26px) saturate(1.3);}
 html.liquid-theme dialog::backdrop {background:rgba(2,8,19,.73);}
 html.liquid-theme :is(.maint-toast,.reconnect-banner,.apps-feedback) {border-radius:14px;}
 html.liquid-theme .pin-input {letter-spacing:min(.24em,6px);background:#081527a6;box-shadow:inset 0 2px 8px #0002;}
@@ -688,11 +714,18 @@ html.liquid-theme.native-shell #dashboardPage .cpu-detail-open-button {
 }
 
 /* Desktop Native Shell: Dialogs, Modals, Overlays and Views */
-html.liquid-theme.native-shell :is(.cpu-detail-panel, .maint-modal, .maint-toast, .mobile-onboarding-sheet) {
+html.liquid-theme.native-shell :is(.cpu-detail-panel, .maint-modal, .maint-toast, .boost-hud-card, .mobile-onboarding-sheet) {
   background: linear-gradient(140deg, rgba(30, 46, 68, 0.96), rgba(16, 26, 44, 0.98));
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow);
   border-radius: var(--radius-panel);
+}
+html.liquid-theme.native-shell.liquid-ready .boost-hud-card {
+  background:
+    linear-gradient(135deg, rgba(232, 248, 255, 0.15) 0%, rgba(186, 222, 252, 0.045) 42%, rgba(16, 28, 46, 0) 72%),
+    linear-gradient(155deg, rgba(24, 42, 64, 0.80), rgba(12, 22, 38, 0.88));
+  backdrop-filter: blur(26px) saturate(1.3);
+  -webkit-backdrop-filter: blur(26px) saturate(1.3);
 }
 html.liquid-theme.native-shell .app-page.processes-page {
   padding: 20px;

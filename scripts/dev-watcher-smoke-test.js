@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const EventEmitter = require('events');
-const { createDevWatcher, handoffExistingDashboard, WATCHED_SERVER_FILES } = require('./dev-watcher');
+const { createDevWatcher, handoffExistingDashboard, inspectExistingWatcher, assertDevelopmentEnvironment, WATCHED_SERVER_FILES } = require('./dev-watcher');
 const { bindServer, portCandidates } = require('../server-lifecycle');
 const fs = require('fs');
 const os = require('os');
@@ -119,7 +119,7 @@ async function testBinding() {
     });
   }
   try {
-    for (const name of ['power-controls.js', 'server.js', 'diagnostics.js', 'maintenance-service.js', 'server-lifecycle.js', 'pin-manager.js', 'process-termination.js', 'app-manager.js','leftover-manager.js', 'enhanced-support.js', 'uninstall-manager.js', 'update-manager.js', 'maintenance.js', 'temperature-manager.js', 'cpu-temperature-provider.js', 'process-stats.js', 'package.json']) fs.copyFileSync(path.join(__dirname, '..', name), path.join(directory, name));
+    for (const name of [...require('../server-lifecycle').ROOT_SERVER_FILES, 'package.json']) fs.copyFileSync(path.join(__dirname, '..', name), path.join(directory, name));
     require('../pin-manager').writeConfig(path.join(directory,'config.json'),{pin:'123456789012'}); // Explicit disposable fixture, never startup provisioning.
     await new Promise(resolve => blocker.listen(0, '0.0.0.0', resolve));
     const preferred = blocker.address().port;
@@ -217,7 +217,9 @@ function spawnServer(scriptPath, cwd) {
 }
 
 async function main() {
-  assert.deepStrictEqual(Array.from(WATCHED_SERVER_FILES).sort(), ['power-controls.js', 'scripts/power-control.ps1', 'maintenance.js', 'scripts/empty-recycle-bin.ps1', 'scripts/maintenance-elevated.cs', 'process-stats.js', 'server.js', 'diagnostics.js', 'maintenance-service.js', 'server-lifecycle.js', 'pin-manager.js', 'process-termination.js', 'app-manager.js','leftover-manager.js', 'scripts/terminate-process.ps1', 'scripts/process-tree.ps1', 'scripts/process-tree.cs', 'scripts/app-manager.ps1','scripts/app-leftovers.ps1','scripts/app-leftovers.cs', 'scripts/app-uninstall.cs', 'scripts/app-metadata.cs', 'scripts/process-display.ps1', 'scripts/application-display.ps1', 'scripts/installed-update.ps1', 'enhanced-support.js', 'uninstall-manager.js', 'update-manager.js', 'temperature-manager.js', 'cpu-temperature-provider.js', 'scripts/cpu-temperature-provider.ps1'].sort());
+  const rootModules = fs.readdirSync(path.resolve(__dirname, '..')).filter(name => name.endsWith('.js'));
+  const expectedHelpers = ["scripts/power-control.ps1","scripts/empty-recycle-bin.ps1","scripts/maintenance-elevated.cs","scripts/startup-tasks.ps1","scripts/native-startup.ps1","scripts/startup-elevated.cs","scripts/standby-runtime.ps1","scripts/terminate-process.ps1","scripts/process-tree.ps1","scripts/process-tree.cs","scripts/app-manager.ps1","scripts/app-leftovers.ps1","scripts/app-leftovers.cs","scripts/app-uninstall.cs","scripts/app-metadata.cs","scripts/process-display.ps1","scripts/application-display.ps1","scripts/installed-update.ps1","scripts/cpu-temperature-provider.ps1"];
+  assert.deepStrictEqual(Array.from(WATCHED_SERVER_FILES).sort(), [...rootModules, 'package.json', ...expectedHelpers].sort());
 
   let currentServer = { state: 'owned', pid: 7331 };
   let terminatedPid = null;
@@ -267,6 +269,37 @@ async function main() {
     timeoutMs: 100,
     logger
   }), true, 'a startup process that exits before binding leaves the port safe to use');
+
+  // Production guard assertions
+  const prodTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rovarin-prod-guard-'));
+  try {
+    fs.writeFileSync(path.join(prodTempDir, 'installation.json'), '{}');
+    assert.throws(() => assertDevelopmentEnvironment(prodTempDir), /Development watcher cannot run in an installed production environment/);
+    assert.throws(() => createDevWatcher({ projectDir: prodTempDir }), /Development watcher cannot run in an installed production environment/);
+  } finally {
+    fs.rmSync(prodTempDir, { recursive: true, force: true });
+  }
+
+  // Watcher handoff assertions
+  let terminatedWatcherPid = null;
+  let watcherHandoffState = { state: 'owned', pid: 4321 };
+  assert.strictEqual(await handoffExistingDashboard({
+    inspect: async () => ({ state: 'none' }),
+    inspectWatcher: async () => watcherHandoffState,
+    terminate: pid => { terminatedWatcherPid = pid; watcherHandoffState = { state: 'none' }; },
+    wait: async () => {},
+    logger
+  }), true, 'existing watcher process should be terminated during handoff');
+  assert.strictEqual(terminatedWatcherPid, 4321, 'the verified watcher PID should be terminated');
+
+  let unsafeWatcherTerminated = false;
+  assert.strictEqual(await handoffExistingDashboard({
+    inspect: async () => ({ state: 'none' }),
+    inspectWatcher: async () => ({ state: 'unsafe', reason: 'unverified watcher' }),
+    terminate: () => { unsafeWatcherTerminated = true; },
+    logger
+  }), false, 'unsafe watcher state must block development handoff');
+  assert.strictEqual(unsafeWatcherTerminated, false, 'unsafe watcher process must not be terminated');
 
   const watcher = createDevWatcher({
     projectDir: 'C:\\project',

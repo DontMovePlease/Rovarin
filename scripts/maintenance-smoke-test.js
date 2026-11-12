@@ -16,6 +16,10 @@ const mockedFs = Object.assign({}, realFs, {
 });
 mockedFs.promises = { access: async directory => { if(mockState.noTemp || directory !== 'C:\\mock-temp') throw new Error('missing fixture'); }, readdir: async () => { if(mockState.noTemp)throw new Error('access denied');return Array.from({length:mockState.cleanupItems || 0}, (_,i)=>'fixture-'+i); }, lstat: async () => { await new Promise(resolve => setImmediate(resolve)); return { isSymbolicLink: () => false, isFile: () => true, isDirectory: () => false, size: 1 }; }, unlink: async () => {}, rm: async () => {} };
 const mockedOs = Object.assign({}, realOs, { tmpdir: () => 'C:\\mock-temp' });
+mockedFs.promises.realpath=async()=>require('path').resolve('C:\\mock-temp');
+mockedFs.promises.opendir=async()=>({async *[Symbol.asyncIterator](){}});
+const mockLstat=mockedFs.promises.lstat;
+mockedFs.promises.lstat=async file=>file===require('path').resolve('C:\\mock-temp')?{isDirectory:()=>true}:mockLstat(file);
 
 function getCallback(args) { return args.findLast(value => typeof value === 'function'); }
 function mockedExecFile(command, ...args) {
@@ -24,6 +28,7 @@ function mockedExecFile(command, ...args) {
   setImmediate(() => {
     if (command === 'net') { mockState.adminChecks++; return callback(null, 'admin'); }
     if (command === 'powershell.exe') {
+      if (args[0]?.includes('-EncodedCommand')) return callback(null,JSON.stringify({success:true,eligible:2,trimmed:2,failed:0,workingSetReducedBytes:1048576}),'');
       const joined = args.flat(Infinity).filter(value => typeof value === 'string').join(' ');
       if (joined.includes('empty-recycle-bin.ps1')) {
         const result = mockState.recycleResult || (mockState.failRecycle
@@ -92,21 +97,23 @@ async function testFrontendCompatibility() {
     function element(selector) {
       if (!elements.has(selector)) {
         const classes = new Set();
-        elements.set(selector, { textContent:'', innerHTML:'', style:{}, dataset:{}, disabled:false,
-          classList:{add:v=>classes.add(v), remove:v=>classes.delete(v), contains:v=>classes.has(v)} });
+        elements.set(selector, { textContent:'', innerHTML:'', style:{}, dataset:{}, disabled:false, hidden:false, setAttribute(){},
+          getBoundingClientRect:()=>({left:100,top:100,right:300,bottom:200,width:200,height:100}),
+          classList:{add:v=>classes.add(v), remove:v=>classes.delete(v), contains:v=>classes.has(v),toggle:(v,on)=>on?classes.add(v):classes.delete(v)} });
       }
       return elements.get(selector);
     }
     const document = { readyState:'loading', addEventListener(){}, querySelector:element,
       querySelectorAll:()=>[] };
     const window = { location:{hostname:'localhost'}, dashboardClientVisible:()=>true,
+      innerWidth:1024, innerHeight:768, matchMedia:()=>({matches:true}), performance:{now:()=>0},
       addEventListener:(name, fn)=>listeners.set(name,fn) };
-    const context = { document, window, console,
+    const context = { document, window, console, performance:window.performance,
       fetch:async()=>{ requests++; const response=responses.shift(); if(response instanceof Error)throw response; return await response; },
       setTimeout:(fn,ms)=>{const id=++timerId;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id) };
     const end=frontend.lastIndexOf('})();');
     vm.runInNewContext(frontend.slice(0,end)+
-      'window.fixture={state,fetchStatus,schedulePoll,startFastPoll,applyStatus,setAllButtonsDisabled,executeAction,onActionClick,ACTIONS};\n'+frontend.slice(end),context);
+      'window.fixture={state,fetchStatus,schedulePoll,startFastPoll,applyStatus,setAllButtonsDisabled,executeAction,onActionClick,ACTIONS,completeBoostVisuals,formatBoostBytesUI};\n'+frontend.slice(end),context);
     return { ...window.fixture, element,timers,listeners,requests:()=>requests };
   }
   const response=(status,data)=>({status,ok:status>=200&&status<300,json:async()=>data});
@@ -140,6 +147,23 @@ async function testFrontendCompatibility() {
   assert(late.state.unsupported);assert.equal(late.timers.size,0,'late successful response cannot resume polling');
   assert.equal(late.element('#maintAdminBadge').textContent,'Not available on Linux');
 
+  // Linux native maintenance frontend contract
+  const linuxStatus = { platform: 'linux', isAdmin: false, isRunning: false, service: { enabled: false }, history: [] };
+  const linuxFrontend = controller([response(200, linuxStatus)]);
+  await linuxFrontend.fetchStatus();
+  assert(!linuxFrontend.state.unsupported, 'Linux maintenance is supported via native linux-maintenance controller');
+  assert.equal(linuxFrontend.element('#maintAdminBadge').textContent, 'Standard User');
+  assert.equal(linuxFrontend.element('#maint-btn-windows_repair').style.display, 'none', 'Windows Repair is hidden on Linux');
+  assert.equal(linuxFrontend.element('#maint-btn-clean_temp').style.display, '', 'clean_temp is visible on Linux');
+  assert.equal(linuxFrontend.element('#maint-btn-systemd_journal_vacuum').style.display, '', 'Linux journal vacuum is visible on Linux');
+  assert.equal(linuxFrontend.element('#maint-btn-package_cache_clean').style.display, '', 'Linux package cache is visible on Linux');
+
+  const windowsFrontend = controller([response(200, windows)]);
+  await windowsFrontend.fetchStatus();
+  assert.equal(windowsFrontend.element('#maint-btn-windows_repair').style.display, '', 'Windows Repair is visible on Windows');
+  assert.equal(windowsFrontend.element('#maint-btn-systemd_journal_vacuum').style.display, 'none', 'Linux journal vacuum is hidden on Windows');
+  assert.equal(windowsFrontend.element('#maint-btn-package_cache_clean').style.display, 'none', 'Linux package cache is hidden on Windows');
+
   // Run the affected rendering portion of the actual updateUI function.
   const app=realFs.readFileSync(path.join(__dirname,'../public/app.js'),'utf8');
   const start=app.indexOf('function updateUI(data) {'),end=app.indexOf('  // CPU\n',start);
@@ -162,7 +186,73 @@ async function testFrontendCompatibility() {
     assert.equal(get('osBadge').textContent,fixture.badge);assert.equal(get('specOs').textContent,fixture.spec);
     assert.equal(get('healthChecklist').children.some(child=>child.textContent.includes('Storage health checks cover C:')),fixture.scope);
   }
-  console.log('PASS frontend Windows/Linux labels and storage scope; typed 501 unavailable state, disabled actions, timer/event/late-response cleanup; generic errors retry and Windows actions remain available');
+
+  // Focused regression test: Boost HUD mapping of nonzero cleanup and working-set results
+  const boostCtrl = controller([]);
+  // 1. Canonical response (bytesFreed & workingSetTrimmedBytes)
+  boostCtrl.completeBoostVisuals({
+    success: true,
+    summary: 'Boost complete.',
+    detailedResult: {
+      code: 'boosted',
+      bytesFreed: 104857600, // 100 MB
+      tempFreedBytes: 104857600,
+      workingSetTrimmedBytes: 524288000, // 500 MB
+      availableChangeBytes: 471859200,
+      trimmedProcesses: 5,
+      deletedCount: 45
+    }
+  }, 'Boost');
+  assert.equal(boostCtrl.element('#boostHudRamVal').textContent, '500 MB');
+  assert.equal(boostCtrl.element('#boostHudTempVal').textContent, '100 MB');
+  assert.equal(boostCtrl.element('#boostHudTitle').textContent, 'PC Boost Complete');
+  assert(boostCtrl.element('#boostHudStep').textContent.includes('5 background apps (500 MB) · Removed 45 temp items (100 MB)'));
+  assert.equal(boostCtrl.element('#boostBtnLabel').textContent, 'Boosted');
+  assert.equal(boostCtrl.element('#boostBtnSub').textContent, '500 MB trimmed · 100 MB temp');
+
+  // 2. Alternate contract (reclaimedBytes & workingSetReductionBytes)
+  boostCtrl.completeBoostVisuals({
+    success: true,
+    summary: 'Boost complete.',
+    detailedResult: {
+      code: 'boosted',
+      reclaimedBytes: 209715200, // 200 MB
+      workingSetReductionBytes: 1073741824, // 1.00 GB
+      availableChangeBytes: 1073741824,
+      trimmedProcesses: 3,
+      deletedCount: 12
+    }
+  }, 'Boost');
+  assert.equal(boostCtrl.element('#boostHudRamVal').textContent, '1.00 GB');
+  assert.equal(boostCtrl.element('#boostHudTempVal').textContent, '200 MB');
+
+  // 3. Alternate fixture mapping (tempDeletedBytes & ramFreedBytes)
+  boostCtrl.completeBoostVisuals({
+    success: true,
+    summary: 'Boost complete: freed 412.5 MB RAM and cleaned 18.4 MB of temporary files.',
+    detailedResult: {
+      code: 'boost-completed',
+      ramFreedBytes: 432537600,
+      tempDeletedBytes: 19293798,
+      trimmedProcesses: 2,
+      deletedCount: 8
+    }
+  }, 'Boost');
+  assert.equal(boostCtrl.element('#boostHudRamVal').textContent, '413 MB');
+  assert.equal(boostCtrl.element('#boostHudTempVal').textContent, '18 MB');
+
+  // 4. Object summary fallback (summary.reclaimedBytes)
+  boostCtrl.completeBoostVisuals({
+    success: true,
+    summary: { reclaimedBytes: 52428800 }, // 50 MB
+    detailedResult: {
+      workingSetTrimmedBytes: 262144000 // 250 MB
+    }
+  }, 'Boost');
+  assert.equal(boostCtrl.element('#boostHudRamVal').textContent, '250 MB');
+  assert.equal(boostCtrl.element('#boostHudTempVal').textContent, '50 MB');
+
+  console.log('PASS frontend Windows/Linux labels and storage scope; typed 501 unavailable state, disabled actions, timer/event/late-response cleanup; generic errors retry and Windows actions remain available; Boost HUD mapping of nonzero cleanup/working-set results');
 }
 
 async function main() {

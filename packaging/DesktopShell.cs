@@ -19,11 +19,13 @@ using Microsoft.Web.WebView2.WinForms;
 
 // A client of the existing dashboard. No PIN handling, host objects, HTTP API,
 // telemetry collector, or client-supplied command/path bridge lives here.
-internal static class DesktopShell
+internal static partial class DesktopShell
 {
     // Bound by the local build to its companion installer. This is integrity,
     // not publisher authentication: the alpha installer still requires explicit UAC.
+#if !ROVARIN_BOUND_MAINTENANCE
     internal const string MaintenanceSetupHash = "";
+#endif
     internal static string MaintenanceSetupPath { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "RovarinMaintenanceSetup.exe"); } }
     internal static FileStream OpenMaintenanceSetup() {
         if (MaintenanceSetupHash.Length != 64) throw new IOException("Maintenance setup was not bundled by this build.");
@@ -39,8 +41,19 @@ internal static class DesktopShell
             return file;
         } catch { file.Dispose(); throw; }
     }
+#if ROVARIN_PREVIEW
+    internal const bool IsPreviewBuild = true;
+    internal const string HostHelperScript = "desktop-preview-host.ps1";
+    internal static readonly string AppDirectory = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", ".."));
+    internal static readonly string RootDirectory = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
+    internal static string IconPath { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Rovarin.ico"); } }
+#else
+    internal const bool IsPreviewBuild = false;
+    internal const string HostHelperScript = "desktop-host.ps1";
     internal static readonly string AppDirectory = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
     internal static readonly string RootDirectory = Path.GetDirectoryName(AppDirectory);
+    internal static string IconPath { get { return Path.Combine(AppDirectory, "Rovarin.ico"); } }
+#endif
     internal static readonly string DataDirectory = ResolveDataDirectory();
     private static string ResolveDataDirectory() {
         string marker = Path.Combine(AppDirectory, ".rovarin-development-state.json");
@@ -72,8 +85,13 @@ internal static class DesktopShell
     }
     internal static bool Installed()
     {
+#if ROVARIN_PREVIEW
+        return File.Exists(Path.Combine(AppDirectory, "server.js")) &&
+            File.Exists(Path.Combine(AppDirectory, "scripts", HostHelperScript));
+#else
         return File.Exists(Path.Combine(AppDirectory, "installation.json")) &&
-            File.Exists(Path.Combine(AppDirectory, "scripts", "desktop-host.ps1"));
+            File.Exists(Path.Combine(AppDirectory, "scripts", HostHelperScript));
+#endif
     }
     internal static EventWaitHandle CreateEvent(string suffix)
     {
@@ -239,10 +257,10 @@ internal sealed class DesktopWindow : Form
     private ulong startupNavigationId;
     private string filteredOrigin;
     private TaskCompletionSource<bool> startupNavigation;
-    private Process preparation;
+    private readonly HashSet<Process> preparations = new HashSet<Process>();
     private Rectangle normalBounds;
     private bool wasMaximized;
-    private bool loginPresentation, changingBounds, lockUsesDwmCorners;
+    private bool loginPresentation, changingBounds, lockUsesDwmCorners, smartStandby, standbyRuntime;
     private TaskCompletionSource<string> addressRequest;
     private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 8192, RecursionLimit = 8 };
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
@@ -258,7 +276,7 @@ internal sealed class DesktopWindow : Form
         MaximizedBounds = Screen.GetWorkingArea(this);
         StartPosition = FormStartPosition.CenterScreen; AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = recovery.BackColor;
-        Icon = new Icon(Path.Combine(DesktopShell.AppDirectory, "Rovarin.ico"));
+        Icon = new Icon(DesktopShell.IconPath);
         RestoreBoundsFromDisk();
         normalBounds = WindowState == FormWindowState.Maximized ? RestoreBounds : Bounds;
         wasMaximized = WindowState == FormWindowState.Maximized;
@@ -303,7 +321,7 @@ internal sealed class DesktopWindow : Form
         Move += delegate { if (!loginPresentation && !changingBounds && WindowState == FormWindowState.Normal) normalBounds = Bounds; };
         FormClosing += delegate(object sender, FormClosingEventArgs e) {
             SaveBounds();
-            if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); QueueVisibility(); }
+            if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; if(standbyRuntime)ExitShell();else Hide(); QueueVisibility(); }
         };
         FormClosed += delegate { if (updateTimer != null) updateTimer.Dispose(); tray.Visible = false; tray.Dispose(); if (view != null) view.Dispose(); StopPreparation(); };
         ApplyLoginPresentation(true);
@@ -398,15 +416,24 @@ internal sealed class DesktopWindow : Form
         busy = true;
         bool reconnect = false;
         try {
-            var result = json.Deserialize<Dictionary<string, object>>(await RunHelperAsync("desktop-host.ps1", 600000));
+            var result = json.Deserialize<Dictionary<string, object>>(await RunHelperAsync(DesktopShell.HostHelperScript, 600000));
             int port = Convert.ToInt32(result["port"]);
             if (!Convert.ToBoolean(result["ready"]) || port < 1 || port > 65535) throw new IOException("Local startup was not confirmed.");
-            reconnect = origin != "http://127.0.0.1:" + port;
+            smartStandby=result.ContainsKey("standby")&&Convert.ToBoolean(result["standby"]);
+            standbyRuntime=result.ContainsKey("standbyAvailable")&&Convert.ToBoolean(result["standbyAvailable"]);
+            reconnect = origin != "http://127.0.0.1:" + port || (DesktopShell.IsPreviewBuild && result.ContainsKey("restarted") && Convert.ToBoolean(result["restarted"]));
         } catch {
             if (!exiting && !IsDisposed) State("Couldn’t reconnect", "The local dashboard was not ready. Try again. Your PIN has not changed.", true, false);
         } finally { busy = false; }
         if (reconnect && !exiting && !IsDisposed) await StartAsync(false);
         DrainSecurityLock();
+    }
+    private async void StandbyActionAsync(string action) {
+        try {
+            var status=action=="standby-status"?await NativeRequestAsync("/api/desktop/standby",new {action="status"}):await NativeRequestAsync("/api/desktop/standby",new {action="preference",enabled=action=="standby-enable"});
+            smartStandby=Convert.ToBoolean(status["enabled"]);
+            view.CoreWebView2.PostWebMessageAsJson(json.Serialize(new {kind="standby-state",available=Convert.ToBoolean(status["available"]),enabled=smartStandby}));
+        } catch {if(view!=null&&!view.IsDisposed)view.CoreWebView2.PostWebMessageAsJson("{\"kind\":\"standby-state\",\"available\":false,\"enabled\":false}");}
     }
     private async void ExitShell() {
         if (exiting) return;
@@ -483,7 +510,7 @@ internal sealed class DesktopWindow : Form
     }
     private void StopPreparation() {
         // This is ONLY the helper we spawned/hold. Never kills a Node/backend.
-        try { if (preparation != null && !preparation.HasExited) preparation.Kill(); } catch { }
+        foreach (var child in new List<Process>(preparations)) { try { if (!child.HasExited) child.Kill(); } catch { } }
     }
     private void LayoutRecovery() {
         desktopExit.Visible = !loginPresentation; desktopMinimize.Visible = !loginPresentation; desktopMaximize.Visible = !loginPresentation;
@@ -514,14 +541,22 @@ internal sealed class DesktopWindow : Form
     }
     private async Task<string> RunHelperAsync(string name, int timeout) {
         using (var child = Process.Start(DesktopShell.Script(name))) {
-            preparation = child;
-            var output = child.StandardOutput.ReadToEndAsync(); var errors = child.StandardError.ReadToEndAsync();
-            bool done = await Task.Run(() => child.WaitForExit(timeout));
-            if (!done) { try { child.Kill(); } catch { } throw new IOException("Local helper timed out."); }
-            await errors; var result = await output;
-            if (child.ExitCode != 0 || result.Length > 8192) throw new IOException("Local startup was not confirmed.");
-            preparation = null; return result;
+            preparations.Add(child);
+            try {
+                var output = child.StandardOutput.ReadToEndAsync(); var errors = child.StandardError.ReadToEndAsync();
+                bool done = await Task.Run(() => child.WaitForExit(timeout));
+                if (!done) { try { child.Kill(); } catch { } throw new IOException("Local helper timed out."); }
+                await errors; var result = await output;
+                if (child.ExitCode != 0 || result.Length > 8192) throw new IOException("Local startup was not confirmed.");
+                return result;
+            } finally { preparations.Remove(child); }
         }
+    }
+    private async Task<string> PrepareDesktopTrustAsync() {
+        try {
+            var credential = (await RunHelperAsync("native-trust.ps1", 15000)).Trim();
+            return credential.Length == 44 ? credential : null;
+        } catch { return null; } // Existing normal PIN fallback when native trust is unavailable.
     }
     private string desktopCredential;
     private bool securityBusy;
@@ -605,7 +640,8 @@ internal sealed class DesktopWindow : Form
                 PostUpdate(status);
                 string state = Convert.ToString(status["state"]);
                 if (state == "ready") break;
-                if (state == "failed" || (!Convert.ToBoolean(status["busy"]) && state != "ready") || DateTime.UtcNow >= deadline) throw new IOException("Download unconfirmed.");
+                if (state == "failed" || (!Convert.ToBoolean(status["busy"]) && state != "ready")) return;
+                if (DateTime.UtcNow >= deadline) throw new IOException("Download unconfirmed.");
                 // Bounded update-operation feedback only; no telemetry or idle poller.
                 await Task.Delay(1000);
             }
@@ -779,9 +815,15 @@ internal sealed class DesktopWindow : Form
         view.Visible = true;
         view.CoreWebView2.Resume();
         startupNavigationUri = "data:text/html;charset=utf-8;base64," + Convert.ToBase64String(Encoding.UTF8.GetBytes(html));
-        view.CoreWebView2.NavigateToString(html);
-        if (await Task.WhenAny(startupNavigation.Task, Task.Delay(10000)) != startupNavigation.Task || !await startupNavigation.Task)
-            throw new IOException("The startup card could not be displayed.");
+        try {
+            view.CoreWebView2.NavigateToString(html);
+            html = null;
+            if (await Task.WhenAny(startupNavigation.Task, Task.Delay(10000)) != startupNavigation.Task || !await startupNavigation.Task)
+                throw new IOException("The startup card could not be displayed.");
+        } finally {
+            startupNavigationUri = null;
+            startupNavigation = null;
+        }
     }
     private void ConfigureRequestFilters() {
         if (filteredOrigin == origin) return;
@@ -797,12 +839,18 @@ internal sealed class DesktopWindow : Form
         busy = true; loading = true;
         State("Rovarin", "Connecting to this PC…", false, false);
         try {
-            await ShowStartupCardAsync();
             if (restart) await RunHelperAsync("stop.ps1", 20000);
-            // First-run local Setup is interactive, so allow time to read/copy the PIN.
-            var result = json.Deserialize<Dictionary<string, object>>(await RunHelperAsync("desktop-host.ps1", 600000));
+            // Independent work overlaps; no navigation/authentication until BOTH succeed.
+            // The helper still performs the full ownership/freshness/listener/HTTP checks.
+            var backendReady = RunHelperAsync(DesktopShell.HostHelperScript, 600000);
+            var trustReady = String.IsNullOrEmpty(desktopCredential) ? PrepareDesktopTrustAsync() : Task.FromResult(desktopCredential);
+            await Task.WhenAll(ShowStartupCardAsync(), backendReady, trustReady);
+            desktopCredential = await trustReady;
+            var result = json.Deserialize<Dictionary<string, object>>(await backendReady);
             int port = Convert.ToInt32(result["port"]);
             if (!Convert.ToBoolean(result["ready"]) || port < 1 || port > 65535) throw new IOException("Local startup was not confirmed.");
+            smartStandby=result.ContainsKey("standby")&&Convert.ToBoolean(result["standby"]);
+            standbyRuntime=result.ContainsKey("standbyAvailable")&&Convert.ToBoolean(result["standbyAvailable"]);
             origin = "http://127.0.0.1:" + port;
             if (exiting || IsDisposed) return;
             ConfigureRequestFilters();
@@ -839,9 +887,9 @@ internal sealed class DesktopWindow : Form
                 if (target.AbsolutePath != "/api/apps/removal-security" && target.AbsolutePath != "/api/apps/uninstall" && target.AbsolutePath != "/api/apps/leftovers/delete" && target.AbsolutePath != "/api/power/status" && target.AbsolutePath != "/api/power/run") return;
                 if (!String.IsNullOrEmpty(desktopCredential) && desktopCredential.Length == 44) args.Request.Headers.SetHeader("X-PC-Monitor-Desktop", desktopCredential);
             };
-            core.Settings.AreDevToolsEnabled = false;
-            core.Settings.AreDefaultContextMenusEnabled = false;
-            core.Settings.AreBrowserAcceleratorKeysEnabled = false;
+            core.Settings.AreDevToolsEnabled = DesktopShell.IsPreviewBuild;
+            core.Settings.AreDefaultContextMenusEnabled = DesktopShell.IsPreviewBuild;
+            core.Settings.AreBrowserAcceleratorKeysEnabled = DesktopShell.IsPreviewBuild;
             core.Settings.IsStatusBarEnabled = false;
             core.Settings.IsBuiltInErrorPageEnabled = false;
             core.Settings.IsPasswordAutosaveEnabled = false;
@@ -874,6 +922,7 @@ internal sealed class DesktopWindow : Form
                     if (loginPresentation && message == "lock-window-exit") { ExitShell(); return; }
                     if (message == "updates-status" || message == "updates-check" || message == "updates-automatic" || message == "updates-preference" || message == "updates-install" || message == "updates-notes") { UpdateActionAsync(message); return; }
                     if (message == "startup-status" || message == "startup-enable" || message == "startup-disable") { StartupActionAsync(message); return; }
+                    if(message=="standby-status"||message=="standby-enable"||message=="standby-disable"){StandbyActionAsync(message);return;}
                     if (message == "security-preference" || message == "security-status" || message == "security-lock") { SecurityActionAsync(message); return; }
                     if (message == "maintenance-status" || message == "maintenance-enable" || message == "maintenance-disable") { MaintenanceActionAsync(message); return; }
                     if (addressRequest != null) addressRequest.TrySetResult(message);

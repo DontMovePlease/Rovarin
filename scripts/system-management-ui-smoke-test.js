@@ -80,14 +80,93 @@ async function realPausedTree(page){
   console.log('PASS real Windows UI paused child-only End Task preserves sibling/parent, collapsed group End Task uses verified tree, confirmed rows removed and view stays Paused');
  } finally {if(owner&&owner.exitCode===null)owner.kill();for(const pid of ids){try{process.kill(pid)}catch(e){if(e.code!=='ESRCH')throw e}}}
 }
+async function sidebarLabels(page){
+ const hint=page.locator('#desktopNavHint'),nav=page.locator('#appSidebar');
+ for(const theme of ['simplified','liquid']){
+  await page.evaluate(theme=>{const select=document.getElementById('desktopTheme');select.value=theme;select.dispatchEvent(new Event('change'));},theme);
+  for(const width of [760,900,1440]){
+   await page.setViewportSize({width,height:680});
+   await page.evaluate(()=>setSidebarOpen(false));
+   await page.waitForTimeout(220);
+   const rail=await nav.boundingBox();assert.equal(Math.round(rail.width),60,'slim rail '+width);
+   for(const name of ['Dashboard','Processes','Apps','Maintenance','Power','Settings']){
+    const button=nav.locator('.page-nav-button').filter({hasText:name});
+    const box=await button.boundingBox();assert(box.width>=44&&box.height>=44,'44px target '+name);
+    await button.hover();await hint.waitFor({state:'visible'});assert.equal(await hint.innerText(),name);
+    assert.equal(await button.getAttribute('title'),null,'no duplicate tiny native tooltip');
+    assert.equal(await page.locator('.nav-hint-active').count(),1);
+    assert.equal(Math.round((await nav.boundingBox()).width),60,'hover never expands rail');
+    await hint.evaluate(x=>Promise.all(x.getAnimations().map(animation=>animation.finished)));
+    const bubble=await hint.boundingBox();assert(bubble.x>=rail.x+rail.width-1&&bubble.x+bubble.width<=width,'bubble fits '+width);
+   }
+   assert.equal(await hint.evaluate(x=>getComputedStyle(x).pointerEvents),'none','bubble never captures the pointer');
+   const lastBubble=await hint.boundingBox();await page.mouse.move(lastBubble.x+lastBubble.width/2,lastBubble.y+lastBubble.height/2);assert(await hint.isHidden(),'leaving button for bubble dismisses immediately');
+   await nav.locator('#nativeSettingsButton').hover();assert(await hint.isVisible());
+   await page.keyboard.press('Escape');assert(await hint.isHidden(),'Escape dismisses');
+   await page.mouse.move(width-4,675);await page.keyboard.press('Tab');
+   await nav.locator('[data-page="appsPage"]').focus();assert.equal(await hint.innerText(),'Apps');assert(await hint.isVisible(),'keyboard focus label');
+   await page.keyboard.press('Escape');assert(await hint.isHidden());
+   await page.evaluate(()=>setSidebarOpen(true));await nav.locator('[data-page="appsPage"]').hover();assert(await hint.isHidden(),'expanded rail already has labels');
+   await page.evaluate(()=>setSidebarOpen(false));await page.waitForTimeout(220);
+   await nav.locator('[data-page="processesPage"]').click();assert(await page.locator('#processesPage').isVisible(),'navigation retained');assert(await hint.isHidden(),'click dismisses');
+  }
+ }
+ await page.emulateMedia({reducedMotion:'reduce'});await nav.locator('[data-page="appsPage"]').hover();
+ assert.equal(await hint.evaluate(x=>getComputedStyle(x).animationName),'none','reduced motion');
+ await page.setViewportSize({width:390,height:844});await page.evaluate(()=>setSidebarOpen(true));assert(await hint.isHidden(),'phone has no desktop bubble');
+ await nav.locator('[data-page="appsPage"]').click();assert(!await page.evaluate(()=>document.body.classList.contains('sidebar-expanded')),'phone drawer closes on selection');
+ assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),'phone has no overflow');
+ await page.emulateMedia({reducedMotion:'no-preference'});await page.setViewportSize({width:1280,height:720});
+ console.log('PASS slim desktop rail, individual hover/focus bubbles, targets, pointer-transparent immediate dismissal, Escape, expanded suppression, navigation, reduced motion and phone drawer');
+}
+async function boostUi(page){
+ let requests=0,done=false;
+ const idle={isRunning:false,isAdmin:false,isLocal:true,service:{enabled:false,state:'disabled'},history:[],boostAdvice:{suggested:true}};
+ await page.route('**/api/maintenance/status',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(done?{...idle,currentTask:{id:'boost',title:'Boost',status:'completed',currentStep:2,totalSteps:2,logs:[],result:{success:true,summary:'Boost complete: 80 MB RAM freed (4 background processes trimmed) · 12 MB temp cleaned.',detailedResult:{code:'boosted',ramFreedBytes:80*1024*1024,tempFreedBytes:12*1024*1024,trimmedProcesses:4}}}}:idle)}));
+ await page.route('**/api/maintenance/run',route=>{
+  assert.deepEqual(route.request().postDataJSON(),{action:'boost',confirmed:true});requests++;done=true;
+  return route.fulfill({status:200,contentType:'application/json',body:'{"success":true}'});
+ });
+ for(const width of [390,900]){
+  await page.setViewportSize({width,height:844});await page.evaluate(()=>showAppPage('dashboardPage'));
+  const button=page.locator('#liquidOverviewSettings');assert.equal(await button.locator('svg').getAttribute('viewBox'),'0 0 32 32','Boost icon');
+  assert(await page.locator('.boost-btn-copy').isHidden(),'icon-only control');
+  await button.waitFor({state:'visible'});await page.waitForTimeout(250);
+  const target=await button.boundingBox();assert(target.width>=44&&target.height>=44,'comfortable touch target');
+ }
+ await page.waitForFunction(()=>document.getElementById('liquidOverviewSettings').classList.contains('is-boost-suggested'));
+ assert((await page.locator('#liquidOverviewSettings').getAttribute('aria-label')).includes('sustained memory pressure'),'suggestion has accessible text');
+ await page.emulateMedia({reducedMotion:'reduce'});assert.equal(await page.locator('#liquidOverviewSettings').evaluate(x=>getComputedStyle(x).animationName),'none');await page.emulateMedia({reducedMotion:'no-preference'});
+ await page.locator('#liquidOverviewSettings').click();
+ assert(await page.locator('#maintModal').isHidden(),'Boost runs immediately without a confirmation warning modal');
+ await page.waitForFunction(()=>document.querySelector('#maintToastMessage').textContent.includes('80 MB')&&document.querySelector('#boostHudRamVal')?.textContent==='80 MB'&&document.querySelector('#boostHudTempVal')?.textContent==='12 MB');
+ assert.equal(requests,1,'one direct Boost action');assert(await page.locator('#dashboardPage').isVisible(),'Boost stays on overview');assert(!await page.locator('#liquidOverviewSettings').isDisabled());
+ await page.locator('#boostHudClose').click();assert(await page.locator('#boostHudCard').isHidden());
+ await page.unroute('**/api/maintenance/run');await page.unroute('**/api/maintenance/status');
+ await page.setViewportSize({width:1280,height:720});
+ console.log('PASS 1-click warning-free Boost, animated HUD with RAM Freed + Temp Cleaned metrics without executing host cleanup');
+}
 async function ui(){
  const {chromium}=require(process.env.ROVARIN_PLAYWRIGHT_PATH||'playwright');browser=await chromium.launch({headless:true,executablePath:'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'});const context=await browser.newContext();const login=await context.request.post(base+'/api/login',{headers:{Origin:base},data:{pin}});assert.equal(login.status(),200);const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',dialog=>dialog.accept());await page.goto(base,{waitUntil:'domcontentloaded'});await page.waitForFunction(()=>typeof showAppPage==='function');
+ await boostUi(page);
+ await sidebarLabels(page);
  await page.evaluate(()=>showAppPage('diagnosticsPage'));await page.locator('#securitySettingsTab').click();await page.waitForFunction(()=>document.querySelector('#phoneRemovalPinPreference').checked&&!document.querySelector('#phoneRemovalPinPreference').disabled);
  await page.locator('#phoneRemovalPinPreference').uncheck();assert(await page.locator('#phoneRemovalPinApproval').isVisible(),'remote disabling uses inline PIN approval');await page.locator('#phoneRemovalSettingPin').fill(pin);await page.locator('#phoneRemovalSettingSave').click();await page.waitForFunction(()=>document.querySelector('#phoneRemovalPinFeedback').textContent==='Preference saved.');assert(await page.locator('#phoneRemovalPinApproval').isHidden());
  await page.locator('#phoneRemovalPinPreference').check();await page.waitForFunction(()=>window.RovarinRemovalSecurity.requirePhoneRemovalPin&&!document.querySelector('#phoneRemovalPinPreference').disabled);
  console.log('PASS Security toggle/inline remote approval and persisted UI preference');
 
- for(const [width,height] of [[320,568],[375,812],[390,844],[430,932],[900,680],[980,740],[1440,900]]){
+  await page.evaluate(()=>showAppPage('appsPage'));await page.waitForFunction(()=>document.querySelectorAll('.apps-row').length===3);
+  await page.evaluate(()=>{window.appsRetainedRow=document.querySelector('.apps-row');});
+  const refreshStart=performance.now();
+  await page.locator('#appsRefresh').click();await page.waitForFunction(()=>document.querySelector('#appsList').getAttribute('aria-busy')==='false');
+  assert(await page.evaluate(()=>window.appsRetainedRow===document.querySelector('.apps-row')),'unchanged inventory preserves card and icon DOM');
+  console.log('MEASURE unchanged fixture inventory refresh '+Math.round(performance.now()-refreshStart)+' ms; card/icon DOM retained');
+  const retainedInventory=await context.request.get(base+'/api/apps').then(r=>r.json());
+  await page.route('**/api/apps?refresh=1',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({...retainedInventory,apps:retainedInventory.apps.map(app=>({...app,publisher:'Updated fixture publisher'}))})}));
+  await page.locator('#appsRefresh').click();await page.waitForFunction(()=>document.querySelector('.apps-publisher').textContent.includes('Updated fixture publisher'));
+  assert(await page.evaluate(()=>window.appsRetainedRow!==document.querySelector('.apps-row')),'changed presentation with the same opaque ID replaces stale card');
+  await page.unroute('**/api/apps?refresh=1');await page.locator('#appsRefresh').click();await page.waitForFunction(()=>!document.querySelector('.apps-publisher').textContent.includes('Updated fixture publisher'));
+  for(const [width,height] of [[320,568],[375,812],[390,844],[430,932],[900,680],[980,740],[1440,900]]){
   await page.setViewportSize({width,height});await page.reload({waitUntil:'domcontentloaded'});await page.waitForFunction(()=>typeof showAppPage==='function');await page.evaluate(()=>showAppPage('appsPage'));await page.waitForFunction(()=>document.querySelectorAll('.apps-row').length===3);assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),'App Manager viewport '+width);
   assert(await page.locator('#appsSearch').evaluate((x,min)=>parseFloat(getComputedStyle(x).fontSize)>=min,width<=699?16:13),'readable Applications search '+width);assert(await page.locator('.apps-select').first().evaluate(x=>{const r=x.getBoundingClientRect();return r.width>=44&&r.height>=44;}),'selection touch target '+width);
   assert.equal(await page.locator('#appSidebar [data-page="diagnosticsPage"]').count(),0);assert.equal(await page.locator('#nativeSettingsButton').count(),1);
@@ -131,7 +210,7 @@ async function ui(){
   assert(await page.locator('.startup-associated-services').count()===1,'services are a separate read-only category');
   assert((await page.locator('#startupList').innerText()).includes('State unavailable'),'package state remains truthful');
   await page.locator('#startupStatusFilter').selectOption('disabled');assert.equal(await page.locator('.startup-row').count(),1,'unknown state is not disabled');await page.locator('#startupStatusFilter').selectOption('');
-  await page.locator('.startup-row').filter({hasText:'Fixture Package'}).getByRole('button',{name:'View startup information for Fixture Package'}).click();assert((await page.locator('#startupList').innerText()).includes('Windows Settings'));
+  await page.locator('.startup-row').filter({hasText:'Fixture Package'}).getByRole('button',{name:/(?:Manage in Windows settings:|View startup information for) Fixture Package/}).click();assert((await page.locator('#startupList').innerText()).includes('Windows Settings'));
   const startupRow=page.locator('.startup-row').filter({hasText:'Fixture Startup'});
   for(const action of ['Enable','Disable']){
     await startupRow.getByRole('button',{name:action+' Fixture Startup',exact:true}).click();

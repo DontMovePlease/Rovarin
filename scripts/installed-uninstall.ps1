@@ -1,7 +1,8 @@
 param(
     [ValidateSet('Register','Validate','Cleanup','Launch','Handoff')][string]$Mode = 'Validate',
     [switch]$FullRemoval,
-    [switch]$RemoveStartup
+    [switch]$RemoveStartup,
+    [switch]$NoFirewallElevation
 )
 $ErrorActionPreference = 'Stop'
 $env:PSModulePath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules'
@@ -105,6 +106,10 @@ function Set-HandoffPhase($record,[string]$phase) {
     finally { if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary -Force} }
 }
 $trustedFiles = @('unins000.exe','unins000.dat','runtime\node.exe','app\server.js','app\scripts\installed-uninstall.ps1','app\scripts\stop.ps1','app\scripts\dashboard-runtime.ps1')
+if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'firewall.ps1')){$trustedFiles+='app\scripts\firewall.ps1'}
+if((Test-Path -LiteralPath (Join-Path $app 'RovarinStandby.exe')) -or (Test-Path -LiteralPath (Join-Path $app 'standby-runtime.json'))){
+    $trustedFiles+=@('app\RovarinStandby.exe','app\standby-runtime.json','app\scripts\standby-runtime.ps1')
+}
 function Read-TrustedHashes {
     $result = @{}
     foreach ($relative in $trustedFiles) {
@@ -160,6 +165,10 @@ try {
     }
     if ($Mode -eq 'Cleanup') {
         # Inno calls this only after StopInstalledServer confirms exit.
+        if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'standby-runtime.ps1')){
+            . (Join-Path $PSScriptRoot 'standby-runtime.ps1')
+            if(Test-StandbyAvailable){Stop-StandbyRuntime -RemoveStartup}
+        }
         . (Join-Path $PSScriptRoot 'dashboard-runtime.ps1')
         $cleanupDeadline = (Get-Date).AddSeconds(10)
         do {
@@ -168,6 +177,13 @@ try {
             Start-Sleep -Milliseconds 250
         } while ((Get-Date) -lt $cleanupDeadline)
         if ($runtime.state -ne 'none') { throw 'server-still-running' }
+        $firewallHelper=Join-Path $PSScriptRoot 'firewall.ps1'
+        if(Test-Path -LiteralPath $firewallHelper){
+            $firewallArguments=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$firewallHelper,'-Action','Remove')
+            if($NoFirewallElevation){$firewallArguments+='-NoElevation'}
+            & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') @firewallArguments
+            if($LASTEXITCODE -ne 0){throw 'Owned firewall rule cleanup requires administrator approval; files retained'}
+        }
         $updates = Join-Path $installRoot 'updates'
         Assert-PlainPath $updates
         if (Test-Path -LiteralPath $updates) {
@@ -182,7 +198,7 @@ try {
         $profile = Join-Path $installRoot 'desktop-profile'
         if (Test-Path -LiteralPath $profile) { Remove-Item -LiteralPath $profile -Recurse -Force }
         $settings = @('pin-enrollment.json','config.json','temperature-settings.json','onboarding-complete.json','desktop-window.json','desktop-trust.bin')
-        $operational = @('server.pid','server-state.json','server.instance.json','server-start.lock','server.log','server-error.log','launcher-error.log','enhanced-install.json','enhanced-install.lock','onboarding.lock','uninstall-result.json','uninstall-handoff.json','rebrand-migration.json','rebrand-result.json')
+        $operational = @('standby-state.bin','server.pid','server-state.json','server.instance.json','server-start.lock','server.log','server-error.log','launcher-error.log','enhanced-install.json','enhanced-install.lock','onboarding.lock','uninstall-result.json','uninstall-handoff.json','rebrand-migration.json','rebrand-result.json')
         foreach ($item in @(Get-ChildItem -LiteralPath $data -Force -ErrorAction SilentlyContinue)) {
             $ownedFile = $item.Name -in $operational -or $item.Name -match '^server-start\.[a-f0-9]{32,64}\.(tmp|lock)$' -or $item.Name -match '^config\.json\.[a-f0-9]{24}\.tmp$' -or $item.Name -match '^config\.json\.pin-lock(?:\.[a-f0-9]{64}|\.[a-f0-9]{24}\.tmp)?$' -or $item.Name -match '^pin-enrollment\.json\.[a-f0-9]{24}\.tmp$' -or $item.Name -match '^temperature-settings\.json\.[0-9]+\.tmp$' -or $item.Name -match '^uninstall-handoff\.json\.[a-f0-9]{64}\.tmp$' -or $item.Name -match '^desktop-window\.json\.[a-f0-9]{32}\.tmp$'
             if ($ownedFile -or ($FullRemoval -and $item.Name -in $settings)) { Remove-Item -LiteralPath $item.FullName -Force }

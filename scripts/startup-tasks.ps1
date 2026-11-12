@@ -39,7 +39,8 @@ function Get-StartupTaskPolicy($task) {
         $principal = $definition.Principal
         $owner = [string]$principal.UserId
         if ($owner -notmatch '^S-1-') { $owner=(New-Object Security.Principal.NTAccount($owner)).Translate([Security.Principal.SecurityIdentifier]).Value }
-        if ($owner -ne $sid -or $principal.RunLevel -ne 0 -or $principal.LogonType -ne 3) { $blocked.reason='Requires a separately reviewed administrator task handler'; return $blocked }
+        if ($owner -ne $sid -or $principal.LogonType -ne 3) { $blocked.reason='Different-user or service-account task is not an ordinary user startup app'; return $blocked }
+        if ($principal.RunLevel -ne 0) { $blocked.reason='Elevated task requires a separately reviewed administrator task handler'; return $blocked }
         $acl=New-Object Security.AccessControl.RawSecurityDescriptor([string]$task.GetSecurityDescriptor(5))
         if ($null -eq $acl.DiscretionaryAcl -or $acl.Owner.Value -ne $sid) { return $blocked }
         foreach ($ace in $acl.DiscretionaryAcl) {
@@ -56,11 +57,14 @@ function Get-StartupTaskPolicy($task) {
         }
         $actions=@($definition.Actions)
         if ($actions.Count -ne 1 -or $actions[0].Type -ne 0) { return $blocked }
-        $exe=[Environment]::ExpandEnvironmentVariables([string]$actions[0].Path)
-        # Restrict this first handler to private, user-owned application executables.
-        # System/Program Files tasks and shell/script hosts remain read-only.
+        $exe=[Environment]::ExpandEnvironmentVariables([string]$actions[0].Path).Trim().Trim('"', "'")
+        # A current-user sign-in task may target either a private user app or a
+        # signed app in a genuinely protected Program Files tree. Ownership,
+        # principal/triggers and security exclusions remain mandatory.
+        $privateApp=$exe.StartsWith($env:USERPROFILE.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)
+        $programRoot=@([Environment]::GetFolderPath('ProgramFiles'),[Environment]::GetFolderPath('ProgramFilesX86')) | Where-Object {$_ -and $exe.StartsWith($_.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)} | Select-Object -First 1
         if (-not [IO.Path]::IsPathRooted($exe) -or [IO.Path]::GetExtension($exe) -ine '.exe' -or
-            -not $exe.StartsWith($env:USERPROFILE.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) -or
+            (-not $privateApp -and -not $programRoot) -or
             [IO.Path]::GetFileName($exe) -match '(?i)^(powershell|pwsh|cmd|wscript|cscript|rundll32|regsvr32|mshta|msiexec|rovarin).*\.exe$' -or
             $exe -match '(?i)defender|antivirus|security|endpoint|firewall|malware|antimalware') { return $blocked }
         $cursor=[IO.Path]::GetFullPath($exe)
@@ -71,12 +75,28 @@ function Get-StartupTaskPolicy($task) {
         }
         $file=Get-Item -LiteralPath $exe -ErrorAction Stop
         $fileAcl=Get-Acl -LiteralPath $exe
-        if ($fileAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid) { return $blocked }
+        $trustedOwners=@('S-1-5-18','S-1-5-32-544',([Security.Principal.NTAccount]::new('NT SERVICE\TrustedInstaller')).Translate([Security.Principal.SecurityIdentifier]).Value)
+        if($privateApp){if($fileAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid){return $blocked}}
+        else{
+            if($fileAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $trustedOwners){return $blocked}
+            $signature=Get-AuthenticodeSignature -LiteralPath $exe -ErrorAction Stop
+            if($signature.Status -ne 'Valid'){$blocked.reason='Program Files task target has no valid trusted signature';return $blocked}
+            for($p=$exe;$p.Length -ge $programRoot.Length;$p=[IO.Path]::GetDirectoryName($p)){
+                $acl=Get-Acl -LiteralPath $p
+                foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){
+                    if($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $trustedOwners -and ($rule.FileSystemRights -band ([Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership))){$blocked.reason='Program Files task target is writable outside trusted administrators';return $blocked}
+                }
+            }
+        }
         foreach ($rule in $fileAcl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
             if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin @($sid,'S-1-5-18','S-1-5-32-544') -and
                 ($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Write)) { return $blocked }
         }
-        if ($file.VersionInfo.CompanyName -match '(?i)Microsoft|security|antivirus|antimalware') { $blocked.reason='Protected Windows or security task'; return $blocked }
+        if ($file.VersionInfo.CompanyName -match '(?i)security|antivirus|antimalware') { $blocked.reason='Protected Windows or security task'; return $blocked }
+        if($file.VersionInfo.CompanyName -match '(?i)Microsoft'){
+            $signature=Get-AuthenticodeSignature -LiteralPath $exe -ErrorAction Stop
+            if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation'){$blocked.reason='Microsoft application identity could not be verified';return $blocked}
+        }
         if (-not (Test-StartupSecurityExecutable $exe)) { $blocked.reason='Security software protection could not be safely ruled out'; return $blocked }
         $identity=Fingerprint ((Get-StartupTaskIdentity $task)+'|'+$file.Length+'|'+$file.LastWriteTimeUtc.Ticks)
         $saved=Get-StartupTaskSaved ([string]$task.Path)

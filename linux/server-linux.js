@@ -27,6 +27,8 @@ const platform = require('./platform');
 const auth = require('./linux-auth');
 const { createLinuxMetrics } = require('./linux-metrics');
 const { createLinuxProcesses } = require('./linux-processes');
+const { createLinuxMaintenance } = require('./linux-maintenance');
+const { LinuxPowerControls } = require('./linux-power');
 
 if (!platform.isLinux) {
   console.error('Rovarin Linux prototype requires Linux (process.platform=' + process.platform + '). Refusing to start.');
@@ -35,7 +37,8 @@ if (!platform.isLinux) {
 
 const ROOT = path.resolve(__dirname, '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
-const VERSION = '0.6.0-linux-prototype';
+const VERSION = require('./runtime-files').version + '-linux-preview';
+let linuxApplications=null;
 const LEASE_TTL_MS = 45000;
 const MAX_SESSIONS_LEASES = 24;
 const MAX_LEASES_PER_SESSION = 4;
@@ -50,7 +53,8 @@ const MIME_TYPES = {
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.txt': 'text/plain; charset=UTF-8'
 };
 // Reviewed canonical frontend assets only; never auto-publish arbitrary files.
-const PUBLIC_FILES = new Set(['rovarin-icon.png', 'rovarin-touch.png', 'liquid-bootstrap.js', 'liquid-glass.css', 'liquid-glass.js', 'liquid-shaders.js', 'three-glass.module.js', 'power.js', 'power.css', 'index.html', 'login.html', 'app.css', 'maintenance.css', 'processes.css', 'desktop.css', 'app.js', 'maintenance.js', 'processes.js', 'pin-lifecycle.js', 'pin-lifecycle.css', 'login.js', 'diagnostics.js', 'diagnostics.css', 'enhanced-support.js', 'uninstall.js', 'apps.js', 'apps.css', 'app-leftovers.js']);
+const { renderLogin } = require('../web-assets');
+const PUBLIC_FILES = new Set(require('../web-assets').PUBLIC_FILES);
 const STATIC_ASSET_PATHS = new Set([...PUBLIC_FILES].filter(f => f === 'rovarin-icon.png' || f === 'rovarin-touch.png' || f.endsWith('.css') || f.endsWith('.js')).map(f => '/' + f));
 
 // ---- Monitoring leases / samplers (Windows MONITORING_PROFILES, verbatim) ----
@@ -66,6 +70,8 @@ const AVAILABLE_PROFILES = Object.keys(MONITORING_PROFILES);
 
 const metrics = createLinuxMetrics({ onUpdate: broadcastMetrics });
 const procManager = createLinuxProcesses();
+const maintController = createLinuxMaintenance();
+const powerControls = new LinuxPowerControls();
 
 const monitoringLeases = new Map();
 const monitoringTimers = new Map();
@@ -268,7 +274,7 @@ function handleRequest(req, res) {
     '/api/processes/kill', '/api/processes/tree', '/api/processes/kill-tree',
     '/api/temperature/settings', '/api/temperature/enhanced/install',
     '/api/power/run', '/api/maintenance/run', '/api/apps/uninstall',
-    '/api/apps/quick-launch', '/api/apps/launch', '/api/apps/startup/toggle',
+    '/api/apps/quick-launch', '/api/apps/launch', '/api/apps/startup/toggle', '/api/apps/startup/settings',
     '/api/apps/leftovers/scan', '/api/apps/leftovers/delete', '/api/apps/leftovers/cancel',
     '/api/apps/removal-security', '/api/system/uninstall'
   ]);
@@ -368,14 +374,135 @@ function handleRequest(req, res) {
 
   // ---- Authenticated routes ----
 
-  // Windows-only surface: 501, never executed. (Checked before any other
-  // handling so a Windows-only path can never fall through to a Linux action.)
+  if(pathname.startsWith('/api/apps')){
+    const apps=linuxApplications||(linuxApplications=require('./linux-apps').createLinuxApps({stateDirectory:auth.configDir()}));
+    if(req.method==='GET'){
+      if(pathname==='/api/apps/icon'||pathname==='/api/apps/startup/icon'){const bytes=apps.icon(parsedUrl.searchParams.get('id'),pathname.includes('/startup/'));if(!bytes){json(res,404,{error:'Icon unavailable'});return;}res.writeHead(200,{'Content-Type':'image/png','X-Content-Type-Options':'nosniff','Cache-Control':'private, max-age=300'});res.end(bytes);return;}
+      if(pathname==='/api/apps/removal-security'){json(res,200,{requirePhoneRemovalPin:true,requirePin:true,native:false});return;}
+      if(pathname==='/api/apps'){json(res,200,apps.inventory(parsedUrl.searchParams.get('refresh')==='1'));return;}
+      if(pathname==='/api/apps/startup'){json(res,200,apps.startupInventory());return;}
+      if(pathname==='/api/apps/quick-launch'){json(res,200,apps.quickLaunch());return;}
+      if(pathname==='/api/apps/status'){json(res,200,{busy:false,blocked:false,job:null,platform:'linux'});return;}
+    }
+    if(req.method==='POST'&&['/api/apps/launch','/api/apps/quick-launch','/api/apps/startup/toggle'].includes(pathname)){
+      readBody(req,2048,(error,body)=>{
+        if(error){json(res,400,{error:'Invalid request'});return;}
+        if(!auth.getSession(req)){json(res,401,{error:'Authentication required'});return;}
+        try{
+          const data=JSON.parse(body);if(!data||typeof data!=='object'||Array.isArray(data)||!/^[a-f0-9]{64}$/.test(data.id||''))throw Error();
+          const allowed=pathname.endsWith('/launch')?['id']:pathname.endsWith('/toggle')?['id','enabled','pin','confirmation']:['id','action','locator'];if(Object.keys(data).some(k=>!allowed.includes(k)))throw Error();
+          if(pathname.endsWith('/launch')){apps.launchApp(data.id).then(result=>json(res,200,result)).catch(()=>json(res,409,{error:'Application changed or desktop launch unavailable'}));return;}
+          if(pathname.endsWith('/toggle')){
+            if(data.confirmation!=='change-startup')throw Error();
+            const rate=auth.loginRateState(clientIP);if(rate.state.lockedUntil>rate.now){json(res,429,{error:'Too many PIN attempts'});return;}
+            const cfg=auth.loadConfig();if(!cfg.healthy){json(res,503,{error:'Credential unavailable'});return;}
+            if(!auth.verifyPin(data.pin,cfg.credential)){const failure=auth.recordLoginFailure(clientIP);json(res,failure.lockedUntil>Date.now()?429:401,{error:'Current PIN required'});return;}
+            auth.clearLoginFailures(clientIP);json(res,200,apps.toggle(data.id,data.enabled));return;
+          }
+          json(res,200,apps.pin(data.action,data.id));
+        }catch{json(res,409,{error:'Invalid, changed or unsupported application request'});}
+      });return;
+    }
+    unsupported(res);return;
+  }
+
+  if (pathname.startsWith('/api/maintenance')) {
+    if (pathname === '/api/maintenance/status' && req.method === 'GET') {
+      json(res, 200, maintController.status());
+      return;
+    }
+    if (pathname === '/api/maintenance/run' && req.method === 'POST') {
+      if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) {
+        json(res, 415, { success: false, code: 'invalid-content-type', error: 'Content-Type must be application/json.' }); return;
+      }
+      readBody(req, 2048, async (err, body) => {
+        if (err) { json(res, err.message === 'too_large' ? 413 : 400, { success: false, error: 'Invalid request body.' }); return; }
+        let parsed; try { parsed = JSON.parse(body); } catch (_) { parsed = null; }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !parsed.action || typeof parsed.action !== 'string') {
+          json(res, 400, { success: false, error: 'Specify an action.' }); return;
+        }
+        const rate = auth.loginRateState(clientIP);
+        if (rate.state.lockedUntil > rate.now) {
+          json(res, 429, { success: false, error: 'Too many PIN attempts. Try again shortly.' }); return;
+        }
+        const cfg = auth.loadConfig();
+        if (!cfg.healthy) { json(res, 503, { success: false, error: 'Credential unavailable.' }); return; }
+        if (!parsed.pin || typeof parsed.pin !== 'string' || !auth.verifyPin(parsed.pin, cfg.credential)) {
+          const fail = auth.recordLoginFailure(clientIP);
+          json(res, fail.lockedUntil > Date.now() ? 429 : 401, { success: false, error: 'Current PIN required.' });
+          return;
+        }
+        auth.clearLoginFailures(clientIP);
+        try {
+          const outcome = await maintController.runAction(parsed.action);
+          json(res, 200, outcome);
+        } catch (e) {
+          json(res, e.code === 'busy' ? 409 : 400, { success: false, code: e.code || 'action-failed', error: e.message });
+        }
+      });
+      return;
+    }
+    unsupported(res);
+    return;
+  }
+
+  if (pathname.startsWith('/api/power')) {
+    if (pathname === '/api/power/status' && req.method === 'GET') {
+      json(res, 200, { ...powerControls.status(), requirePin: true, platform: 'linux' });
+      return;
+    }
+    if (pathname === '/api/power/run' && req.method === 'POST') {
+      if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) {
+        json(res, 415, { success: false, code: 'invalid-content-type', error: 'Content-Type must be application/json.' }); return;
+      }
+      readBody(req, 1024, async (err, body) => {
+        if (err) { json(res, err.message === 'too_large' ? 413 : 400, { success: false, error: 'Invalid request body.' }); return; }
+        let data; try { data = JSON.parse(body); } catch (_) { data = null; }
+        const validShape = data && typeof data === 'object' && !Array.isArray(data)
+          && [3, 4].includes(Object.keys(data).length)
+          && Object.keys(data).every(k => ['action', 'confirmed', 'requestId', 'pin'].includes(k))
+          && ['sleep', 'restart', 'shutdown'].includes(data.action)
+          && data.confirmed === true
+          && typeof data.requestId === 'string' && /^[a-f0-9-]{36}$/i.test(data.requestId);
+        if (!validShape) {
+          json(res, 400, { success: false, code: 'invalid-request', error: 'Confirm a fixed power action with its request identifier.' }); return;
+        }
+        if (!data.pin || typeof data.pin !== 'string') {
+          json(res, 401, { success: false, error: 'Current PIN required.' }); return;
+        }
+        const rate = auth.loginRateState(clientIP);
+        if (rate.state.lockedUntil > rate.now) {
+          json(res, 429, { success: false, error: 'Too many PIN attempts. Try again shortly.' }); return;
+        }
+        const cfg = auth.loadConfig();
+        if (!cfg.healthy) { json(res, 503, { success: false, error: 'Credential unavailable.' }); return; }
+        if (!auth.verifyPin(data.pin, cfg.credential)) {
+          const fail = auth.recordLoginFailure(clientIP);
+          json(res, fail.lockedUntil > Date.now() ? 429 : 401, { success: false, error: 'Current PIN required.' });
+          return;
+        }
+        auth.clearLoginFailures(clientIP);
+        try {
+          const prepared = await powerControls.prepare(data.action, data.requestId, session.id);
+          if (!prepared.duplicate) {
+            powerControls.commit(prepared.job, () => true);
+          }
+          json(res, 202, { accepted: true, completed: false, duplicate: prepared.duplicate, operation: prepared.job.public });
+        } catch (fail) {
+          json(res, 409, { success: false, code: fail.code || 'power-unavailable', error: fail.message });
+        }
+      });
+      return;
+    }
+    unsupported(res);
+    return;
+  }
+
+  // Windows-only surface: 501, never executed.
   if (pathname.startsWith('/api/apps')
-    || pathname.startsWith('/api/maintenance')
     || pathname.startsWith('/api/desktop')
     || pathname === '/api/updates'
     || pathname === '/api/system/uninstall'
-    || pathname.startsWith('/api/power')
     || pathname === '/api/temperature/enhanced'
     || pathname === '/api/temperature/enhanced/install') {
     unsupported(res);
@@ -489,7 +616,7 @@ function handleRequest(req, res) {
       check('server-port', 'Server port', 'supported', 'Preferred port: ' + preferredPort + '; active port: ' + (actualPort || preferredPort) + '; fallback required: ' + ((actualPort || preferredPort) !== 7331 ? 'yes' : 'no') + '.', actualPort || preferredPort, true),
       check('tailscale', 'Tailscale', tailscaleIP ? 'supported' : 'unavailable', tailscaleIP ? 'Tailscale connected; remote access available.' : 'Tailscale not connected; remote access needs Tailscale.'),
       check('cpu-temperature', 'CPU temperature', temp.cpu.available ? 'supported' : 'unavailable', temp.cpu.note || 'CPU temperature sensor status.', temp.cpu.temperatureC),
-      check('gpu', 'NVIDIA GPU', gpu.available ? 'supported' : 'unavailable', gpu.statusNote || (gpu.available ? 'NVIDIA hardware detected.' : 'NVIDIA hardware could not be confirmed.'), gpu.name),
+      check('gpu', 'GPU telemetry', gpu.available ? 'supported' : 'unavailable', gpu.statusNote || (gpu.available ? 'GPU sensor data detected.' : 'GPU sensor data unavailable.'), gpu.name),
       check('cpu-telemetry', 'CPU telemetry', cpuCount ? 'supported' : 'failed', 'Native CPU counters; logical processors: ' + cpuCount + '.', cpuCount, true),
       check('ram-telemetry', 'RAM telemetry', totalGB > 0 ? 'supported' : 'failed', 'Native system memory counters.', totalGB + ' GB', true),
       check('storage-telemetry', 'Storage telemetry', drives.length ? 'supported' : 'failed', drives.length ? 'Local filesystem capacity readable.' : 'Local filesystem capacity could not be read.', null, true),
@@ -518,7 +645,7 @@ function handleRequest(req, res) {
       networkCollectionStatus: metrics.getNetworkStatus(),
       drives,
       processCount: procCount, processesSampledAt: procManager.getSnapshot().sampledAt,
-      windowsOnlyEndpoints: ['/api/apps/*', '/api/maintenance/*', '/api/desktop/*', '/api/updates', '/api/system/uninstall', '/api/power/*', '/api/temperature/enhanced'],
+      windowsOnlyEndpoints: ['/api/apps/uninstall', '/api/apps/leftovers/*', '/api/desktop/*', '/api/updates', '/api/system/uninstall', '/api/temperature/enhanced'],
       generatedAt: new Date().toISOString(),
       overall: {
         status: requiredFailed ? 'failed' : 'supported',
@@ -547,7 +674,39 @@ function handleRequest(req, res) {
   }
 
   if (pathname === '/api/processes/tree' || pathname === '/api/processes/kill-tree') {
-    unsupported(res); // no /proc process-tree termination in this prototype
+    if (req.method !== 'POST') { json(res, 405, { success: false, error: 'POST required.' }); return; }
+    const leaseId = String(req.headers['x-monitor-lease'] || parsedUrl.searchParams.get('lease') || '');
+    const lease = leaseId ? monitoringLeases.get(leaseId) : null;
+    if (!lease || lease.sessionId !== session.id || lease.expiresAt <= Date.now() || !lease.profiles.has('processes')) {
+      json(res, 403, { success: false, code: 'profile-required', error: 'The processes monitoring profile is required.' }); return;
+    }
+    if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) {
+      json(res, 415, { success: false, code: 'invalid-content-type', error: 'Content-Type must be application/json.' }); return;
+    }
+    const isKillTree = pathname === '/api/processes/kill-tree';
+    readBody(req, 1024, async (err, body) => {
+      if (err) { json(res, err.message === 'too_large' ? 413 : 400, { success: false, code: 'invalid-request', error: 'Invalid request body.' }); return; }
+      let parsed; try { parsed = JSON.parse(body); } catch (_) { parsed = null; }
+      const validShape = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        && Object.keys(parsed).length === (isKillTree ? 4 : 3)
+        && Object.keys(parsed).every(k => ['pid', 'name', 'startedAt', ...(isKillTree ? ['confirmed'] : [])].includes(k))
+        && (!isKillTree || parsed.confirmed === true)
+        && Number.isSafeInteger(parsed.pid) && parsed.pid >= 1 && parsed.pid <= procManager.MAX_PID
+        && typeof parsed.name === 'string' && parsed.name.length >= 1 && parsed.name.length <= 128
+        && typeof parsed.startedAt === 'string' && PROCESS_IDENTITY_PATTERN.test(parsed.startedAt);
+      if (!validShape) { json(res, 400, { success: false, code: 'invalid-request', error: 'A valid PID, process name, and observed start time are required.' }); return; }
+      if (procManager.isStale()) {
+        json(res, 409, { success: false, code: 'stale-process', error: procManager.getSnapshot().sampledAt ? 'The process list is stale; refresh and try again.' : 'No process sample is available yet.' });
+        return;
+      }
+      const mode = isKillTree ? 'terminate' : 'preview';
+      const result = await procManager.processTree(parsed, mode, [process.pid, process.ppid, 1]);
+      if (isKillTree && result.success) {
+        for (const item of (result.results || [])) if (item.code === 'terminated' && typeof procManager.removeFromSnapshot === 'function') procManager.removeFromSnapshot(item.pid);
+        if (typeof procManager.sample === 'function') procManager.sample();
+      }
+      json(res, result.success ? 200 : 409, isKillTree ? { ...result, target: { pid: parsed.pid, name: parsed.name, startedAt: parsed.startedAt } } : result);
+    });
     return;
   }
 
@@ -621,9 +780,7 @@ function serveLoginPage(res) {
   try {
     const cfg = auth.loadConfig();
     const pinMode = cfg.healthy ? String(cfg.credential.length) : 'manual';
-    const html = fs.readFileSync(path.join(PUBLIC_DIR, 'login.html'), 'utf8')
-      .replace('<meta name="rovarin-pin-setup" content="false">', '<meta name="rovarin-pin-setup" content="false">')
-      .replace('<meta name="rovarin-pin-mode" content="manual">', `<meta name="rovarin-pin-mode" content="${pinMode}">`);
+    const html = renderLogin(fs.readFileSync(path.join(PUBLIC_DIR, 'login.html'), 'utf8'), { pinMode });
     res.setHeader('Content-Type', 'text/html; charset=UTF-8');
     res.setHeader('Cache-Control', 'no-store');
     res.writeHead(200);
@@ -691,6 +848,15 @@ function tryBind(index) {
   server.listen(port, '0.0.0.0', () => {
     const actual = server.address().port;
     actualPort = actual;
+    if(process.env.ROVARIN_LINUX_DESKTOP==='1'){
+      if(!auth.loadConfig().healthy){server.close();throw Error('Desktop service requires healthy private credentials');}
+      const state=path.join(auth.configDir(),'desktop-server.json'),temp=state+'.'+crypto.randomBytes(12).toString('hex')+'.tmp';
+      try{
+        try{const old=fs.lstatSync(state);if(!old.isFile()||old.isSymbolicLink()||old.nlink!==1||old.uid!==process.getuid())throw Error('Unsafe desktop state');}catch(e){if(e.code!=='ENOENT')throw e;}
+        const stat=fs.readFileSync('/proc/self/stat','utf8');
+        fs.writeFileSync(temp,JSON.stringify({pid:process.pid,port:actual,app:ROOT,startTicks:stat.slice(stat.lastIndexOf(')')+2).split(' ')[19]}),{flag:'wx',mode:0o600});fs.renameSync(temp,state);
+      }finally{try{fs.unlinkSync(temp);}catch{}}
+    }
     console.log(`Rovarin Linux prototype ${VERSION} listening on http://127.0.0.1:${actual} (platform linux, loopback/Tailscale only)`);
     // Only report a fallback when the default 7331-7335 candidate list was
     // actually tried. With an explicit PORT (including PORT=0 ephemeral) the

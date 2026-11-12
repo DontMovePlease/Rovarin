@@ -4,22 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
 
-const WATCHED_SERVER_FILES = new Set([
-  'power-controls.js', 'scripts/power-control.ps1', 'server.js', 'diagnostics.js', 'maintenance-service.js',
-  'server-lifecycle.js',
-  'pin-manager.js',
-  'process-termination.js', 'app-manager.js', 'leftover-manager.js',
-  'scripts/app-leftovers.ps1', 'scripts/app-leftovers.cs',
-  'scripts/terminate-process.ps1', 'scripts/process-tree.ps1', 'scripts/process-tree.cs', 'scripts/app-manager.ps1', 'scripts/app-uninstall.cs', 'scripts/app-metadata.cs', 'scripts/process-display.ps1', 'scripts/application-display.ps1',
-  'enhanced-support.js',
-  'uninstall-manager.js', 'update-manager.js', 'scripts/installed-update.ps1',
-  'maintenance.js',
-  'scripts/empty-recycle-bin.ps1', 'scripts/maintenance-elevated.cs',
-  'temperature-manager.js',
-  'cpu-temperature-provider.js',
-  'scripts/cpu-temperature-provider.ps1',
-  'process-stats.js'
-]);
+const { WATCHED_SERVER_FILES, readRuntimeMetadata } = require('../server-lifecycle');
 const RESTART_DEBOUNCE_MS = 450;
 const TERMINATION_TIMEOUT_MS = 5000;
 const HANDOFF_POLL_MS = 150;
@@ -74,35 +59,92 @@ async function terminateDashboardProcess(pid) {
   ], 10_000);
 }
 
+function assertDevelopmentEnvironment(projectDir) {
+  if (fs.existsSync(path.join(projectDir, 'installation.json'))) {
+    throw new Error('Development watcher cannot run in an installed production environment.');
+  }
+}
+
+function getWatcherDataDir(projectDir) {
+  try {
+    return require('../pin-manager').dataDirectory(projectDir);
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeWatcherPid(dataDir, pid) {
+  try {
+    if (dataDir && fs.existsSync(dataDir)) {
+      const pidFile = path.join(dataDir, 'dev-watcher.pid');
+      fs.writeFileSync(pidFile, String(pid), 'utf8');
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+function removeWatcherPid(dataDir, pid) {
+  try {
+    if (dataDir && fs.existsSync(dataDir)) {
+      const pidFile = path.join(dataDir, 'dev-watcher.pid');
+      if (fs.existsSync(pidFile)) {
+        const recorded = fs.readFileSync(pidFile, 'utf8').trim();
+        if (!pid || recorded === String(pid)) {
+          fs.unlinkSync(pidFile);
+        }
+      }
+    }
+  } catch (_) {}
+}
+
+async function inspectExistingWatcher(projectDir) {
+  if (process.platform !== 'win32') return { state: 'none' };
+  assertDevelopmentEnvironment(projectDir);
+  const dataDir = getWatcherDataDir(projectDir);
+  if (!dataDir) return { state: 'none' };
+
+  const pidFile = path.join(dataDir, 'dev-watcher.pid');
+  if (!fs.existsSync(pidFile)) return { state: 'none' };
+
+  let pid = null;
+  try {
+    const val = fs.readFileSync(pidFile, 'utf8').trim();
+    if (/^[1-9]\d*$/.test(val)) pid = Number(val);
+  } catch (error) {
+    if (error.code !== 'ENOENT') return { state: 'unsafe', reason: 'dev-watcher.pid could not be read' };
+  }
+
+  if (pid === null) {
+    removeWatcherPid(dataDir);
+    return { state: 'none' };
+  }
+  if (pid === process.pid) return { state: 'none' };
+
+  try {
+    const output = await runWindowsCommand('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction SilentlyContinue).CommandLine`
+    ], 5000);
+    const cmd = output.trim().toLowerCase();
+    if (!cmd || !cmd.includes('node') || !cmd.includes('dev-watcher.js')) {
+      removeWatcherPid(dataDir);
+      return { state: 'none' };
+    }
+    return { state: 'owned', pid };
+  } catch (_) {
+    return { state: 'unsafe', reason: 'existing watcher process could not be verified' };
+  }
+}
+
 async function inspectExistingDashboard(projectDir) {
   if (process.platform !== 'win32') return { state: 'unsafe', reason: 'the managed listener handoff is supported on Windows only' };
+  assertDevelopmentEnvironment(projectDir);
 
   const dataDir = require('../pin-manager').dataDirectory(projectDir);
-  const pidFile = path.join(dataDir, 'server.pid');
-  let pid = null;
-  let port = 7331;
-  try {
-    const value = fs.readFileSync(pidFile, 'utf8').trim();
-    if (/^[1-9]\d*$/.test(value)) pid = Number(value);
-  } catch (error) {
-    if (error.code !== 'ENOENT') return { state: 'unsafe', reason: 'server.pid could not be read' };
-  }
-
-  try {
-    const state = JSON.parse(fs.readFileSync(path.join(dataDir, 'server-state.json'), 'utf8'));
-    if (!Number.isSafeInteger(state.pid) || state.pid < 1 || (state.status === 'listening' && (!Number.isInteger(state.actualPort) || state.actualPort < 1 || state.actualPort > 65535))) return { state: 'unsafe', reason: 'runtime ownership/port metadata is invalid' };
-    if (pid !== null && pid !== state.pid) return { state: 'unsafe', reason: 'PID and runtime metadata disagree' };
-    pid = state.pid;
-    port = state.actualPort || state.preferredPort;
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return { state: 'unsafe', reason: 'runtime port is invalid' };
-  } catch (error) { if (error.code !== 'ENOENT') return { state: 'unsafe', reason: 'runtime metadata could not be read' }; }
-  if (pid === null) {
-    try {
-      const owner = JSON.parse(fs.readFileSync(path.join(dataDir, 'server.instance.json'), 'utf8'));
-      if (!Number.isSafeInteger(owner.pid) || owner.pid < 1) return { state: 'unsafe', reason: 'instance owner is invalid' };
-      pid = owner.pid;
-    } catch (error) { if (error.code !== 'ENOENT') return { state: 'unsafe', reason: 'instance ownership could not be read' }; }
-  }
+  const meta = readRuntimeMetadata(dataDir);
+  if (!meta.valid) return { state: 'unsafe', reason: meta.reason };
+  const { pid, port } = meta;
 
   let listeners;
   try { listeners = await getPortListenerPids(port, pid); }
@@ -133,13 +175,49 @@ async function inspectExistingDashboard(projectDir) {
 async function handoffExistingDashboard({
   projectDir = path.resolve(__dirname, '..'),
   inspect = () => inspectExistingDashboard(projectDir),
+  inspectWatcher = null,
   terminate = terminateDashboardProcess,
   wait = ms => new Promise(resolve => setTimeout(resolve, ms)),
   timeoutMs = TERMINATION_TIMEOUT_MS,
   pollMs = HANDOFF_POLL_MS,
   logger = console
 } = {}) {
+  assertDevelopmentEnvironment(projectDir);
   const deadline = Date.now() + timeoutMs;
+
+  const checkWatcher = inspectWatcher !== null
+    ? inspectWatcher
+    : (inspect === undefined || inspect.name === 'inspectExistingDashboard' || inspect.toString().includes('inspectExistingDashboard')
+        ? () => inspectExistingWatcher(projectDir)
+        : () => ({ state: 'none' }));
+
+  let watcherState = await checkWatcher();
+  if (watcherState.state === 'unsafe') {
+    logger.error(`[dev] Cannot safely take over the development watcher: ${watcherState.reason}. The existing process was left untouched.`);
+    return false;
+  }
+  if (watcherState.state === 'owned') {
+    logger.log(`[dev] Stopping the existing development watcher ${watcherState.pid} before starting development mode…`);
+    try { await terminate(watcherState.pid); }
+    catch (error) {
+      logger.error(`[dev] Could not stop existing development watcher ${watcherState.pid} (${error.message}); no replacement was started.`);
+      return false;
+    }
+    while (Date.now() < deadline) {
+      await wait(pollMs);
+      watcherState = await checkWatcher();
+      if (watcherState.state === 'none') break;
+      if (watcherState.state === 'unsafe') {
+        logger.error('[dev] Watcher state became unsafe during handoff; no replacement was started.');
+        return false;
+      }
+    }
+    if (watcherState.state !== 'none') {
+      logger.error(`[dev] Could not confirm existing development watcher stopped; no replacement was started.`);
+      return false;
+    }
+  }
+
   let state = await inspect();
   if (state.state === 'none') return true;
   if (state.state === 'unsafe') {
@@ -193,12 +271,20 @@ function createDevWatcher({
   spawnServer = (scriptPath, cwd) => spawn(process.execPath, [scriptPath], { cwd, stdio: 'inherit', windowsHide: false }),
   logger = console
 } = {}) {
+  assertDevelopmentEnvironment(projectDir);
   let serverChild = null;
   let debounceTimer = null;
   let restarting = false;
   let queuedRestart = false;
   let stopping = false;
   const watchers = [];
+
+  const dataDir = getWatcherDataDir(projectDir);
+  if (dataDir && fs.existsSync(dataDir)) {
+    writeWatcherPid(dataDir, process.pid);
+  }
+  const exitCleanup = () => { if (dataDir) removeWatcherPid(dataDir, process.pid); };
+  process.on('exit', exitCleanup);
 
   function launchServer() {
     if (stopping || serverChild) return;
@@ -309,8 +395,12 @@ function createDevWatcher({
   async function close() {
     if (stopping) return;
     stopping = true;
+    process.removeListener('exit', exitCleanup);
     clearTimeout(debounceTimer);
     watchers.forEach(watcher => watcher.close());
+    if (dataDir) {
+      removeWatcherPid(dataDir, process.pid);
+    }
     if (serverChild) {
       const child = serverChild;
       const stopped = await stopChild(child);
@@ -344,4 +434,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createDevWatcher, handoffExistingDashboard, inspectExistingDashboard, WATCHED_SERVER_FILES, RESTART_DEBOUNCE_MS };
+module.exports = { createDevWatcher, handoffExistingDashboard, inspectExistingDashboard, inspectExistingWatcher, assertDevelopmentEnvironment, WATCHED_SERVER_FILES, RESTART_DEBOUNCE_MS };

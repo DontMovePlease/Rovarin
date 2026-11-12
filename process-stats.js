@@ -29,19 +29,19 @@ function normalizeProcessRecords(records, previousCpuTimes, sampledAt, logicalPr
     const cpuSeconds = parseCpuSeconds(record.CPU);
     const ramRaw = record.WorkingSet64;
     const ramBytes = typeof ramRaw === 'number' || (typeof ramRaw === 'string' && ramRaw.trim() !== '') ? Number(ramRaw) : NaN;
-    if (!Number.isFinite(ramBytes) || ramBytes < 0) continue;
+    const ramMB = Number.isFinite(ramBytes) && ramBytes >= 0 ? Math.round((ramBytes / (1024 ** 2)) * 10) / 10 : null;
     const startedAt = typeof record.StartedAt === 'string' && record.StartedAt ? record.StartedAt : null;
     const currentIdentity = { pid, name, startedAt };
     const previous = previousCpuTimes.get(pid);
     const sameProcess = cpuSeconds !== null && startedAt && isSameProcessInstance(currentIdentity, previous) && cpuSeconds >= previous.cpuSeconds;
-    const cpuPercent = cpuSeconds === null || !startedAt ? null : sameProcess
-      ? calculateCpuPercent(cpuSeconds, previous.cpuSeconds, sampledAt - previous.sampledAt, logicalProcessors)
-      : 0;
+    const cpuPercent = (cpuSeconds === null || !startedAt || !sameProcess)
+      ? null
+      : calculateCpuPercent(cpuSeconds, previous.cpuSeconds, sampledAt - previous.sampledAt, logicalProcessors);
     if (cpuSeconds !== null && startedAt) nextCpuTimes.set(pid, { ...currentIdentity, cpuSeconds, sampledAt });
-    processes.push({ name, pid, cpuPercent, ramMB: Math.round((ramBytes / (1024 ** 2)) * 10) / 10, startedAt });
+    processes.push({ name, pid, cpuPercent, ramMB, startedAt });
   }
 
-  processes.sort((a, b) => ((b.cpuPercent ?? -1) - (a.cpuPercent ?? -1)) || (b.ramMB - a.ramMB));
+  processes.sort((a, b) => ((b.cpuPercent ?? -1) - (a.cpuPercent ?? -1)) || ((b.ramMB ?? -1) - (a.ramMB ?? -1)));
   return { processes, nextCpuTimes };
 }
 

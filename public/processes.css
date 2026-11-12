@@ -111,3 +111,73 @@
 #processesActions .processes-kill-status:empty {display:none}
 #processesActions .processes-advanced[open] {max-height:35dvh;overflow:auto}
 #processesPage.has-process-actions .processes-table-wrap {padding-bottom:calc(180px + env(safe-area-inset-bottom,0px))}
+
+/* Compact single-row header bar for Processes & temporary expandable view */
+#processesPage .processes-header-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-shrink: 0;
+}
+#processesPage .processes-search {
+  flex: 1 1 200px;
+  margin: 0;
+}
+#processesPage .processes-search input {
+  min-height: 38px;
+  padding: 6px 10px;
+  border-radius: 9px;
+}
+#processesPage .processes-toolbar {
+  margin: 0;
+  gap: 8px;
+  flex: 0 1 auto;
+}
+#processesPage .processes-freeze {
+  min-height: 38px;
+  padding: 0 10px;
+}
+#processesPage.is-view-expanded {
+  height: calc(100dvh - 76px) !important;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+#processesPage.is-view-expanded .processes-table td,
+#processesPage.is-view-expanded .processes-table th {
+  height: 36px;
+  padding-block: 5px;
+}
+@media (max-width: 699px) {
+  #processesPage .processes-search {
+    flex-basis: 100%;
+  }
+  #processesPage .processes-search input {
+    font-size: 16px;
+    min-height: 40px;
+  }
+  #processesPage .processes-toolbar {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  #processesPage .processes-updated {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #processesPage .processes-freeze {
+    min-height: 38px;
+    padding: 0 8px;
+  }
+  html:not(.native-shell) #processesPage.is-view-expanded {
+    height: 100% !important;
+    padding: 8px 10px;
+  }
+}
+
+

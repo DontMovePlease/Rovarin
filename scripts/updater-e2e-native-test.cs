@@ -22,7 +22,9 @@
                 await view.CoreWebView2.ExecuteScriptAsync("document.getElementById('checkUpdates').click()");
                 await FixtureWait("!!lastUpdateStatus && lastUpdateStatus.available && lastUpdateStatus.state==='available' && !lastUpdateStatus.busy && !document.getElementById('installUpdate').disabled", 30);
                 await view.CoreWebView2.ExecuteScriptAsync("document.getElementById('installUpdate').click()");
-                await FixtureWait("!!lastUpdateStatus && lastUpdateStatus.state==='failed' && !lastUpdateStatus.busy", 210);
+                await FixtureWait("!!lastUpdateStatus && lastUpdateStatus.state==='failed' && !lastUpdateStatus.busy && document.getElementById('updateStatus').textContent===lastUpdateStatus.message", 210);
+                await Task.Delay(1500);
+                if (await view.CoreWebView2.ExecuteScriptAsync("document.getElementById('updateStatus').textContent===lastUpdateStatus.message && lastUpdateStatus.message.includes('Download or verification failed')") != "true") throw new IOException("Fixture failure message was replaced.");
                 await view.CoreWebView2.ExecuteScriptAsync("window.__fixtureMetrics=null;void fetch('/api/metrics').then(r=>window.__fixtureMetrics=r.status)");
                 await FixtureWait("window.__fixtureMetrics===200", 10);
                 File.WriteAllText(@"REPORT_PATH", json.Serialize(new { phase = "failure-tested", failureRecovery = true }));

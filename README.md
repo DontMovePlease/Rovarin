@@ -37,7 +37,7 @@ Rovarin is a Windows PC monitoring and system-management app. Check CPU, GPU, me
 
 Create and confirm your own six-digit PIN in native setup, change it in Settings, or use local Windows-owner Recovery. Simplified is the default desktop theme; the original Liquid Glass appearance remains selectable. Theme and graphics quality are separate preferences.
 
-Rovarin has a new astral-inspired Liquid Glass interface across Windows and mobile: translucent surfaces, optical highlights and refraction on supported graphics, with adaptive Auto, Full, Balanced and inexpensive Minimal modes.
+The optional Liquid Glass desktop theme and existing mobile appearance use an astral-inspired visual system: translucent surfaces, optical highlights and refraction on supported graphics, with adaptive Auto, Full, Balanced and inexpensive Minimal modes.
 
 Mobile navigation is smoother, with a stationary sidebar revealed beneath the dashboard, responsive swipe gestures and a floating glass header. Login becomes usable before optional graphics load, and connection failures provide clear feedback.
 
@@ -49,7 +49,7 @@ Mobile navigation is smoother, with a stationary sidebar revealed beneath the da
 | Area | Features |
 | --- | --- |
 | Overview | CPU and per-core load, RAM, storage capacity, network throughput, latency, and uptime |
-| GPU | NVIDIA utilization, VRAM and temperature when nvidia-smi is available |
+| GPU | NVIDIA, AMD and Intel utilization, VRAM and temperature when supported providers are available |
 | Focused views | Larger graphs and faster sampling only for the active view |
 | Processes | Live application groups, search, sorting, Pause/Resume, confirmed End task and separate verified process-tree control |
 | Applications | Quick Launch with app discovery/pinning, Startup Apps management, installed app search, List/Grid views, readable sizes, reviewed uninstall and optional leftover cleanup |
@@ -100,7 +100,7 @@ Vendor uninstallers may require interaction or local Windows administrator appro
 
 ## Install on Windows
 
-Current version: 0.5.0 Experimental Alpha
+Current version: 0.6.0 Experimental Alpha (prerelease)
 
 
 
@@ -127,7 +127,7 @@ Open native **Settings → Administrator Maintenance → Enable** and approve Wi
 - The installer remains unsigned; no publisher-signing assurance is claimed.
 - Power requests use Windows permissions, do not force-close unsaved applications and cannot remotely wake a sleeping or shut-down PC.
 
-Microsoft Bing AppX removal hangs on the test PC, including direct Windows removal. Third-party Windows service controls remain read-only and deferred. Physical iPhone acceptance of recent navigation/progress/action-bar changes remains pending, and Safari scroll-to-swipe takeover is unresolved. The installer is unsigned.
+Microsoft Bing AppX removal previously hung on the test PC, including direct Windows removal; this is a scoped observation rather than a universal compatibility claim. Third-party Windows service controls remain read-only and deferred. Physical iPhone acceptance of recent navigation/progress/action-bar changes remains pending, and Safari scroll-to-swipe takeover is unresolved. The installer is unsigned.
 
 ### Upgrading an earlier installation
 
@@ -158,9 +158,9 @@ The address uses your PC’s detected Tailscale IPv4 address and active Rovarin 
 If Tailscale is missing or disconnected, Setup explains the next step. You can finish and use Rovarin locally first. Do not forward this HTTP port through a router or expose it publicly.
 
 
-### Custom PINs — v0.6.0 development
+### Custom PINs — v0.6.0
 
-This source branch adds the Personalization Update; the public download links still point to published releases. New installations use a single **Create your PIN** screen in the native Windows app. Choose and confirm six digits, including leading zeros. Remote browsers cannot enroll a PC. Existing PINs, settings and desktop trust survive upgrades; supported legacy PIN lengths continue working until changed.
+The published Personalization Update includes custom PIN setup and management. New installations use a single **Create your PIN** screen in the native Windows app. Choose and confirm six digits, including leading zeros. Remote browsers cannot enroll a PC. Existing PINs, settings and desktop trust survive upgrades; supported legacy PIN lengths continue working until changed.
 
 Use native **Settings → Security → Change PIN**, verify your current PIN, and choose a new six-digit PIN. Other devices must sign in again. For a forgotten PIN, open **Rovarin Setup and PIN Recovery** from Windows Start and choose **Reset PIN**. Source users can open the same utility with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1`. No PIN is passed on the command line.
 
@@ -169,9 +169,9 @@ Recovery is available to the Windows account that owns the CurrentUser-DPAPI cre
 ## PIN, desktop behavior and recovery
 
 
-- Published v0.5.0 uses generated six-digit PINs and retains supported legacy PINs. v0.6.0 development uses native six-digit user enrollment as described above. Startup never silently replaces credentials.
+- Published v0.6.0 uses native six-digit user enrollment as described above and retains supported legacy PINs on upgrade. Startup never silently replaces credentials.
 - Valid sessions last up to 90 days, so normal use does not require daily login. Sessions are in memory; a backend restart requires sign-in again.
-- **Settings → Security → Lock** revokes access. Published v0.5.0 native Settings provides **Generate New PIN**; v0.6.0 development uses **Change PIN** with current-PIN verification. PIN changes sign out all devices.
+- **Settings → Security → Lock** revokes access. Native Settings provides **Change PIN** with current-PIN verification. PIN changes sign out all devices.
 - PIN prompts on the native desktop are on by default. You may explicitly disable them for this Windows account; other devices still require the PIN. Native sign-in uses Windows-protected trust and ordinary revocable sessions, not unauthenticated APIs.
 - Forgotten PIN? Open **Rovarin Setup and PIN Recovery** from the Start Menu. Recovery is local only; there is no remote PIN recovery endpoint.
 - Alt+F4/system close hides to the tray. **Exit Desktop App** or the native top-right X closes only the shell. The backend remains available remotely. Minimized/hidden clients stop requesting dashboard telemetry.
@@ -209,7 +209,7 @@ Tailscale reachability is not authentication. Rovarin currently serves HTTP; Tai
 **Security findings:** use [private vulnerability reporting](https://github.com/DontMovePlease/Rovarin/security/advisories/new), not a public issue containing exploit details. Include the affected version, impact and a minimal reproduction without credentials. Security review covers this experimental candidate; there is no guaranteed response time or established older-version support.
 
 
-The installer contains application/runtime files and required third-party assets/licenses. It does **not** contain a developer PIN, local configuration, credentials, private Tailscale address, logs, runtime state or AGENTS.md. Published installers provision per-user credentials; v0.6.0 development instead prepares native user enrollment. Neither includes a developer credential.
+The installer contains application/runtime files and required third-party assets/licenses. It does **not** contain a developer PIN, local configuration, credentials, private Tailscale address, logs, runtime state or AGENTS.md. The v0.6.0 Windows installer prepares native user enrollment; the user creates credentials on first launch. No developer credential is included.
 
 
 ## Upgrade or uninstall
@@ -236,25 +236,29 @@ Still outstanding: broader clean Windows Home/Pro and standard/admin coverage, p
 Please [report reproducible bugs](https://github.com/DontMovePlease/Rovarin/issues/new/choose) with your Windows version, Rovarin version, steps and a reviewed **Diagnostics → Copy report**. Remove private addresses and other personal details. Never post PINs, cookies or credentials. Share security vulnerabilities through [private reporting](https://github.com/DontMovePlease/Rovarin/security/advisories/new).
 
 
-## Desktop themes in v0.6.0 development
+## Desktop themes in v0.6.0
 
 Simplified is the default desktop theme and creates no graphics renderer. Settings > Appearance offers the original v0.5.0 Liquid Glass materials/background as an optional theme. Theme and Auto/Full/Balanced/Minimal graphics quality are separate per-device preferences. Changes apply immediately and persist; Simplified releases glass graphics resources. Mobile styling/gestures remain shared and unchanged.
 
-## Experimental Linux development
+## Experimental Linux preview
 
-The planned v0.6.0 prerelease includes a separate portable Linux preview; the public Windows download above remains v0.5.0 until publication. Extract the Linux archive, install/use Node.js 24.x, then run `node linux/rovarin.js setup` and `node linux/rovarin.js start` from its folder. Open the printed browser address; Ctrl+C stops it and the same start command restarts it. See [Linux instructions](linux/README.md) for supported monitoring/Processes/Diagnostics, Windows-only limitations and manual removal. The new shared-theme Linux archive passed fresh clean Ubuntu acceptance; it does not rely on acceptance of the older archive. physical iPhone-over-Tailscale, broader GPU/temperature hardware and live disallowed-client rejection remain unverified.
+The published v0.6.0 prerelease includes a separate [portable Linux preview](https://github.com/DontMovePlease/Rovarin/releases/download/v0.6.0/rovarin-0.6.0-linux-preview.tar.gz). It has no graphical installer or automatic updater; run it as your normal user without sudo. Extract the Linux archive, install/use Node.js 24.x, then run `node linux/rovarin.js setup` and `node linux/rovarin.js start` from its folder. Open the printed browser address; Ctrl+C stops it and the same start command restarts it. See [Linux instructions](linux/README.md) for supported monitoring/Processes/Diagnostics, Windows-only limitations and manual removal. The new shared-theme Linux archive passed fresh clean Ubuntu acceptance; it does not rely on acceptance of the older archive. Physical iPhone-over-Tailscale, broader GPU/temperature hardware and live disallowed-client rejection remain unverified.
 
 ## Inspect, build or modify
 
 
 The current source is available for inspection and noncommercial modifications. Runtime, frontend and native-shell sources are in this repository; no separate desktop dashboard is maintained. Personal planning and coding-agent documents are kept local.
 
+Source may include newer branding and development improvements than the published v0.6.0 downloads. Those downloads remain the exact verified release; newer source is not automatically a new accepted package.
+
 
 <details>
 <summary>Development, testing and contributions</summary>
 
 
-On Windows with a supported Node LTS installed, run `npm run dev` from the source checkout. Leave its watcher running while editing; do not also start the normal native/background launcher. Configuration/PIN and mutable development state remain private and untracked. Schema-2 checkouts use the unsynced per-checkout directory under `%USERPROFILE%\.rovarin-development`; schema 1 retains explicit legacy AppData compatibility. Browser access to the printed localhost address is available for development, with ordinary authentication. After building the packaging payload, `Desktop Dashboard.bat` builds/opens the native source preview.
+On Windows with a supported Node LTS installed, run `npm run dev` from the source checkout for live source reloading. Leave its watcher running while editing; it watches server modules and scripts, automatically restarting the backend on changes. The web interface and running native desktop preview automatically detect backend and frontend updates via lease heartbeats and live source revision hashing without requiring release rebuilds.
+
+To open the native desktop shell against the live checkout, run `powershell -ExecutionPolicy Bypass -File scripts/desktop-preview.ps1` (or use `Desktop Dashboard.bat`). The preview shell reuses companion setup artifacts for fast restarts (~1-2s), enables browser accelerator keys (F5, Ctrl+R) and DevTools (F12), and detects backend freshness on startup and reopen. Configuration/PIN and mutable development state remain private and untracked under `%USERPROFILE%\.rovarin-development`. Browser access to the printed localhost address is also available for development with ordinary authentication.
 
 
 Browser regressions use optional external Playwright tooling, not an application dependency. If `playwright` is not locally resolvable, set `ROVARIN_PLAYWRIGHT_PATH` to the absolute directory of an existing Playwright package for that test session. Then run `node scripts/system-management-ui-smoke-test.js` and `node scripts/mobile-auth-smoke-test.js`. Their default Windows browser is installed Microsoft Edge; the optional WebKit run additionally requires matching WebKit browser binaries.
@@ -289,7 +293,7 @@ npm run test:packaging
 Packaging tests require generated assets and working Windows ownership queries. Installer tests use an isolated fixture and refuse an existing installed product/owned shortcut set. Never terminate unrelated processes, install drivers for fixtures or weaken assertions. Use a clean VM when a real installation is present.
 
 
-`npm run build:installer` stages the allowlisted payload and verified upstream assets. `npm run release:verify` requires all eight suites plus guarded real lifecycle checks before promoting hash-matched installer bytes to `publish/`. Failed or stale checks preserve the previous release. Upload only the verified installer/checksum/secret-free metadata as release assets; never upload the entire working folder, local Markdown documents (except this README), credentials or personal Git history. Required third-party licenses/notices remain public. Inno tooling is separate from runtime; review its applicable commercial tooling terms if distribution changes.
+`npm run build:installer` stages the allowlisted payload and verified upstream assets. `npm run release:verify` requires all eight suites plus guarded real lifecycle checks before promoting hash-matched installer bytes to `publish/`. Failed or stale checks preserve the previous release. For v0.6.0 the reviewed release has five assets: the Windows installer/checksum/release metadata and accepted Linux archive/checksum. Upload only the reviewed verified assets; never upload the entire working folder, private Markdown documents, credentials or personal Git history. Required third-party licenses/notices remain public. Inno tooling is separate from runtime; review its applicable commercial tooling terms if distribution changes.
 
 
 </details>

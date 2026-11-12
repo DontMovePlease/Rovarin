@@ -673,3 +673,357 @@
 .maint-toast.cancelled .maint-toast-icon { color: var(--text-secondary); background: var(--bg-subtle); }
 .maint-toast.partial { border-color: rgba(245, 158, 11, 0.4); }
 .maint-toast.partial .maint-toast-icon { color: #fbbf24; background: rgba(245, 158, 11, 0.2); }
+
+/* ── Top-Right PC Boost Button & Floating Boost HUD ───────────────────────── */
+
+#liquidOverviewSettings.liquid-orbit {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: auto;
+  min-width: 40px;
+  height: 38px;
+  flex: 0 0 auto;
+  padding: 0 14px 0 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(154, 224, 255, 0.34);
+  background: linear-gradient(135deg, rgba(139, 222, 237, 0.2), rgba(167, 146, 241, 0.16));
+  box-shadow: inset 0 1px 0 rgba(240, 253, 255, 0.28), 0 6px 18px rgba(2, 8, 22, 0.32);
+  transform: none;
+  color: #e8f7ff;
+  overflow: hidden;
+  transition: transform 0.2s cubic-bezier(.2,.8,.2,1), border-color 0.22s ease, background 0.22s ease, box-shadow 0.22s ease;
+}
+
+#liquidOverviewSettings.liquid-orbit:hover:not(:disabled) {
+  transform: translateY(-1px) scale(1.02);
+  border-color: rgba(154, 236, 255, 0.62);
+  background: linear-gradient(135deg, rgba(139, 222, 237, 0.3), rgba(167, 146, 241, 0.24));
+  box-shadow: inset 0 1px 0 rgba(245, 254, 255, 0.42), 0 8px 24px rgba(110, 214, 244, 0.26);
+}
+
+#liquidOverviewSettings.liquid-orbit:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+}
+
+#liquidOverviewSettings.liquid-orbit svg {
+  width: 21px;
+  height: 21px;
+  flex-shrink: 0;
+  transition: transform 0.45s cubic-bezier(.2,.8,.2,1), color 0.25s ease;
+}
+
+#liquidOverviewSettings.liquid-orbit:hover:not(:disabled) svg {
+  transform: rotate(18deg) scale(1.06);
+}
+
+.boost-orbit-ring {
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  background: conic-gradient(from 0deg, transparent 0%, rgba(110, 231, 249, 0.85) 28%, rgba(167, 139, 250, 0.85) 55%, transparent 78%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  padding: 2px;
+}
+
+.boost-btn-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.08;
+  text-align: left;
+}
+
+.boost-btn-label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #f2fbff;
+  white-space: nowrap;
+}
+
+.boost-btn-sub {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-primary, #8bdeed);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+#liquidOverviewSettings.liquid-orbit.is-boosting {
+  border-color: rgba(139, 222, 237, 0.72);
+  background: linear-gradient(135deg, rgba(139, 222, 237, 0.28), rgba(193, 171, 248, 0.22));
+  box-shadow: 0 0 24px rgba(139, 222, 237, 0.30), inset 0 1px 0 rgba(244, 253, 255, 0.36);
+  cursor: progress;
+  opacity: 1;
+}
+
+#liquidOverviewSettings.liquid-orbit.is-boosting .boost-orbit-ring {
+  opacity: 1;
+  animation: boost-ring-spin 1.05s linear infinite;
+}
+
+#liquidOverviewSettings.liquid-orbit.is-boosting svg {
+  color: var(--accent-primary, #8bdeed);
+  animation: boost-icon-orbit 0.9s cubic-bezier(.45,.05,.55,.95) infinite;
+}
+
+#liquidOverviewSettings.liquid-orbit.is-boost-complete {
+  border-color: rgba(164, 230, 252, 0.56);
+  background: linear-gradient(135deg, rgba(139, 222, 237, 0.24), rgba(193, 171, 248, 0.18));
+  box-shadow: 0 0 20px rgba(139, 222, 237, 0.22), inset 0 1px 0 rgba(242, 252, 255, 0.34);
+}
+
+#liquidOverviewSettings.liquid-orbit.is-boost-complete svg {
+  color: var(--accent-primary, #8bdeed);
+}
+
+.overview-ram-card.is-boosting-ram {
+  border-color: rgba(139, 222, 237, 0.52) !important;
+  box-shadow: 0 0 26px rgba(139, 222, 237, 0.18), var(--shadow-card) !important;
+}
+
+@keyframes boost-ring-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes boost-icon-orbit {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(180deg) scale(1.12); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+
+/* Floating PC Manager-style Boost HUD */
+.boost-hud-card {
+  position: fixed;
+  top: 62px;
+  right: 22px;
+  z-index: 1250;
+  width: min(356px, calc(100vw - 24px));
+  padding: 16px 18px;
+  border-radius: var(--radius-card, 20px);
+  border: 1px solid var(--glass-border, rgba(196, 226, 252, 0.24));
+  background: var(--surface-content, linear-gradient(150deg, rgba(20, 34, 54, 0.94), rgba(10, 18, 32, 0.97)));
+  box-shadow: var(--glass-shadow, inset 0 1px 0 rgba(242, 252, 255, 0.28), 0 20px 48px rgba(2, 7, 18, 0.58));
+  backdrop-filter: blur(24px) saturate(1.25);
+  -webkit-backdrop-filter: blur(24px) saturate(1.25);
+  color: var(--text-primary);
+  overflow: hidden;
+  transform: translateY(-8px) scale(0.97);
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.22s cubic-bezier(.2,.8,.2,1), border-color 0.22s ease;
+}
+
+.boost-hud-card.is-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.boost-hud-card.is-complete {
+  border-color: rgba(164, 230, 252, 0.42);
+  background: var(--surface-content, linear-gradient(150deg, rgba(22, 37, 58, 0.95), rgba(11, 20, 35, 0.97)));
+}
+
+.boost-hud-glow {
+  position: absolute;
+  inset: -40% -20% auto;
+  height: 110px;
+  background: radial-gradient(circle, rgba(139, 222, 237, 0.22), rgba(193, 171, 248, 0.08) 48%, transparent 72%);
+  pointer-events: none;
+}
+
+.boost-hud-card.is-complete .boost-hud-glow {
+  background: radial-gradient(circle, rgba(139, 222, 237, 0.26), rgba(193, 171, 248, 0.12) 50%, transparent 74%);
+}
+
+.boost-hud-top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+.boost-hud-gauge-wrap {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  display: grid;
+  place-items: center;
+}
+
+.boost-hud-gauge {
+  width: 52px;
+  height: 52px;
+  transform: rotate(-90deg);
+}
+
+.boost-hud-track {
+  fill: none;
+  stroke: rgba(186, 224, 255, 0.14);
+  stroke-width: 4.5;
+}
+
+.boost-hud-arc {
+  fill: none;
+  stroke: var(--accent-primary, #8bdeed);
+  stroke-width: 4.5;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.45s cubic-bezier(.2,.8,.2,1), stroke 0.25s ease;
+}
+
+.boost-hud-card.is-running .boost-hud-gauge {
+  animation: boost-ring-spin 1.15s linear infinite;
+}
+
+.boost-hud-card.is-complete .boost-hud-arc {
+  stroke: var(--accent-primary, #8bdeed);
+}
+
+.boost-hud-card.is-failed .boost-hud-arc {
+  stroke: var(--state-danger, #ffa4b7);
+}
+
+.boost-hud-core-icon {
+  position: absolute;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--accent-primary, #8bdeed);
+  line-height: 1;
+}
+
+.boost-hud-card.is-complete .boost-hud-core-icon {
+  color: var(--accent-primary, #8bdeed);
+  animation: boost-pop 0.34s cubic-bezier(.2,1.3,.4,1);
+}
+
+@keyframes boost-pop {
+  0% { transform: scale(0.5); opacity: 0.3; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.boost-hud-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.boost-hud-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary, #f1f5ff);
+  line-height: 1.2;
+}
+
+.boost-hud-step {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 3px;
+  line-height: 1.35;
+}
+
+.boost-hud-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 0;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.boost-hud-close:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.boost-hud-metrics {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.boost-hud-metric {
+  padding: 10px 12px;
+  border-radius: 13px;
+  border: 1px solid var(--border-card, rgba(196, 226, 252, 0.16));
+  background: linear-gradient(145deg, rgba(182, 216, 248, 0.08), rgba(118, 154, 204, 0.03));
+  box-shadow: inset 0 1px 0 rgba(238, 250, 255, 0.09);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.boost-hud-card.is-complete .boost-hud-metric {
+  border-color: rgba(164, 230, 252, 0.26);
+  background: linear-gradient(145deg, rgba(139, 222, 237, 0.12), rgba(193, 171, 248, 0.06));
+}
+
+.boost-hud-metric-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.boost-hud-metric-val {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text-primary, #f1f5ff);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.boost-hud-card.is-complete .boost-hud-metric-val {
+  color: var(--accent-primary, #8bdeed);
+}
+
+.boost-hud-metric-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 699px) {
+  #liquidOverviewSettings.liquid-orbit {
+    height: 34px;
+    padding: 0 11px 0 9px;
+    gap: 6px;
+  }
+  #liquidOverviewSettings.liquid-orbit svg {
+    width: 18px;
+    height: 18px;
+  }
+  .boost-btn-label {
+    font-size: 12px;
+  }
+  .boost-btn-sub {
+    display: none;
+  }
+  .boost-hud-card {
+    width: auto;
+    left: 12px;
+    right: 12px;
+  }
+}
+
+/* PC Boost is icon-only in every state; explanatory detail stays in its HUD. */
+#liquidOverviewSettings .boost-btn-copy { display:none!important; }
+#liquidOverviewSettings { min-width:44px!important; width:44px!important; min-height:44px; padding:10px!important; }
+#liquidOverviewSettings.is-boost-suggested:not(.is-boosting) { border-color:#d7ae57; box-shadow:0 0 0 2px rgba(215,174,87,.15); }
+#liquidOverviewSettings.is-boost-suggested::after { content:'•'; position:absolute; right:2px; top:-4px; color:#f3d28a; font-size:16px; }
+@media(prefers-reduced-motion:no-preference){
+ #liquidOverviewSettings.is-boost-suggested { animation:boost-suggestion-once 650ms ease-out 2; }
+ @keyframes boost-suggestion-once {50%{box-shadow:0 0 0 4px rgba(215,174,87,.18)}}
+}

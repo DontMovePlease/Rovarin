@@ -27,10 +27,46 @@ async function checkDashboardUpdate() {
   const timeout = setTimeout(() => controller.abort(), 5000);
   try {
     const response = await fetch('/', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
-    reloadForDashboardUpdate(response);
+    if (reloadForDashboardUpdate(response)) return;
+    updateDevFreshnessIndicator(response.headers.get('X-Rovarin-Dev-Stale') === '1');
     await response.body?.cancel();
   } catch (_) { /* Offline phones retry on the next resume or lease heartbeat. */ }
   finally { clearTimeout(timeout); dashboardRevisionCheckInFlight = false; }
+}
+
+let devFreshnessBanner = null;
+function updateDevFreshnessIndicator(isStale) {
+  if (!isStale) {
+    if (devFreshnessBanner) {
+      devFreshnessBanner.remove();
+      devFreshnessBanner = null;
+    }
+    return;
+  }
+  if (!devFreshnessBanner) {
+    devFreshnessBanner = document.createElement('div');
+    devFreshnessBanner.id = 'devFreshnessBanner';
+    devFreshnessBanner.className = 'dev-freshness-banner';
+    devFreshnessBanner.innerHTML = `
+      <span class="dev-freshness-icon" aria-hidden="true">&#9888;</span>
+      <span class="dev-freshness-text">Source modified &middot; Backend restart required</span>
+      <button type="button" class="dev-freshness-action" id="devRestartBtn">Restart</button>
+    `;
+    document.body.appendChild(devFreshnessBanner);
+    devFreshnessBanner.querySelector('#devRestartBtn')?.addEventListener('click', async () => {
+      const btn = devFreshnessBanner?.querySelector('#devRestartBtn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Restarting...'; }
+      try {
+        await fetch('/api/desktop/dev-restart', {
+          credentials: 'same-origin',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'restart' })
+        });
+      } catch (_) {}
+      setTimeout(() => window.location.reload(), 1500);
+    });
+  }
 }
 try { localStorage.removeItem('auth_pin'); } catch (_) {}
 const CPU_DETAIL_WINDOW_MS = 60000;
@@ -974,6 +1010,7 @@ async function heartbeatMonitoringLease() {
       body: JSON.stringify({ action: 'heartbeat', leaseId: monitoringLeaseId })
     });
     if (reloadForDashboardUpdate(res)) return;
+    updateDevFreshnessIndicator(res.headers.get('X-Rovarin-Dev-Stale') === '1');
     if (res.status === 410) {
       closeDashboardConnections();
       stopLeaseHeartbeat();
@@ -1341,51 +1378,48 @@ document.getElementById('healthCard')?.querySelector('.health-header')?.addEvent
   setHealthCollapsed(!healthCardCollapsed);
 });
 setHealthCollapsed(healthCardCollapsed);
-// Hover expansion is transient; desktop geometry keeps the page stationary.
+// One event-driven label bubble; the rail expands only with its toggle.
 const desktopSidebar = document.getElementById('appSidebar');
-const desktopSidebarHover = matchMedia('(hover: hover) and (pointer: fine) and (min-width: 700px)');
-let sidebarPointerInside = false;
-let sidebarHoverTimer = null;
-function desktopSidebarHoverEnabled() {
-  return desktopSidebarHover.matches;
+const desktopNavWidth = matchMedia('(min-width: 700px)');
+const desktopNavHint = document.createElement('div');
+desktopNavHint.id = 'desktopNavHint';
+desktopNavHint.className = 'desktop-nav-hint';
+desktopNavHint.setAttribute('role', 'tooltip');
+desktopNavHint.hidden = true;
+document.body.appendChild(desktopNavHint);
+let navHintButton = null;
+function hideDesktopNavHint() {
+  navHintButton?.classList.remove('nav-hint-active');
+  navHintButton = null;
+  desktopNavHint.hidden = true;
 }
-function setDesktopSidebarHover(open) {
-  clearTimeout(sidebarHoverTimer);
-  sidebarHoverTimer = null;
-  document.body.classList.toggle('desktop-sidebar-hover', open && desktopSidebarHoverEnabled());
+function showDesktopNavHint(button) {
+  hideDesktopNavHint();
+  if (!desktopNavWidth.matches || document.body.classList.contains('sidebar-expanded')) return;
+  navHintButton = button;
+  desktopNavHint.textContent = button.querySelector('span').textContent;
+  desktopNavHint.hidden = false;
+  const rect = button.getBoundingClientRect();
+  desktopNavHint.style.left = `${Math.min(rect.right + 10, innerWidth - desktopNavHint.offsetWidth - 8)}px`;
+  desktopNavHint.style.top = `${Math.max(8, Math.min(rect.top + (rect.height - desktopNavHint.offsetHeight) / 2, innerHeight - desktopNavHint.offsetHeight - 8))}px`;
+  button.classList.add('nav-hint-active');
+  desktopNavHint.getAnimations().forEach(animation => { animation.currentTime = 0; animation.play(); });
 }
-function scheduleDesktopSidebarHover() {
-  clearTimeout(sidebarHoverTimer);
-  if (!desktopSidebarHoverEnabled()) { setDesktopSidebarHover(false); return; }
-  const focused = desktopSidebar.contains(document.activeElement) && document.activeElement.matches(':focus-visible');
-  if (focused) { setDesktopSidebarHover(true); return; }
-  const open = sidebarPointerInside;
-  sidebarHoverTimer = setTimeout(() => setDesktopSidebarHover(open), open ? 170 : 220);
-}
-desktopSidebar.addEventListener('pointerenter', event => {
-  if (event.pointerType !== 'mouse') return;
-  sidebarPointerInside = true;
-  scheduleDesktopSidebarHover();
+desktopSidebar.querySelectorAll('.page-nav-button').forEach(button => {
+  // Visible/accessible button text already names the control. Avoid a second native tooltip.
+  button.removeAttribute('title');
+  button.addEventListener('pointerenter', event => { if (event.pointerType === 'mouse') showDesktopNavHint(button); });
+  button.addEventListener('pointerleave', hideDesktopNavHint);
+  button.addEventListener('focus', () => { if (button.matches(':focus-visible')) showDesktopNavHint(button); });
+  button.addEventListener('blur', hideDesktopNavHint);
+  button.addEventListener('click', hideDesktopNavHint);
 });
-desktopSidebar.addEventListener('pointerleave', () => {
-  sidebarPointerInside = false;
-  scheduleDesktopSidebarHover();
-});
-desktopSidebar.addEventListener('focusin', scheduleDesktopSidebarHover);
-desktopSidebar.addEventListener('focusout', event => {
-  if (!desktopSidebar.contains(event.relatedTarget)) {
-    clearTimeout(sidebarHoverTimer);
-    sidebarHoverTimer = setTimeout(() => setDesktopSidebarHover(sidebarPointerInside), 220);
-  }
-});
-desktopSidebarHover.addEventListener('change', () => {
-  sidebarPointerInside = false;
-  setDesktopSidebarHover(false);
-});
-window.addEventListener('blur', () => {
-  sidebarPointerInside = false;
-  setDesktopSidebarHover(false);
-});
+document.getElementById('sidebarToggle').addEventListener('click', hideDesktopNavHint);
+desktopSidebar.addEventListener('scroll', hideDesktopNavHint);
+desktopNavWidth.addEventListener('change', hideDesktopNavHint);
+window.addEventListener('resize', hideDesktopNavHint);
+window.addEventListener('blur', hideDesktopNavHint);
+document.addEventListener('keydown', event => { if (event.key === 'Escape') hideDesktopNavHint(); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') setSidebarOpen(false); });
 matchMedia('(max-width: 699px)').addEventListener('change', event => {
   syncPhoneSurface();
@@ -1480,6 +1514,7 @@ document.getElementById('securitySettingsTab').addEventListener('click', () => {
   if (nativeSecurity) {
     window.chrome.webview.postMessage('security-status');
     window.chrome.webview.postMessage('startup-status');
+    window.chrome.webview.postMessage('standby-status');
     refreshNativeMaintenanceSetting();
   } else {
     refreshRemoteMaintenanceStatus();
@@ -1487,6 +1522,17 @@ document.getElementById('securitySettingsTab').addEventListener('click', () => {
 });
 document.getElementById('generalSettingsTab').addEventListener('click', () => showSecuritySettings(false));
 document.getElementById('desktopPinPreference').addEventListener('click', event => { event.preventDefault(); if (nativeSecurity) window.chrome.webview.postMessage('security-preference'); });
+document.getElementById('smartStandbyPreference')?.addEventListener('change',event=>{
+  if(!nativeSecurity)return;
+  event.target.disabled=true;
+  window.chrome.webview.postMessage(event.target.checked?'standby-enable':'standby-disable');
+});
+window.chrome?.webview?.addEventListener('message',event=>{
+  if(event.data?.kind!=='standby-state')return;
+  const control=document.getElementById('smartStandbyPreference');
+  control.checked=event.data.enabled===true;control.disabled=event.data.available!==true;
+  document.getElementById('smartStandbyFeedback').textContent=event.data.available?(event.data.enabled?'Rovarin will sleep after its clients become inactive.':'Rovarin will keep its backend running.'):'Smart Standby is unavailable in this desktop build.';
+});
 document.getElementById('startWithWindows').addEventListener('change', event => {
   if (!nativeSecurity) return;
   event.target.disabled = true;
@@ -1644,13 +1690,6 @@ if (nativeSecurity) window.chrome.webview.addEventListener('message', event => {
 });
 window.showAppPage = showAppPage;
 document.getElementById('nativeSettingsButton')?.addEventListener('click', () => {
-  showAppPage('diagnosticsPage');
-  if (matchMedia('(max-width: 699px)').matches) setSidebarOpen(false);
-  requestAnimationFrame(() => {
-    document.getElementById('monitorSettings')?.focus({ preventScroll: true });
-  });
-});
-document.getElementById('liquidOverviewSettings')?.addEventListener('click', () => {
   showAppPage('diagnosticsPage');
   if (matchMedia('(max-width: 699px)').matches) setSidebarOpen(false);
   requestAnimationFrame(() => {

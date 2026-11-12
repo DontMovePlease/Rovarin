@@ -44,7 +44,7 @@
     </div>
 
     <div id="dashboardPage" class="app-page is-active" data-profile="dashboard">
-    <div class="liquid-overview"><div><p>Rovarin / System overview</p><h1>Everything, in view.</h1></div><button id="liquidOverviewSettings" class="liquid-orbit" type="button" aria-label="System settings and diagnostics" title="System settings and diagnostics"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="7"/><ellipse cx="16" cy="16" rx="14" ry="5" transform="rotate(-35 16 16)"/><path d="M25 3v5M22.5 5.5h5"/></svg></button></div>
+    <div class="liquid-overview"><div><p>Rovarin / System overview</p><h1>System overview</h1></div><button id="liquidOverviewSettings" class="liquid-orbit" type="button" aria-label="PC Boost" title="PC Boost"><span class="boost-orbit-ring" aria-hidden="true"></span><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M18 3 7 18h8l-1 11 11-16h-8Z"/></svg><span class="boost-btn-copy"><span id="boostBtnLabel" class="boost-btn-label">Boost</span><span id="boostBtnSub" class="boost-btn-sub" hidden></span></span></button></div>
     <!-- PC Health Summary -->
     <section id="healthCard" class="health-card" aria-labelledby="healthHeading">
       <div class="health-header">
@@ -394,6 +394,9 @@
           <div id="nativeSecurityControls" hidden>
             <label class="desktop-pin-toggle"><input id="startWithWindows" type="checkbox" disabled> Start Rovarin with Windows</label>
             <p id="windowsStartupFeedback" role="status">Checking Windows startup…</p>
+            <label class="desktop-pin-toggle"><input id="smartStandbyPreference" type="checkbox" disabled> Smart Standby</label>
+            <p class="settings-help">Reduce background memory usage when Rovarin isn’t in use. Automatically wake when you connect.</p>
+            <p id="smartStandbyFeedback" role="status">Available with the Smart Standby desktop runtime.</p>
             <label class="desktop-pin-toggle"><input id="desktopPinPreference" type="checkbox" checked disabled> Require PIN on this PC</label>
             <button id="generateDesktopPin" type="button">Change PIN</button>
             <label id="adminMaintenanceLabel" for="adminMaintenanceToggle" class="desktop-pin-toggle" aria-disabled="true"><input id="adminMaintenanceToggle" type="checkbox" aria-describedby="adminMaintenanceFeedback" disabled> Enable administrator maintenance</label>
@@ -421,8 +424,36 @@
           </section>
         </div>
         <div id="generalSettingsPanel" role="tabpanel" aria-labelledby="generalSettingsTab">
-          <section class="graphics-settings desktop-theme-settings"><label for="desktopTheme">Desktop theme</label><select id="desktopTheme"><option value="simplified">Simplified</option><option value="liquid">Liquid Glass</option></select><p>Theme applies to desktop views. Graphics quality is a separate per-device setting.</p></section>
-          <section class="graphics-settings" aria-labelledby="graphicsQualityLabel"><label id="graphicsQualityLabel" for="graphicsQuality">Graphics quality</label><select id="graphicsQuality" aria-describedby="graphicsQualityDescription graphicsQualityStatus"><option value="auto">Automatic</option><option value="full">Full glass</option><option value="balanced">Balanced</option><option value="minimal">Minimal</option></select><p id="graphicsQualityDescription">Choose the glass detail for this device. Controls and monitoring work in every mode.</p><p id="graphicsQualityStatus" role="status">Preparing graphics…</p></section>
+          <div class="appearance-settings-group" role="region" aria-label="Appearance settings">
+            <section class="graphics-settings desktop-theme-settings">
+              <div class="graphics-settings-copy">
+                <label for="desktopTheme">Desktop theme</label>
+                <p>Simplified uses crisp CSS surfaces; Liquid Glass enables dynamic optical depth.</p>
+              </div>
+              <select id="desktopTheme"><option value="simplified">Simplified</option><option value="liquid">Liquid Glass</option></select>
+            </section>
+            <section id="graphicsQualitySection" class="graphics-settings graphics-quality-section" aria-labelledby="graphicsQualityLabel">
+              <div class="graphics-quality-header">
+                <div class="graphics-settings-copy">
+                  <label id="graphicsQualityLabel" for="graphicsQualitySlider">Graphics quality</label>
+                  <p id="graphicsQualityStatus" role="status">Preparing graphics…</p>
+                </div>
+                <label class="graphics-auto-toggle" for="graphicsQualityAuto">
+                  <input id="graphicsQualityAuto" type="checkbox" checked>
+                  <span>Automatic</span>
+                </label>
+              </div>
+              <div class="graphics-slider-wrap">
+                <input id="graphicsQualitySlider" class="graphics-quality-slider" type="range" min="0" max="2" step="1" value="2" aria-labelledby="graphicsQualityLabel" aria-describedby="graphicsQualityStatus">
+                <div class="graphics-slider-stops" role="group" aria-label="Graphics quality presets">
+                  <button type="button" class="graphics-stop-btn" data-quality-stop="minimal">Minimal</button>
+                  <button type="button" class="graphics-stop-btn" data-quality-stop="balanced">Balanced</button>
+                  <button type="button" class="graphics-stop-btn" data-quality-stop="full">Full Glass</button>
+                </div>
+              </div>
+              <select id="graphicsQuality" class="sr-only" tabindex="-1" aria-hidden="true" aria-describedby="graphicsQualityStatus"><option value="auto">Automatic</option><option value="full">Full glass</option><option value="balanced">Balanced</option><option value="minimal">Minimal</option></select>
+            </section>
+          </div>
           <div class="temperature-settings">
             <label for="cpuTemperatureMode">Temperature source</label>
             <select id="cpuTemperatureMode">
@@ -462,8 +493,10 @@
 
     <section id="processesPage" class="app-page processes-page" data-profile="processes" aria-labelledby="processesTitle" hidden>
       <header class="processes-heading sr-only"><h1 id="processesTitle">Processes</h1></header>
-      <label class="processes-search"><span class="sr-only">Search processes</span><input id="processesSearch" type="search" placeholder="Search processes…" maxlength="200" aria-label="Search processes"></label>
-      <div class="processes-toolbar"><div class="processes-live-state"><span id="processesLiveDot"></span><span id="processesLiveText">Waiting</span></div><span id="processesUpdated" class="processes-updated">Updated —</span><button id="processesFreezeButton" class="processes-freeze" type="button" aria-pressed="false">Pause</button></div>
+      <div class="processes-header-bar">
+        <label class="processes-search"><span class="sr-only">Search processes</span><input id="processesSearch" type="search" placeholder="Search processes…" maxlength="200" aria-label="Search processes"></label>
+        <div class="processes-toolbar"><div class="processes-live-state"><span id="processesLiveDot"></span><span id="processesLiveText">Waiting</span></div><span id="processesUpdated" class="processes-updated">Updated —</span><button id="processesFreezeButton" class="processes-freeze" type="button" aria-pressed="false">Pause</button><button id="processesExpandViewBtn" class="processes-freeze apps-expand-btn" type="button" aria-pressed="false" title="Expand list view">Expand</button></div>
+      </div>
       <div class="processes-table-wrap"><table class="processes-table"><thead><tr><th><button type="button" data-sort="name">Name</button></th><th class="process-pid"><button type="button" data-sort="pid">PID</button></th><th aria-sort="descending"><button type="button" data-sort="cpu" aria-pressed="true">CPU ↓</button></th><th><button type="button" data-sort="memory">Memory</button></th></tr></thead><tbody id="processesRows"><tr><td colspan="4" class="processes-empty">Loading processes…</td></tr></tbody></table></div>
 
     </section>
@@ -492,12 +525,12 @@
 
       <!-- Installed Apps Panel -->
       <div id="appsInstalledPanel" class="apps-panel" role="tabpanel" aria-labelledby="appsTabInstalled">
-        <div class="apps-toolbar"><label>Search<input id="appsSearch" type="search" maxlength="200" placeholder="Search applications…"></label><label>Type<select id="appsType"><option value="">All apps</option></select></label><label>Sort<select id="appsSort"><option value="name">Name</option><option value="size">Size</option><option value="publisher">Publisher</option></select></label><button id="appsSortDirection" class="processes-freeze" type="button" aria-label="Reverse app sort direction">↑</button><label class="apps-system-toggle"><input id="appsShowSystem" type="checkbox"><span>Show system components</span></label></div>
+        <div class="apps-toolbar"><label class="apps-search-field"><span class="sr-only">Search</span><input id="appsSearch" type="search" maxlength="200" placeholder="Search applications…"></label><label class="apps-filter-field"><span class="sr-only">Type</span><select id="appsType"><option value="">All apps</option></select></label><label class="apps-filter-field"><span class="sr-only">Sort</span><select id="appsSort"><option value="name">Name</option><option value="size">Size</option><option value="publisher">Publisher</option></select></label><button id="appsSortDirection" class="processes-freeze" type="button" aria-label="Reverse app sort direction">↑</button><label class="apps-system-toggle" title="Show system components"><input id="appsShowSystem" type="checkbox"><span>System</span></label></div>
         <div class="apps-meta">
           <button id="appsRefresh" class="processes-freeze" type="button">Refresh</button>
-          <button id="appsSelectModeBtn" class="processes-freeze apps-manage-btn" type="button">Select apps</button>
           <p id="appsStatus" role="status" aria-live="polite">Open this page to load installed applications.</p>
           <div class="apps-view-controls" role="group" aria-label="Application view"><button id="appsViewList" type="button" aria-pressed="true">List</button><button id="appsViewGrid" type="button" aria-pressed="false">Grid</button></div>
+          <button id="appsExpandViewBtn" class="processes-freeze apps-expand-btn" type="button" aria-pressed="false" title="Temporarily expand list view">Expand</button>
         </div>
         <section id="appLeftoversOffers" class="app-leftover-offers" hidden aria-label="Optional leftover cleanup"></section>
         <section id="appsProgress" class="apps-progress-banner" hidden aria-labelledby="appsProgressTitle">
@@ -521,14 +554,15 @@
       <!-- Startup Apps Panel -->
       <div id="appsStartupPanel" class="apps-panel" role="tabpanel" aria-labelledby="appsTabStartup" hidden>
         <div class="apps-toolbar startup-toolbar">
-          <label>Search<input id="startupSearch" type="search" maxlength="200" placeholder="Search startup applications…"></label>
-          <label>Scope<select id="startupScope"><option value="">All scopes</option><option value="user">Current User</option><option value="machine">All Users (System)</option></select></label>
-          <label>Status<select id="startupStatusFilter"><option value="">All status</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label>
-          <label class="startup-control-filter"><input id="startupControlFilter" type="checkbox"><span>Can enable / disable</span></label>
+          <label class="apps-search-field"><span class="sr-only">Search</span><input id="startupSearch" type="search" maxlength="200" placeholder="Search startup applications…"></label>
+          <label class="apps-filter-field"><span class="sr-only">Scope</span><select id="startupScope"><option value="">All scopes</option><option value="user">Current User</option><option value="machine">All Users (System)</option></select></label>
+          <label class="apps-filter-field"><span class="sr-only">Status</span><select id="startupStatusFilter"><option value="">All status</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label>
+          <label class="startup-control-filter"><input id="startupControlFilter" type="checkbox"><span>In-app controls only</span></label>
         </div>
         <div class="apps-meta">
           <button id="startupRefresh" class="processes-freeze" type="button">Refresh</button>
           <p id="startupStatus" role="status" aria-live="polite">Loading startup applications…</p>
+          <button id="startupExpandViewBtn" class="processes-freeze apps-expand-btn" type="button" aria-pressed="false" title="Temporarily expand startup view">Expand</button>
         </div>
         <div id="startupList" class="startup-list"></div>
       </div>
@@ -611,7 +645,6 @@
       <div class="apps-tray-actions">
         <button id="appsClearSelection" class="processes-freeze apps-tray-clear-btn" type="button">Clear all</button>
         <button id="appsBatchUninstall" class="processes-freeze apps-tray-review-btn" type="button" disabled>Review &amp; uninstall</button>
-        <button id="appsDoneSelection" class="processes-freeze apps-tray-done-btn" type="button">Done</button>
       </div>
     </div>
     <div id="appsTrayExpanded" class="apps-tray-expanded" hidden>

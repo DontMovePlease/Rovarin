@@ -6,7 +6,10 @@
 // Use the fixed current-user LocalAppData test location, not weaker validation.
 const fs=require('fs'),path=require('path'),crypto=require('crypto'),assert=require('assert');
 const {execFileSync,spawn}=require('child_process');
-const root=path.resolve(__dirname,'..'),cache=path.join(root,'packaging/cache/updater-e2e'),install=path.join(process.env.LOCALAPPDATA,'RovarinUpdaterE2E');
+const root=path.resolve(__dirname,'..');
+const buildCache=process.env.ROVARIN_BUILD_CACHE || path.join(process.env.LOCALAPPDATA, 'Rovarin/build-cache');
+const previewDir=process.env.ROVARIN_PREVIEW_DIR || path.join(process.env.LOCALAPPDATA, 'RovarinDevelopment/preview');
+const cache=path.join(buildCache,'updater-e2e'),install=path.join(process.env.LOCALAPPDATA,'RovarinUpdaterE2E');
 const app=path.join(install,'app'),data=path.join(install,'data'),report=path.join(cache,'report.json'),control=path.join(cache,'control.json');
 const registry='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{C51A4180-26D2-4F48-93BD-B40B182B78DA}_is1';
 const group='RovarinUpdaterIsolatedTest';
@@ -43,7 +46,7 @@ function build(version){
   const helper=path.join(a,'scripts/installed-update.ps1');let h=fs.readFileSync(helper,'utf8');h=h.replace("@('/NORESTART',('/DIR=",`@('/VERYSILENT','/SUPPRESSMSGBOXES','/COMPONENTS=core','/TASKS=desktopPin','/GROUP=${group}','/NORESTART',('/DIR=`);fs.writeFileSync(helper,h);
  }
  let iss=fs.readFileSync(path.join(root,'packaging/Rovarin.iss'),'utf8').replace('#define AppVersion "0.1.1"','#define AppVersion "'+version+'"').replace('OutputDir=..\\dist','OutputDir=output');fs.writeFileSync(path.join(dir,'Rovarin.iss'),iss);
- execFileSync(path.join(root,'packaging/cache/inno/ISCC.exe'),['/Q',path.join(dir,'Rovarin.iss')],{windowsHide:true,timeout:150000,stdio:'pipe'});
+ execFileSync(path.join(buildCache,'inno/ISCC.exe'),['/Q',path.join(dir,'Rovarin.iss')],{windowsHide:true,timeout:150000,stdio:'pipe'});
  const info=JSON.parse(ps("$v=[Diagnostics.FileVersionInfo]::GetVersionInfo("+quote(path.join(dir,'output/RovarinSetup.exe'))+");@{version=('{0}.{1}.{2}.{3}' -f $v.FileMajorPart,$v.FileMinorPart,$v.FileBuildPart,$v.FilePrivatePart)}|ConvertTo-Json -Compress"));assert.strictEqual(info.version,version+'.0','Installer binary version must match verified update association');
  console.log('BUILT disposable real installer '+version+' (never dist/publish)');return path.join(dir,'output/RovarinSetup.exe');
 }
@@ -97,11 +100,11 @@ async function main(){
 }
 async function preserveDevelopmentShortcut(){
  const desktop=ps("[Environment]::GetFolderPath('Desktop')"),shortcut=path.join(desktop,'Rovarin.lnk');let saved;
- if(resume){saved=fs.readFileSync(path.join(root,'packaging/cache/updater-e2e-shortcut-backup.lnk'));}
+ if(resume){saved=fs.readFileSync(path.join(cache,'updater-e2e-shortcut-backup.lnk'));}
  else if(fs.existsSync(shortcut)){
   const target=ps("$l=(New-Object -ComObject WScript.Shell).CreateShortcut("+quote(shortcut)+");$l.TargetPath");
-  assert.strictEqual(path.resolve(target),path.join(root,'packaging/cache/desktop-preview/Rovarin.exe'),'Refuse to displace an unrelated shortcut');
-  saved=fs.readFileSync(shortcut);fs.writeFileSync(path.join(root,'packaging/cache/updater-e2e-shortcut-backup.lnk'),saved);fs.unlinkSync(shortcut);
+  assert.strictEqual(path.resolve(target),path.resolve(previewDir,'Rovarin.exe'),'Refuse to displace an unrelated shortcut');
+  saved=fs.readFileSync(shortcut);fs.writeFileSync(path.join(cache,'updater-e2e-shortcut-backup.lnk'),saved);fs.unlinkSync(shortcut);
  }
  try{await main();}finally{if(saved){assert(!fs.existsSync(shortcut),'Fixture shortcut must be cleaned before restoring development shortcut');fs.writeFileSync(shortcut,saved);console.log('Development shortcut restored unchanged');}}
 }

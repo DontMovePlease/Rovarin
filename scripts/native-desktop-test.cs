@@ -31,7 +31,6 @@ internal static class NativeDesktopTest
         if(label.Contains("component"))Console.Error.WriteLine(await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({feedback:document.getElementById('adminMaintenanceFeedback')?.textContent,native:!!window.chrome?.webview,controlsHidden:document.getElementById('nativeSecurityControls')?.hidden})"));
         if(label.StartsWith("Phone PIN typing"))Console.Error.WriteLine(await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({receipt:window.__qaTypeReceipt,typed:window.__qaTyped,auto:window.__qaAuto,mode:document.querySelector('meta[name=rovarin-pin-mode]')?.content,inputLength:document.getElementById('pinInput')?.value.length,classes:document.documentElement.className})"));
         if(label.StartsWith("PIN surface clipped"))Console.Error.WriteLine(await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({viewport:[innerWidth,innerHeight,devicePixelRatio],dialog:document.getElementById('pinChangeDialog')?.getBoundingClientRect().toJSON(),scroll:document.getElementById('pinChangeDialog')?.scrollHeight,controls:[...document.querySelectorAll('#pinFlow input,#pinFlow button,#pinFlow .pin-show')].map(e=>({id:e.id,rect:e.getBoundingClientRect().toJSON()}))})"));
-        if(label=="Login document not ready")Console.Error.WriteLine(await View.CoreWebView2.ExecuteScriptAsync("JSON.stringify({href:location.href,ready:document.readyState,loginReady:document.documentElement.dataset.loginReady,setup:document.querySelector('meta[name=rovarin-pin-setup]')?.content,resources:performance.getEntriesByType('resource').map(e=>({name:e.name,duration:e.duration}))})"));
         throw new Exception(label + "; pending=" + window.GetField("visibilityPending",flags).GetValue(form) + "; loading=" + window.GetField("loading",flags).GetValue(form) + "; visible=" + form.Visible + "; doc=" + await View.CoreWebView2.ExecuteScriptAsync("document.visibilityState"));
     }
     static async Task<int> Leases() {
@@ -167,9 +166,9 @@ internal static class NativeDesktopTest
         await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('desktopTheme').value='liquid';document.getElementById('desktopTheme').dispatchEvent(new Event('change'));RovarinGlass.setQuality('full')");
         await Wait("document.documentElement.classList.contains('liquid-ready') && RovarinGlass.diagnostics().contexts===1", "Native WebGL renderer",30);
         await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('desktopTheme').value='simplified';document.getElementById('desktopTheme').dispatchEvent(new Event('change'))");
-        await Wait("RovarinGlass.diagnostics().contexts===0 && document.querySelectorAll('.liquid-scene').length===0", "Native Simplified theme releases graphics",30);
+        await Wait("RovarinGlass.diagnostics().contexts===0 && document.querySelectorAll('.liquid-scene').length===0 && document.getElementById('graphicsQualitySection').hidden===true", "Native Simplified theme releases graphics and hides irrelevant quality controls",30);
         await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('desktopTheme').value='liquid';document.getElementById('desktopTheme').dispatchEvent(new Event('change'))");
-        await Wait("RovarinGlass.diagnostics().contexts===1", "Native Liquid Glass theme recreates graphics",30);
+        await Wait("RovarinGlass.diagnostics().contexts===1 && document.getElementById('graphicsQualitySection').hidden===false", "Native Liquid Glass theme recreates graphics and reveals quality controls",30);
         await Wait("eventSource?.readyState===1", "Native SSE connection",30);
         form.WindowState=FormWindowState.Normal;
         form.Size=new System.Drawing.Size(1440,900);
@@ -196,8 +195,8 @@ internal static class NativeDesktopTest
         await View.CoreWebView2.ExecuteScriptAsync("window.__qaMutations=[];new MutationObserver(rs=>{for(const r of rs){if(r.type==='attributes')__qaMutations.push({at:performance.now(),tag:r.target.tagName,id:r.target.id,attribute:r.attributeName,old:r.oldValue,value:r.target.getAttribute(r.attributeName),visible:r.target.checkVisibility?.()});}if(__qaMutations.length>16)__qaMutations.splice(0,__qaMutations.length-16)}).observe(document.body,{subtree:true,attributes:true,attributeOldValue:true,attributeFilter:['hidden','class','style','open']})");
         var receipts=new System.Collections.Generic.List<object>();
         foreach(string quality in new[]{"full","balanced","minimal"}) {
-            await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('graphicsQuality').value="+json.Serialize(quality)+";document.getElementById('graphicsQuality').dispatchEvent(new Event('change'))");
-            await Wait("RovarinGlass.diagnostics().quality==="+json.Serialize(quality)+" && RovarinGlass.diagnostics().idle", "Native quality selection");
+            await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('[data-quality-stop='+JSON.stringify("+json.Serialize(quality)+")+']').click()");
+            await Wait("RovarinGlass.diagnostics().quality==="+json.Serialize(quality)+" && RovarinGlass.diagnostics().idle && !document.getElementById('graphicsQualityAuto').checked", "Native quality slider stop selection");
             await Task.Delay(2500);
             string before=await View.CoreWebView2.ExecuteScriptAsync("RovarinGlass.diagnostics().frames");
             var process=Process.GetCurrentProcess();var cpu=process.TotalProcessorTime;var start=DateTime.UtcNow;
@@ -208,6 +207,8 @@ internal static class NativeDesktopTest
             receipts.Add(new {quality=quality,shellCpuOneCorePercent=(process.TotalProcessorTime-cpu).TotalMilliseconds/(DateTime.UtcNow-start).TotalMilliseconds*100,shellWorkingSetMiB=process.WorkingSet64/1048576.0,graphics=json.DeserializeObject(json.Deserialize<string>(graphics))});
             await GlassCapture(quality);
         }
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('graphicsQualityAuto').click()");
+        await Wait("document.getElementById('graphicsQualityAuto').checked && document.getElementById('graphicsQuality').value==='auto'", "Native Automatic quality toggle");
         await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('desktopTheme').value='liquid';document.getElementById('desktopTheme').dispatchEvent(new Event('change'));RovarinGlass.setQuality('full')");
         await Wait("RovarinGlass.diagnostics().contexts===1 && RovarinGlass.diagnostics().idle", "Full restore");
         form.WindowState=FormWindowState.Minimized;
@@ -230,6 +231,13 @@ internal static class NativeDesktopTest
     static async Task DashboardLayout(string pin, JavaScriptSerializer json) {
         await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('pinInput').value="+json.Serialize(pin)+";document.getElementById('unlockBtn').click()");
         await Wait("typeof showAppPage==='function' && !!latestDashboardMetrics?.ram && !!window.RovarinGlass", "Native dashboard data unavailable",45);
+        await View.CoreWebView2.ExecuteScriptAsync("window.__origFetch=window.fetch;window.fetch=async(u,o)=>{if(String(u).includes('/api/maintenance/run'))return new Response(JSON.stringify({success:true}),{status:200,headers:{'Content-Type':'application/json'}});if(String(u).includes('/api/maintenance/status'))return new Response(JSON.stringify({isAdmin:false,isRunning:false,currentTask:{id:'boost',title:'Boost',status:'completed',currentStep:2,totalSteps:2,logs:[],result:{success:true,summary:'Boost complete: freed 412.5 MB RAM and cleaned 18.4 MB of temporary files.',detailedResult:{code:'boost-completed',ramFreedBytes:432537600,tempDeletedBytes:19293798}}},history:[]}),{status:200,headers:{'Content-Type':'application/json'}});return window.__origFetch(u,o);};document.getElementById('liquidOverviewSettings').click()");
+        Check(await Condition("(()=>{const m=document.getElementById('maintModal'),h=document.getElementById('boostHudCard'),b=h.getBoundingClientRect();return getComputedStyle(m).display==='none'&&!h.hidden&&h.classList.contains('is-visible')&&b.left>=0&&b.right<=innerWidth&&b.top>=0&&b.bottom<=innerHeight})()"),"Native Boost must run immediately with fitting HUD and no warning modal");
+        await Wait("document.getElementById('boostHudRamVal')?.textContent==='413 MB' && document.getElementById('boostHudTempVal')?.textContent==='18 MB'", "Native Boost HUD numbers rendered from fixture", 10);
+        using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-dashboard-boost-confirmation.png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+        await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('boostHudClose').click();window.fetch=window.__origFetch;");
+        Check(await Condition("document.getElementById('boostHudCard').hidden&&currentAppPage==='dashboardPage'"),"Native Boost HUD dismissal must retain dashboard");
+        Console.WriteLine("PASS actual native Boost button, immediate HUD telemetry and dismissal without warning modal");
         await View.CoreWebView2.ExecuteScriptAsync("RovarinGlass.setQuality('minimal');setHealthCollapsed(true);setSidebarOpen(false);document.body.classList.remove('desktop-sidebar-hover')");
         var receipts=new System.Collections.Generic.List<object>();
         foreach(var size in new[]{new System.Drawing.Size(900,680),new System.Drawing.Size(820,620),new System.Drawing.Size(760,560),new System.Drawing.Size(1100,800),new System.Drawing.Size(1440,900)}) {
@@ -242,7 +250,8 @@ internal static class NativeDesktopTest
             using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-dashboard-"+size.Width+"x"+size.Height+".png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
             await View.CoreWebView2.ExecuteScriptAsync("window.__qaPage=document.querySelector('.dashboard-container').getBoundingClientRect().toJSON();setSidebarOpen(true)");
             await Task.Delay(350);
-            Check(await Condition("(()=>{const r=document.querySelector('.dashboard-container').getBoundingClientRect();return r.x===__qaPage.x && r.width===__qaPage.width})()"),"Native overlay moved/resized dashboard");
+            Check(await Condition("(()=>{const r=document.querySelector('.dashboard-container').getBoundingClientRect(),nav=document.getElementById('appSidebar').getBoundingClientRect();return r.x>__qaPage.x && r.width<__qaPage.width && nav.right<=r.left+1 && r.right<=innerWidth+1})()"),"Expanded native sidebar must reserve content space without overlap/overflow");
+            using(var image=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-sidebar-"+size.Width+"x"+size.Height+".png"))) await View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
             await View.CoreWebView2.ExecuteScriptAsync("setSidebarOpen(false)");
         }
         form.Size=new System.Drawing.Size(900,680);
@@ -261,7 +270,7 @@ internal static class NativeDesktopTest
         await View.CoreWebView2.ExecuteScriptAsync("document.querySelector('.memory-statistics summary').click();document.getElementById('healthToggle').click()");
         await Wait("!document.getElementById('healthChecklist').hidden", "Native health assessment did not expand");
         File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-dashboard-results.json"),json.Serialize(new {windowDpi=form.DeviceDpi,layouts=receipts,simulatedScalePercent=new[]{125,150},physicalScalingTest=false}));
-        Console.WriteLine("PASS actual WinForms/WebView2 dashboard: 900x680 default, 820x620, 760x560 minimum, 1100x800, 1440x900, maximized; stationary overlay, health summary/expansion, memory details; simulated 125/150 percent viewport scaling (physical DPI unchanged)");
+        Console.WriteLine("PASS actual WinForms/WebView2 dashboard: 900x680 default, 820x620, 760x560 minimum, 1100x800, 1440x900, maximized; reserved expanded navigation, health summary/expansion, memory details; simulated 125/150 percent viewport scaling (physical DPI unchanged)");
     }
 
     static async Task PinSurfaceChecks(string stage, JavaScriptSerializer json) {
@@ -425,6 +434,22 @@ internal static class NativeDesktopTest
                     await MaintenanceSettings(pin,json); result=0; Invoke("ExitShell"); return;
                 }
                 await Task.Delay(200);
+                if(Environment.GetEnvironmentVariable("ROVARIN_NATIVE_STANDBY_ONLY")=="1") {
+                    await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('pinInput').value="+json.Serialize(pin)+";document.getElementById('unlockBtn').click()");
+                    await Wait("typeof showAppPage==='function'&&!!latestDashboardMetrics?.ram","Smart Standby dashboard did not load",45);
+                    Check((bool)window.GetField("smartStandby",flags).GetValue(form),"Native window did not receive Smart Standby mode");
+                    await View.CoreWebView2.ExecuteScriptAsync("showAppPage('diagnosticsPage');document.getElementById('securitySettingsTab').click()");
+                    await Wait("!document.getElementById('smartStandbyPreference').disabled&&document.getElementById('smartStandbyPreference').checked","Smart Standby setting unavailable",20);
+                    await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('smartStandbyPreference').click()");
+                    await Wait("!document.getElementById('smartStandbyPreference').disabled&&!document.getElementById('smartStandbyPreference').checked","Opt-out did not persist",20);
+                    await View.CoreWebView2.ExecuteScriptAsync("document.getElementById('smartStandbyPreference').click()");
+                    await Wait("!document.getElementById('smartStandbyPreference').disabled&&document.getElementById('smartStandbyPreference').checked","Opt-in did not persist",20);
+                    await View.CoreWebView2.ExecuteScriptAsync("showAppPage('dashboardPage')");
+                    Console.WriteLine("MEASURE standby active process tree");
+                    await Task.Delay(3000);
+                    Console.WriteLine("PASS actual native wake, dashboard, authenticated standby opt-out/opt-in and X exit");
+                    result=0;form.Close();return;
+                }
                 if (Environment.GetEnvironmentVariable("ROVARIN_NATIVE_DASHBOARD_ONLY") == "1") {
                     // A hidden native window must not keep sending PINs to a stale
                     // backend origin after the canonical owner has changed.

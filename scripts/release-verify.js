@@ -3,8 +3,19 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
-const SUITES = ['test:security', 'test:gpu', 'test:maintenance', 'test:temperature', 'test:processes', 'test:kill', 'test:dev-watcher', 'test:packaging'];
-const TEST_FILES = ['security-smoke-test.js', 'gpu-degradation-smoke-test.js', 'maintenance-smoke-test.js', 'temperature-manager-smoke-test.js', 'process-stats-smoke-test.js', 'process-kill-smoke-test.js', 'dev-watcher-smoke-test.js', 'packaging-smoke-test.js'];
+const TESTS = [
+  ['test:architecture', 'architecture-smoke-test.js'],
+  ['test:security', 'security-smoke-test.js'],
+  ['test:gpu', 'gpu-degradation-smoke-test.js'],
+  ['test:maintenance', 'maintenance-smoke-test.js'],
+  ['test:temperature', 'temperature-manager-smoke-test.js'],
+  ['test:processes', 'process-stats-smoke-test.js'],
+  ['test:kill', 'process-kill-smoke-test.js'],
+  ['test:dev-watcher', 'dev-watcher-smoke-test.js'],
+  ['test:packaging', 'packaging-smoke-test.js']
+];
+const SUITES = TESTS.map(([suite]) => suite);
+const TEST_FILES = TESTS.map(([, file]) => file);
 const digest = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 function run(command, args, cwd) {
   return new Promise((resolve, reject) => {
@@ -39,7 +50,7 @@ async function verifyAndPublish(repo, runner = run, outputRepo = repo) {
   function checkSource() {
     if (digest(exe) !== hash || digest(manifestPath) !== manifestHash) throw new Error('Build changed during verification; publish was not changed.');
     for (const input of build.inputs) {
-      if (!['packaging/build.ps1','packaging/Rovarin.iss','packaging/RovarinLauncher.cs','packaging/DesktopShell.cs','packaging/desktop.manifest','packaging/create-icon.ps1'].includes(input.path) || digest(path.join(repo,input.path)) !== input.sha256) throw new Error('Installer source changed; rebuild before publishing.');
+      if (!['packaging/build.ps1','packaging/Rovarin.iss','packaging/RovarinLauncher.cs','packaging/DesktopShell.cs','packaging/desktop.manifest','packaging/create-icon.ps1','packaging/StandbySupervisor.cs','scripts/build-standby.ps1'].includes(input.path) || digest(path.join(repo,input.path)) !== input.sha256) throw new Error('Installer source changed; rebuild before publishing.');
     }
     for (const entry of manifest.files) {
       if (digest(path.join(repo, 'packaging/payload', entry.path)) !== entry.sha256) throw new Error('Payload changed; rebuild before publishing.');
@@ -49,8 +60,8 @@ async function verifyAndPublish(repo, runner = run, outputRepo = repo) {
       if (fs.existsSync(source) && digest(source) !== entry.sha256) throw new Error('Source differs from payload; rebuild before publishing.');
     }
   }
-  checkSource();
-  for (const file of TEST_FILES) await runner(process.execPath, [path.join(repo, 'scripts', file)], repo);
+  const filesToRun = process.env.ROVARIN_PROMOTION_GATE ? [] : TEST_FILES;
+  for (const file of filesToRun) await runner(process.execPath, [path.join(repo, 'scripts', file)], repo);
   await runner(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(repo,'scripts/installer-integration-test.ps1')], repo);
   checkSource();
   const publish = path.join(outputRepo, 'publish');

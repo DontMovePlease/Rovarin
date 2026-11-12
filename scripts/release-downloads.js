@@ -35,7 +35,7 @@ function validateCache(s){
 }
 class Downloads {
   constructor(root,run){this.root=root;this.run=run;this.busy=null;}
-  cacheFile(){const dir=path.join(this.root,'packaging/cache');fs.mkdirSync(dir,{recursive:true});let cursor=dir;while(cursor!==path.dirname(cursor)){if(fs.lstatSync(cursor).isSymbolicLink())throw Error('Statistics cache redirects.');cursor=path.dirname(cursor);}const file=path.join(dir,'release-downloads.json');if(fs.existsSync(file)&&(!fs.lstatSync(file).isFile()||fs.lstatSync(file).isSymbolicLink()))throw Error('Unsafe statistics cache.');return file;}
+  cacheFile(){const dir=(this.root && !fs.existsSync(path.join(this.root,'package.json')))?path.join(this.root,'packaging/cache'):(process.env.ROVARIN_BUILD_CACHE || path.join(process.env.LOCALAPPDATA, 'Rovarin/build-cache'));fs.mkdirSync(dir,{recursive:true});let cursor=dir;while(cursor!==path.dirname(cursor)){if(fs.lstatSync(cursor).isSymbolicLink())throw Error('Statistics cache redirects.');cursor=path.dirname(cursor);}const file=path.join(dir,'release-downloads.json');if(fs.existsSync(file)&&(!fs.lstatSync(file).isFile()||fs.lstatSync(file).isSymbolicLink()))throw Error('Unsafe statistics cache.');return file;}
   refresh(){if(this.busy)return this.busy;this.busy=this.fetch().finally(()=>{this.busy=null;});return this.busy;}
   async fetch(){
     let cached=null,file;try{file=this.cacheFile();if(fs.existsSync(file))cached=validateCache(JSON.parse(fs.readFileSync(file,'utf8')));}catch{}

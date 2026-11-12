@@ -67,6 +67,11 @@ function addToHistory(task, success, summary) {
 
 // Allowlisted Action Definitions
 const ACTIONS = {
+  boost: {
+    id: 'boost', title: 'Boost', category: 'Cleanup', requiresAdmin: false,
+    requiresConfirmation: true,
+    description: 'Reclaims background-app RAM and cleans temporary files without closing your apps.'
+  },
   clean_temp: {
     id: 'clean_temp',
     title: 'Clean Temporary Files',
@@ -200,6 +205,9 @@ function runAction(actionId, onProgress, onComplete, options = {}) {
 
       try {
         switch (actionId) {
+          case 'boost':
+            executeBoost(currentTask, finish).catch(() => finish(false, 'Boost could not be completed.'));
+            break;
           case 'clean_temp':
             executeCleanTemp(currentTask, finish).catch(() => finish(false, 'Temporary cleanup could not be completed.'));
             break;
@@ -323,6 +331,468 @@ function executeElevatedAction(task, finish) {
         consumeMaintenanceProcess(child, task, complete);
       });
   } catch (_) { complete(false, 'The fixed maintenance helper could not be prepared.', { code: 'helper-unavailable' }); }
+}
+
+// On-demand, unelevated, fixed policy. A held handle binds every query and trim.
+const BOOST_MEMORY_SOURCE = String.raw`
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+using System.Text;
+using System.Text.RegularExpressions;
+public static class RovarinBoostMemory {
+  [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,int pid);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool QueryFullProcessImageName(IntPtr process,int flags,StringBuilder path,ref int size);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool IsProcessCritical(IntPtr process,out bool critical);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetProcessTimes(IntPtr process,out long creation,out long exit,out long kernel,out long user);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr window,uint flags);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out int pid);
+  [DllImport("psapi.dll",SetLastError=true)] static extern bool EmptyWorkingSet(IntPtr process);
+  [DllImport("psapi.dll",SetLastError=true)] static extern bool GetProcessMemoryInfo(IntPtr process,out Counters counters,uint size);
+  [StructLayout(LayoutKind.Sequential)] struct Counters { public uint cb,faults; public UIntPtr peak,working,peakPaged,paged,peakNonpaged,nonpaged,pagefile,peakPagefile; }
+  public sealed class Result { public bool success=true; public int eligible,trimmed,failed; public long workingSetReducedBytes,eligibleWorkingSetBytes; }
+  static string GetForegroundProcessImage(out int activePid, out int ownerPid) {
+    activePid = 0; ownerPid = 0;
+    try {
+      var window = GetForegroundWindow();
+      if (window == IntPtr.Zero) return null;
+      GetWindowThreadProcessId(window, out activePid);
+      GetWindowThreadProcessId(GetAncestor(window, 3), out ownerPid);
+      if (activePid <= 4) return null;
+      IntPtr h = OpenProcess(0x1000, false, activePid);
+      if (h == IntPtr.Zero) h = OpenProcess(0x0400, false, activePid);
+      if (h == IntPtr.Zero) return null;
+      try {
+        var sb = new StringBuilder(1024); int len = sb.Capacity;
+        if (QueryFullProcessImageName(h, 0, sb, ref len)) return Path.GetFullPath(sb.ToString());
+      } finally { CloseHandle(h); }
+    } catch {}
+    return null;
+  }
+  static bool Foreground(int pid) { int active,owner; var window=GetForegroundWindow();GetWindowThreadProcessId(window,out active);GetWindowThreadProcessId(GetAncestor(window,3),out owner);return active==pid||owner==pid; }
+  // Kept separate so disposable native fixtures exercise the exact production policy
+  // against only their own process, without touching the host's applications.
+  internal static Result RunCandidates(Process[] candidates,string root,int serverPid,string[] securityRoots=null,bool inspectOnly=false) {
+    var result=new Result();var clock=Stopwatch.StartNew();var self=Process.GetCurrentProcess();
+    int maxEligible=48;
+    ulong minWorking=16UL*1024*1024;
+    string sid=WindowsIdentity.GetCurrent().User.Value,windows=Environment.GetFolderPath(Environment.SpecialFolder.Windows)+Path.DirectorySeparatorChar;
+    root=Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;
+    int fgActivePid, fgOwnerPid;
+    string fgImage = GetForegroundProcessImage(out fgActivePid, out fgOwnerPid);
+    try { foreach(var candidate in candidates) {
+      IntPtr handle=IntPtr.Zero,token=IntPtr.Zero;
+      try {
+        if(clock.ElapsedMilliseconds>8000||result.eligible>=maxEligible)break;
+        int pid=candidate.Id;
+        if(pid==serverPid||pid<=4||candidate.SessionId!=self.SessionId||pid==fgActivePid||pid==fgOwnerPid)continue;
+        var window=candidate.MainWindowHandle;int windowPid;
+        if(window!=IntPtr.Zero) {
+          if(!IsIconic(window))continue;
+          GetWindowThreadProcessId(window,out windowPid);if(windowPid!=pid)continue;
+        }
+        long expected=candidate.StartTime.ToUniversalTime().ToFileTimeUtc(),created,exited,kernel,user;
+        handle=OpenProcess(0x0400|0x0100|0x0010,false,pid);if(handle==IntPtr.Zero)continue;
+        bool critical;
+        if(!GetProcessTimes(handle,out created,out exited,out kernel,out user)||created!=expected||exited!=0||!IsProcessCritical(handle,out critical)||critical)continue;
+        var image=new StringBuilder(32768);int length=image.Capacity;
+        if(!QueryFullProcessImageName(handle,0,image,ref length))continue;
+        string file=Path.GetFullPath(image.ToString());
+        if(fgImage!=null&&string.Equals(file,fgImage,StringComparison.OrdinalIgnoreCase))continue;
+        if(file.StartsWith(windows,StringComparison.OrdinalIgnoreCase)||file.StartsWith(root,StringComparison.OrdinalIgnoreCase)||Regex.IsMatch(Path.GetFileNameWithoutExtension(file),@"(?i)rovarin|defender|msmpeng|nissrv|mssense|security|antivirus|firewall|credential|password|keepass|bitwarden|1password|auth|malware|avast|avg|avira|avp|kaspersky|eset|norton|mcafee|sophos|bitdefender|trendmicro|emsisoft|fsecure|webroot|sentinel|crowdstrike|forti|symantec|comodo|virtualbox|vmware|vbox|antigravity|localharness|t3code"))continue;
+        bool protectedSecurity=false;
+        foreach(string securityRoot in securityRoots??new string[0])if(file.StartsWith(Path.GetFullPath(securityRoot).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)){protectedSecurity=true;break;}
+        if(protectedSecurity)continue;
+        if(!OpenProcessToken(handle,8,out token))continue;
+        using(var identity=new WindowsIdentity(token)){if(identity.User==null||identity.User.Value!=sid)continue;}
+        Counters before,after;uint size=(uint)Marshal.SizeOf(typeof(Counters));
+        if(!GetProcessMemoryInfo(handle,out before,size)||before.working.ToUInt64()<minWorking)continue;
+        if(Foreground(pid)||(window!=IntPtr.Zero&&!IsIconic(window)))continue;
+        result.eligibleWorkingSetBytes+=(long)before.working.ToUInt64();
+        if(inspectOnly){result.eligible++;continue;}
+        if(!EmptyWorkingSet(handle)||!GetProcessMemoryInfo(handle,out after,size)){result.eligible++;result.failed++;continue;}
+        result.eligible++;
+        result.trimmed++;result.workingSetReducedBytes+=Math.Max(0,(long)before.working.ToUInt64()-(long)after.working.ToUInt64());
+      } catch { /* Denied/unverifiable processes are ineligible, never bypassed. */ }
+      finally { if(token!=IntPtr.Zero)CloseHandle(token);if(handle!=IntPtr.Zero)CloseHandle(handle); }
+    } } finally {foreach(var candidate in candidates)candidate.Dispose();self.Dispose();}
+    result.success=result.failed==0;return result;
+  }
+  public static Result Run(string root,int serverPid,string[] securityRoots,bool inspectOnly=false) { return RunCandidates(Process.GetProcesses(),root,serverPid,securityRoots,inspectOnly); }
+}`;
+
+function trimBackgroundMemory(inspectOnly=false) {
+  if (process.platform !== 'win32') return Promise.resolve({ success: false, code: 'unsupported' });
+  const script = `$ErrorActionPreference='Stop';try {
+  $products=@(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -OperationTimeoutSec 3 -ErrorAction Stop)
+  if($products.Count -eq 0){throw 'Security inventory unavailable'}
+  $securityRoots=@(foreach($product in $products){
+    $image=[Environment]::ExpandEnvironmentVariables([string]$product.pathToSignedProductExe).Trim('"')
+    if($image -match '^windowsdefender:'){continue}
+    if(-not [IO.Path]::IsPathRooted($image) -or [IO.Path]::GetExtension($image) -ine '.exe'){throw 'Unverified security location'}
+    [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($image))
+  })
+  Add-Type -TypeDefinition @'
+${BOOST_MEMORY_SOURCE}
+'@; [RovarinBoostMemory]::Run('${__dirname.replace(/'/g,"''")}',${process.pid},[string[]]$securityRoots,${inspectOnly?'$true':'$false'}) | ConvertTo-Json -Compress } catch { @{success=$false;code='memory-unavailable'} | ConvertTo-Json -Compress }`;
+  return new Promise(resolve => execFile('powershell.exe', ['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],
+    { windowsHide:true, timeout:15000, maxBuffer:8192 }, (error,stdout) => {
+      try {
+        const value = JSON.parse(stdout);
+        if (error || ![true,false].includes(value.success) || ![value.eligible,value.trimmed,value.failed,value.workingSetReducedBytes].every(n => Number.isSafeInteger(n) && n >= 0) || value.eligible>256 || (inspectOnly ? value.trimmed!==0||value.failed!==0||!Number.isSafeInteger(value.eligibleWorkingSetBytes) : value.trimmed+value.failed!==value.eligible) || value.success!==(value.failed===0)) throw Error();
+        resolve(value);
+      } catch (_) { resolve({success:false,code:'memory-unavailable'}); }
+    }));
+}
+
+// Deliberately narrower than general maintenance: no unrestricted recursive deletion,
+// no elevated cleanup, no documents/browser sessions/downloads.
+// Safely targets user temp files, shader cache, and user crash dumps older than 24 hours.
+const BOOST_SCRATCH_PATTERN = /^(rovarin|scoped_dir|npm-|pip-|yarn-|tmp|temp|\.tmp|wct|electron|node-|installer|cargo|rust|playwright|puppeteer)/i;
+
+async function cleanScratchDirectoryTree(dirPath, cutoff, result, deadline, opsRef) {
+  if (Date.now() > deadline || result.deletedCount >= 25000) { result.limited = true; return false; }
+  try {
+    const st = await fs.promises.lstat(dirPath);
+    if (st.isSymbolicLink() || !st.isDirectory()) return false;
+    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    // Protect version control repositories and IDE workspaces from deletion
+    if (entries.some(e => /^\.(git|svn|hg|vs|vscode)$/i.test(e.name))) {
+      result.skippedCount += entries.length;
+      return false;
+    }
+    let allCleaned = true;
+    for (const ent of entries) {
+      if (Date.now() > deadline || result.deletedCount >= 25000) { result.limited = true; return false; }
+      if (++opsRef.count % 100 === 0) await new Promise(r => setImmediate(r));
+      const childPath = path.join(dirPath, ent.name);
+      try {
+        const childSt = await fs.promises.lstat(childPath);
+        if (childSt.isSymbolicLink() || childSt.nlink !== 1) {
+          allCleaned = false;
+          result.skippedCount++;
+          continue;
+        }
+        if (childSt.isDirectory()) {
+          const subOk = await cleanScratchDirectoryTree(childPath, cutoff, result, deadline, opsRef);
+          if (!subOk) allCleaned = false;
+        } else if (childSt.isFile()) {
+          // Protect user documents and sensitive containers from deletion
+          if (/\.(docx|xlsx|pptx|pdf|psd|ai|blend|epub|mobi|vhd|vhdx|kdbx)$/i.test(ent.name)) {
+            result.skippedCount++;
+            allCleaned = false;
+            continue;
+          }
+          result.scannedCount++;
+          if (childSt.mtimeMs > cutoff || (childSt.birthtimeMs && childSt.birthtimeMs > cutoff)) {
+            result.skippedCount++;
+            allCleaned = false;
+            continue;
+          }
+          result.eligibleCount++;
+          try {
+            await fs.promises.unlink(childPath);
+            result.bytesFreed += childSt.size;
+            result.deletedCount++;
+          } catch (e) {
+            result.skippedCount++;
+            allCleaned = false;
+          }
+        } else {
+          allCleaned = false;
+          result.skippedCount++;
+        }
+      } catch (_) {
+        allCleaned = false;
+        result.skippedCount++;
+      }
+    }
+    if (allCleaned) {
+      try {
+        await fs.promises.rmdir(dirPath);
+        result.deletedCount++;
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+  } catch (_) {
+    result.skippedCount++;
+  }
+  return false;
+}
+
+// Deliberately narrower than general maintenance: no unrestricted recursive deletion,
+// no elevated cleanup, no documents/browser sessions/downloads.
+// Safely targets user temp files, shader cache, and user crash dumps.
+async function cleanBoostTargetDirectory(root, cutoff, result, deadline, allowedPattern = /\.(tmp|temp)$/i, options = {}) {
+  const entries = await fs.promises.opendir(root);
+  let staging;
+  let sequence = 0;
+  const opsRef = { count: 0 };
+  try {
+    for await (const entry of entries) {
+      if (Date.now() > deadline || result.deletedCount >= 25000) { result.limited = true; break; }
+      if (++opsRef.count % 100 === 0) await new Promise(r => setImmediate(r));
+      result.scannedCount++;
+      const file = path.join(root, entry.name);
+      try {
+        const before = await fs.promises.lstat(file);
+        if (before.isSymbolicLink() || before.nlink !== 1) { result.skippedCount++; continue; }
+        if (before.isFile()) {
+          if (!allowedPattern.test(entry.name)) { result.skippedCount++; continue; }
+          if (before.mtimeMs > cutoff || (before.birthtimeMs && before.birthtimeMs > cutoff)) { result.skippedCount++; continue; }
+          result.eligibleCount++;
+          if (!staging) staging = await fs.promises.mkdtemp(path.join(root, 'rovarin-boost-recovery-'));
+          const captured = path.join(staging, String(sequence++) + '.tmp');
+          await fs.promises.rename(file, captured);
+          const current = await fs.promises.lstat(captured);
+          if (!current.isFile() || current.nlink !== 1 || current.dev !== before.dev || current.ino !== before.ino || current.size !== before.size || current.mtimeMs !== before.mtimeMs) {
+            result.skippedCount++; result.failedCount++;
+            if (current.isFile() && !current.isSymbolicLink()) {
+              try { await fs.promises.link(captured, file); await fs.promises.unlink(captured); } catch (_) {}
+            }
+            continue;
+          }
+          await fs.promises.unlink(captured);
+          result.bytesFreed += before.size; result.deletedCount++;
+        } else if (before.isDirectory() && options.allowScratchDirs === true) {
+          // Never delete recovery directories created by previous staging
+          if (/^rovarin-boost-recovery-/i.test(entry.name)) {
+            result.skippedCount++; continue;
+          }
+          if (!BOOST_SCRATCH_PATTERN.test(entry.name)) {
+            result.skippedCount++; continue;
+          }
+          if (before.mtimeMs > cutoff || (before.birthtimeMs && before.birthtimeMs > cutoff)) { result.skippedCount++; continue; }
+          await cleanScratchDirectoryTree(file, cutoff, result, deadline, opsRef);
+        } else {
+          result.skippedCount++;
+        }
+      } catch (_) { result.skippedCount++; result.failedCount++; }
+    }
+  } finally {
+    if (staging) { try { await fs.promises.rmdir(staging); } catch (_) { result.recoveryRetained = true; } }
+  }
+}
+
+async function cleanBoostTemp(directory = null, now = Date.now(), options = {}) {
+  const retentionMs = options.retentionMs ?? (directory ? 24 * 60 * 60 * 1000 : 2 * 60 * 60 * 1000);
+  const cutoff = now - retentionMs;
+  const deadline = Date.now() + (options.timeoutMs ?? (directory ? 10000 : 25000));
+  const result = {
+    bytesFreed: 0,
+    deletedCount: 0,
+    scannedCount: 0,
+    eligibleCount: 0,
+    skippedCount: 0,
+    failedCount: 0,
+    limited: false,
+    recoveryRetained: false,
+    categories: {
+      userTemp: { scanned: 0, deleted: 0, bytesFreed: 0, skipped: 0 },
+      shaderCache: { scanned: 0, deleted: 0, bytesFreed: 0, skipped: 0 },
+      crashReports: { scanned: 0, deleted: 0, bytesFreed: 0, skipped: 0 },
+      inetCache: { scanned: 0, deleted: 0, bytesFreed: 0, skipped: 0 },
+      windowsTemp: { scanned: 0, deleted: 0, bytesFreed: 0, skipped: 0 }
+    }
+  };
+
+  if (directory) {
+    const root = await fs.promises.realpath(directory);
+    if (path.resolve(directory) !== root || !(await fs.promises.lstat(root)).isDirectory()) throw Error('Unsafe temp root');
+    await cleanBoostTargetDirectory(root, cutoff, result, deadline, /\.(tmp|temp)$/i, { allowScratchDirs: options.allowScratchDirs || false });
+    return result;
+  }
+
+  const targets = [];
+  const realTemp = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Temp') : os.tmpdir();
+  targets.push({ dir: realTemp, pattern: /\.(tmp|temp|log|dmp|bak|old|chk|prx)$/i, category: 'userTemp', allowScratchDirs: true });
+
+  if (path.resolve(os.tmpdir()) !== path.resolve(realTemp)) {
+    targets.push({ dir: os.tmpdir(), pattern: /\.(tmp|temp)$/i, category: 'userTemp', allowScratchDirs: false });
+  }
+
+  if (process.env.LOCALAPPDATA) {
+    targets.push({
+      dir: path.join(process.env.LOCALAPPDATA, 'D3DSCache'),
+      pattern: /\.(bin|toc|lock)$/i,
+      category: 'shaderCache',
+      allowScratchDirs: false
+    });
+    targets.push({
+      dir: path.join(process.env.LOCALAPPDATA, 'CrashDumps'),
+      pattern: /\.dmp$/i,
+      category: 'crashReports',
+      allowScratchDirs: false
+    });
+    targets.push({
+      dir: path.join(process.env.LOCALAPPDATA, 'Microsoft', 'Windows', 'WER', 'ReportArchive'),
+      pattern: /.*/,
+      category: 'crashReports',
+      allowScratchDirs: false
+    });
+    targets.push({
+      dir: path.join(process.env.LOCALAPPDATA, 'Microsoft', 'Windows', 'WER', 'ReportQueue'),
+      pattern: /.*/,
+      category: 'crashReports',
+      allowScratchDirs: false
+    });
+    targets.push({
+      dir: path.join(process.env.LOCALAPPDATA, 'Microsoft', 'Windows', 'INetCache'),
+      pattern: /.*/,
+      category: 'inetCache',
+      allowScratchDirs: false
+    });
+  }
+
+  const winTemp = path.join(process.env.SystemRoot || 'C:\\Windows', 'Temp');
+  targets.push({
+    dir: winTemp,
+    pattern: /\.(tmp|temp|log|dmp|bak)$/i,
+    category: 'windowsTemp',
+    allowScratchDirs: false
+  });
+
+  for (const t of targets) {
+    try {
+      if (!fs.existsSync(t.dir)) continue;
+      const root = await fs.promises.realpath(t.dir);
+      if (path.resolve(t.dir) !== root || !(await fs.promises.lstat(root)).isDirectory()) continue;
+      const beforeDeleted = result.deletedCount;
+      const beforeBytes = result.bytesFreed;
+      const beforeScanned = result.scannedCount;
+      const beforeSkipped = result.skippedCount;
+      await cleanBoostTargetDirectory(root, cutoff, result, deadline, t.pattern, { allowScratchDirs: t.allowScratchDirs });
+      if (result.categories[t.category]) {
+        result.categories[t.category].scanned += (result.scannedCount - beforeScanned);
+        result.categories[t.category].deleted += (result.deletedCount - beforeDeleted);
+        result.categories[t.category].bytesFreed += (result.bytesFreed - beforeBytes);
+        result.categories[t.category].skipped += (result.skippedCount - beforeSkipped);
+      }
+    } catch (_) {}
+  }
+
+  return result;
+}
+
+function formatBoostBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
+  if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(2)} GB`;
+  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+function createBoostPressurePolicy() {
+  let since=null,latched=false,lastBoost=-Infinity,lastSample=-Infinity;
+  return {
+    sample(total,available,now=Date.now()) {
+      if(now-lastSample>15000||now<lastSample){since=null;latched=false;}
+      lastSample=now;
+      if(!Number.isFinite(total)||total<=0||!Number.isFinite(available)||available<0||available>total){since=null;latched=false;return false;}
+      const low=available<=Math.min(total*.12,2*1073741824);
+      const recovered=available>=Math.min(total*.20,3*1073741824);
+      if(recovered){latched=false;since=null;}
+      else if(low&&!latched){latched=true;since=now;}
+      return latched&&since!==null&&now-since>=45000&&now-lastBoost>=600000;
+    },
+    completed(now=Date.now()){lastBoost=now;since=null;latched=false;}
+  };
+}
+const boostPressure=createBoostPressurePolicy();
+let boostProbe=null,boostProbeAt=-Infinity,boostProbePending=false;
+function boostAdvice() {
+  const now=Date.now();
+  const sustained=boostPressure.sample(os.totalmem(),os.freemem(),now);
+  if(sustained&&!isRunning&&!boostProbePending&&now-boostProbeAt>=60000){
+    boostProbeAt=now;boostProbePending=true;
+    trimBackgroundMemory(true).then(value=>{boostProbe=value;}).catch(()=>{boostProbe=null;}).finally(()=>{boostProbePending=false;});
+  }
+  const fresh=now-boostProbeAt<60000&&!boostProbePending;
+  const suggested=Boolean(sustained&&fresh&&boostProbe?.success&&boostProbe.eligible>0&&boostProbe.eligibleWorkingSetBytes>=256*1048576);
+  return {suggested,reason:suggested?'sustained-memory-pressure':'not-recommended',sampledAt:now};
+}
+
+async function executeBoost(task, finish) {
+  if (process.platform !== 'win32') return finish(false,'Boost is available on Windows only.',{code:'unsupported'});
+  task.totalSteps=2;
+  task.stepTitle='Cleaning temporary files…';
+  let disk;
+  try {
+    disk=await cleanBoostTemp();
+  }
+  catch (_) { return finish(false,'Temporary folder could not be verified; Boost stopped.',{code:'scan-unavailable'}); }
+  task.currentStep=2; task.stepTitle='Reclaiming background-app memory…';
+  const freeBefore = typeof os.freemem === 'function' ? os.freemem() : 0;
+  const memory = await trimBackgroundMemory();
+  boostPressure.completed();
+  const freeAfter = typeof os.freemem === 'function' ? os.freemem() : freeBefore;
+  const workingSetBytes = (Number.isSafeInteger(memory.workingSetReducedBytes) && (memory.trimmed || 0) > 0)
+    ? Math.max(0, memory.workingSetReducedBytes)
+    : 0;
+  const availableChangeBytes=freeAfter-freeBefore;
+  const availGainedBytes = Math.max(0,availableChangeBytes);
+  const ramFreedBytes = workingSetBytes;
+  const tempFreedBytes = disk.bytesFreed || 0;
+  const wsLabel = formatBoostBytes(workingSetBytes);
+  const availLabel = formatBoostBytes(availGainedBytes);
+  const tempLabel = formatBoostBytes(tempFreedBytes);
+  const partial = Boolean(disk.recoveryRetained || (disk.failedCount > 0 && disk.deletedCount === 0));
+  const success = !disk.recoveryRetained;
+  const scanned = disk.scannedCount || 0;
+  const deleted = disk.deletedCount || 0;
+  const skipped = disk.skippedCount || 0;
+  const failed = disk.failedCount || 0;
+  const trimmed = memory.trimmed || 0;
+  const isNoOp = !partial && workingSetBytes === 0 && tempFreedBytes === 0 && trimmed === 0;
+  const availSign = availableChangeBytes < 0 ? '-' : '+';
+  const availDiff = formatBoostBytes(Math.abs(availableChangeBytes));
+
+  let summary;
+  if (isNoOp) {
+    summary = `No Optimization Needed. Inspected ${scanned} items across temporary files and caches; evaluated background processes (none eligible for trimming or cache cleanup).`;
+  } else {
+    const parts = [];
+    if (tempFreedBytes > 0 || deleted > 0) {
+      parts.push(`Temporary files removed: ${tempLabel} (${deleted} items)`);
+    } else {
+      parts.push(`Temporary files: 0 MB freed (${scanned} scanned)`);
+    }
+    if (workingSetBytes > 0 || trimmed > 0) {
+      parts.push(`Working-set reduction: ${wsLabel} across ${trimmed} background apps`);
+    } else {
+      parts.push(`Memory: 0 MB trimmed`);
+    }
+    parts.push(`System available RAM: ${availSign}${availDiff} observed`);
+    if (skipped > 0 || failed > 0) {
+      parts.push(`(${skipped} skipped, ${failed} failed)`);
+    }
+    summary = parts.join('. ') + '.';
+  }
+  appendLog(task,summary,partial?'warn':'info');
+  finish(success,summary,{
+    code:disk.recoveryRetained?'partially-completed':(isNoOp?'no-eligible-items':'boosted'),
+    ...disk,
+    bytesFreed:tempFreedBytes,
+    tempFreedBytes,
+    reclaimedBytes: tempFreedBytes,
+    ramFreedBytes,
+    workingSetTrimmedBytes: workingSetBytes,
+    workingSetReductionBytes: workingSetBytes,
+    workingSetReducedBytes: workingSetBytes,
+    availableGainedBytes: availGainedBytes,
+    availableChangeBytes,
+    availableBeforeBytes: freeBefore,
+    availableAfterBytes: freeAfter,
+    trimmedProcesses: trimmed,
+    memory
+  });
 }
 
 // 1. Clean Temporary Files
@@ -714,7 +1184,7 @@ function executeRestartExplorer(task, finish) {
 }
 
 // Export module interface
-module.exports = {
+module.exports = { boostAdvice, standbyBusy:()=>isRunning||boostProbePending,
   ACTIONS,
   runAction,
   setServiceClient: (client) => { serviceClient = client; },

@@ -1,8 +1,32 @@
 'use strict';
-const assert=require('assert'),fs=require('fs'),os=require('os'),path=require('path'),crypto=require('crypto'),{execFile}=require('child_process');
+const assert=require('assert'),fs=require('fs'),os=require('os'),path=require('path'),crypto=require('crypto'),{execFile,execFileSync}=require('child_process');
 const {AppManager,windowsOperation,validRow,publicApp,cleanPublisher}=require('../app-manager');
 const baseRow=(name='Fixture',scope='user',key='fixture')=>({name,version:'1.0',publisher:'Test',locator:{scope,key},fingerprint:'a'.repeat(64),type:'msi',product:'{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}',batchCapable:true,elevationLikely:false});
 async function mocked(){
+ if(process.platform==='win32'){
+  const source=path.join(__dirname,'app-manager.ps1').replace(/'/g,"''");
+  const code=`$ErrorActionPreference='Stop';$t=$null;$e=$null;$a=[Management.Automation.Language.Parser]::ParseFile('${source}',[ref]$t,[ref]$e);if($e.Count){throw 'Syntax'};foreach($f in $a.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Collect-PackageStartup','Fingerprint')},$true)){Invoke-Expression $f.Extent.Text};function Get-RovarinPackageDisplayName { 'Fixture App' };function Get-RovarinCleanPublisher { 'Fixture Publisher' };function Test-IsOpaqueIdentifier { $false };Add-Type 'public static class RovarinDisplayResources { public static string Resolve(string source) { return "Fixture Component"; } }';[xml]$m='<Package><Extension Executable="component.exe" Category="windows.startupTask"><StartupTask TaskId="InternalTask" DisplayName="ms-resource:ComponentName"/></Extension><Extension Executable="other.exe" Category="windows.startupTask"><StartupTask TaskId="OtherTask" DisplayName="Other component"/></Extension></Package>';$global:packageStartup=[Collections.Generic.List[object]]::new();Collect-PackageStartup ([pscustomobject]@{Name='Fixture';PackageFullName='Fixture_1';PackageFamilyName='Fixture_family';Publisher='Fixture'}) $m;if($global:packageStartup[0].displayName -cne 'Fixture Component' -or $global:packageStartup[0].command -cne 'component.exe' -or -not $global:packageStartup[0].readOnly){throw 'Package startup identity regression'};'PASS component startup resource names, extension executable and read-only package boundary'`;
+  console.log(execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',code],{encoding:'utf8',windowsHide:true,timeout:15000}).trim());
+  const denied=`$ErrorActionPreference='Stop';$t=$null;$e=$null;$a=[Management.Automation.Language.Parser]::ParseFile('${source}',[ref]$t,[ref]$e);foreach($f in $a.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Set-StartupApproved'},$true)){Invoke-Expression $f.Extent.Text};function Test-Path {$true};function Set-ItemProperty {};function Get-ItemProperty {@{Fixture=[byte[]]@(2,0,0,0,0,0,0,0,0,0,0,0)}};$rejected=$false;try{Set-StartupApproved 'Run' 'Fixture' $false}catch{$rejected=$true};if(-not $rejected){throw 'Unconfirmed provider write accepted'};'PASS injected no-write failure rejected before success'`;
+  console.log(execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',denied],{encoding:'utf8',windowsHide:true,timeout:15000}).trim());
+  const unknown=`$ErrorActionPreference='Stop';$t=$null;$e=$null;$a=[Management.Automation.Language.Parser]::ParseFile('${source}',[ref]$t,[ref]$e);foreach($f in $a.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Is-StartupApproved'},$true)){Invoke-Expression $f.Extent.Text};if((Is-StartupApproved 'Run' 'RovarinAbsentApproval-82d9c9c4' 'HKCU:') -ne $true){throw 'Absent approval default'};function Get-ItemProperty {@{Fixture='malformed'}};if($null -ne (Is-StartupApproved 'Run' 'Fixture' 'HKCU:')){throw 'Malformed approval guessed enabled'};function Get-ItemProperty {throw [UnauthorizedAccessException]::new('Fixture denial')};if($null -ne (Is-StartupApproved 'Run' 'Fixture' 'HKCU:')){throw 'Denied approval guessed enabled'};'PASS missing default distinguished from malformed and denied startup state'`;
+  console.log(execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',unknown],{encoding:'utf8',windowsHide:true,timeout:15000}).trim());
+ }
+ const firstPackage={...baseRow('First package','appx','First_1'),type:'appx'};
+ const changedPackage={...baseRow('Changed package','appx','Changed_2'),type:'appx'};
+ const startupSnapshot=['First startup','Changed startup'].map((name,index)=>({name,displayName:name,locator:{source:'packaged-startup',key:'Family'+index+'|task'},fingerprint:'a'.repeat(64),enabled:true,readOnly:true}));let phase=0;
+ const incremental=new AppManager({operation:async request=>{
+   if(request.action==='startup-inventory'){
+     assert(!('packageStartup' in request),'partial package startup must trigger complete on-demand discovery');
+     return {success:true,items:startupSnapshot};
+   }
+   return phase++===0?{success:true,apps:[firstPackage],packagesAvailable:true,packageStartup:startupSnapshot}:
+     {success:true,apps:[{unchanged:true,locator:firstPackage.locator,fingerprint:firstPackage.fingerprint},changedPackage],packagesAvailable:true,packageStartup:[startupSnapshot[1]]};
+ }});
+ await incremental.inventory();assert.equal(incremental.packageStartup.length,2);
+ await incremental.inventory(true);assert.equal(incremental.packageStartup,null);
+ assert.equal((await incremental.startupInventory(true)).items.length,2,'complete fallback restores unchanged and changed package entries');
+ console.log('PASS mixed Store refresh cannot hide unchanged package startup entries');
  const sizeFunction=require('vm').runInNewContext('('+fs.readFileSync(path.join(__dirname,'../public/apps.js'),'utf8').match(/  function sizeLabel[^\r\n]+/)[0].trim()+')');
  assert.equal(sizeFunction(500*1024),'500 MB');assert.equal(sizeFunction(1536*1024),'1.5 GB');assert.equal(sizeFunction(42),'42 KB');assert.equal(sizeFunction(0),'0 KB');assert.equal(sizeFunction(null),'—');
  assert.equal(sizeFunction(1024),'1 MB');assert.equal(sizeFunction(20480),'20 MB');assert.equal(sizeFunction(524288),'512 MB');assert.equal(sizeFunction(1048576),'1 GB');assert.equal(sizeFunction(1468006),'1.4 GB');assert.equal(sizeFunction(1024*1024*4),'4 GB');
@@ -114,7 +138,7 @@ async function mocked(){
   // Frontend Installed actions separation and sorting checks
   const appsJsContent=fs.readFileSync(path.join(__dirname,'../public/apps.js'),'utf8');
   assert(!appsJsContent.includes("node('button','Launch','apps-launch-btn')"),'Installed rows must never render a Launch action');
-  assert(appsJsContent.includes("node('button','Uninstall','apps-row-action apps-uninstall-btn')"),'Installed rows must render direct Uninstall button');
+  assert(appsJsContent.includes("node('button',app.batchCapable?'Uninstall':'Open uninstaller','apps-row-action apps-uninstall-btn')"),'Installed rows distinguish removal from interactive Windows handoff');
   assert(appsJsContent.includes("app.category==='system'?'System info':'Removal options'"),'Manual entries render contextual removal guidance');
   assert(appsJsContent.includes("node('div',undefined,'apps-card-header')"),'Installed rows structure card header');
   assert(appsJsContent.includes("node('div',undefined,'apps-card-meta')"),'Installed rows structure card meta');
@@ -215,7 +239,7 @@ async function mocked(){
   const trayVm=require('vm').runInNewContext(
     '(function(){'+
     '  const selected=new Set();'+
-    '  let selectionMode=false, trayExpanded=false;'+
+    '  let trayExpanded=false;'+
     '  let searchVal="", typeVal="", showSystemVal=false;'+
     '  const apps=['+
     '    {id:"app-1",name:"Apple Software Update",publisher:"Apple Inc.",sizeKB:500*1024,category:"desktop",uninstallCapable:true},'+
@@ -239,7 +263,6 @@ async function mocked(){
     '  const dom={'+
     '    appsSelectionBar:{hidden:true,classList:makeClassList()},'+
     '    appsPage:{hidden:false,classList:makeClassList()},'+
-    '    appsSelectModeBtn:{textContent:"Select apps"},'+
     '    appsSelectedCount:{textContent:"0 selected"},'+
     '    appsSelectedSize:{textContent:""},'+
     '    appsSelectedPreview:{textContent:""},'+
@@ -277,8 +300,7 @@ async function mocked(){
     '    const isInstalledActive=Boolean(dom.appsPage && !dom.appsPage.hidden && activeTab==="installed");'+
     '    const showTray=Boolean(isInstalledActive && hasSelection);'+
     '    dom.appsSelectionBar.hidden=!showTray;'+
-    '    if(showTray){dom.appsPage.classList.add("has-selection-tray");dom.appsPage.classList.add("is-selecting");}else{dom.appsPage.classList.remove("has-selection-tray");if(!selectionMode)dom.appsPage.classList.remove("is-selecting");}'+
-    '    dom.appsSelectModeBtn.textContent=(selectionMode||hasSelection)?"Cancel":"Select apps";'+
+    '    if(showTray){dom.appsPage.classList.add("has-selection-tray");dom.appsPage.classList.add("is-selecting");}else{dom.appsPage.classList.remove("has-selection-tray");dom.appsPage.classList.remove("is-selecting");}'+
     '    if(!showTray&&trayExpanded)setTrayExpanded(false);'+
     '    let totalKB=0,unknownCount=0,hasEstimated=false,knownCount=0;'+
     '    for(const a of selectedApps){if(Number.isFinite(a.sizeKB)&&a.sizeKB>=0){totalKB+=a.sizeKB;knownCount++;if(a.sizeEstimated)hasEstimated=true;}else unknownCount++;}'+
@@ -525,6 +547,15 @@ async function mocked(){
   assert.equal(toggleRes.enabled, false);
   assert.equal(toggledReq.locator.key, 'UserApp');
   assert.equal(toggledReq.enabled, false);
+  const user32={...startupItemsFixture[0],source:'registry-user32',locator:{source:'registry-user32',key:'User32App'}};
+  const manager32=new AppManager({operation:async req=>req.action==='startup-inventory'?{success:true,items:[user32]}:{success:true,enabled:req.enabled}});
+  const entry32=(await manager32.startupInventory()).items[0];assert.equal(entry32.readOnly,false);
+  assert.equal((await manager32.toggleStartup(entry32.id,false)).enabled,false);
+  for(const response of [{success:true},{success:true,enabled:true}]){
+    manager32.operation=async()=>response;
+    await assert.rejects(manager32.toggleStartup(entry32.id,false),/startup-state-unconfirmed/);
+    assert.equal(manager32.startupRows.get(entry32.id).enabled,false,'unconfirmed output cannot alter last confirmed state');
+  }
 
   await assert.rejects(async () => startupMgr.toggleStartup(stData.items[1].id, false), /elevation-required/);
   await assert.rejects(async () => startupMgr.toggleStartup(stData.items[0].id, 'not-a-bool'), /invalid-request/);
@@ -567,7 +598,12 @@ async function nativeStartupState(){
 }
 async function nativePackageResults(){
  if(process.platform!=='win32')return;
- const helper=path.join(__dirname,'app-manager.ps1').replaceAll("'","''"),wrapper=path.join(directory,'mock-package.ps1');
+ const helperCopy=path.join(directory,'app-manager.ps1'),logs=path.join(directory,'diagnostics'),quote=s=>"'"+s.replaceAll("'","''")+"'";
+ const helperSource=fs.readFileSync(path.join(__dirname,'app-manager.ps1'),'utf8');
+ const diagnosticAnchor="$directory = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Rovarin\\Diagnostics'";
+ assert(helperSource.includes(diagnosticAnchor),'fixed diagnostic fixture anchor');
+ fs.writeFileSync(helperCopy,helperSource.replace(diagnosticAnchor,'$directory = '+quote(logs)).replaceAll('$PSScriptRoot',quote(__dirname)));
+ const helper=helperCopy.replaceAll("'","''"),wrapper=path.join(directory,'mock-package.ps1');
  // Function-scoped Windows cmdlet doubles: no installed package is modified.
  fs.writeFileSync(wrapper,`param([string]$Mode)
  $script:mode=$Mode
@@ -592,7 +628,6 @@ async function nativePackageResults(){
      child.stdin.end(JSON.stringify({action:'uninstall',ownerSid:'placeholder',locator:{scope:'appx',key},fingerprint:crypto.createHash('sha256').update(key).digest('hex'),batch:false,pin:'PRIVATE_TEST_PIN_SENTINEL',session:'PRIVATE_TEST_SESSION_SENTINEL'}));
    });
    assert.equal(result.code,expected,mode);
-   const logs=path.join(process.env.LOCALAPPDATA,'Rovarin','Diagnostics');
    const evidence=fs.readdirSync(logs).filter(f=>/^appx-uninstall-[a-f0-9]{32}\.jsonl$/.test(f)).map(f=>({file:path.join(logs,f),text:fs.readFileSync(path.join(logs,f),'utf8')})).find(log=>log.text.includes('\"pid\":'+helperPid+',' )||log.text.includes('\"pid\":'+helperPid+'}'));
    assert(evidence,'persistent diagnostic survives helper exit');
    const checkpoints=evidence.text.trim().split('\n').map(line=>JSON.parse(line));
@@ -604,6 +639,120 @@ async function nativePackageResults(){
    if(['denied','protected-error','in-use','unknown'].includes(mode))assert(/^0x[0-9a-f]{8}$/i.test(result.hresult),'bounded HRESULT retained');
  }
  console.log('PASS actual PowerShell helper with disposable cmdlet doubles: user binding, synchronous removal/registration proof, Windows denial/protection/in-use/HRESULT, stale registration, persistent sanitized activity diagnostics; no real package removed');
+}
+async function packagePinRegression(){
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rovarin-package-pin-'));
+ const old='OpenAI.Codex_26.1029.7803.0_x64__2p2nqsd0c76g0',key='OpenAI.Codex_26.1103.3517.0_x64__2p2nqsd0c76g0',family='OpenAI.Codex_2p2nqsd0c76g0';
+ try {
+  const make=(name=key,f=family)=>({...baseRow('ChatGPT','appx',name),product:null,type:'appx',cleanupPackageFamily:f,launchCapable:true});
+  let rows=[make()];const manager=new AppManager({stateDirectory:dir,operation:async()=>({success:true,apps:rows,packagesAvailable:true})});
+  manager.quickLaunch={pins:[{name:'ChatGPT',locator:{scope:'appx',key:old}}]};await manager.inventory();
+  let pins=manager.getQuickLaunch().pins;assert.equal(pins[0].available,true);assert.equal(pins[0].locator.key,key);assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'quick-launch.json'))).pins[0].locator.key,key);
+  manager.quickLaunch.pins[0].locator.key=old;rows=[make(key,'OpenAI.Codex_DIFFERENT')];await manager.inventory(true);assert.equal(manager.getQuickLaunch().pins[0].available,false,'never match display name or another publisher');
+  rows=[make(),make('OpenAI.Codex_26.1103.3517.0_x86__2p2nqsd0c76g0')];await manager.inventory(true);assert.equal(manager.getQuickLaunch().pins[0].available,false,'ambiguous family remains unavailable');
+  rows=[{...make(),launchCapable:false}];await manager.inventory(true);assert.equal(manager.getQuickLaunch().pins[0].available,false,'nonlaunchable packages never repair a pin');
+  console.log('PASS Store Quick Launch version migration, persisted identity, publisher separation, ambiguity and nonlaunchable rejection');
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
+}
+async function uninstallerReliabilityAndRecoveryRegression(){
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rovarin-uninstaller-qa-'));
+ try{
+  const fixtureRow={locator:{scope:'user',key:'QAUnconfirmedApp'},fingerprint:'c'.repeat(64),name:'QA App',type:'exe',batchCapable:false,version:'2.0',publisher:'QA Publisher',sizeKB:1024,sizeEstimated:true,installDate:'2026-06-01'};
+  let installed=true;
+  const mgr=new AppManager({stateDirectory:dir,operation:async req=>{
+   if(req.action==='inventory')return {success:true,apps:installed?[fixtureRow]:[],packagesAvailable:true};
+   if(req.action==='uninstall')return {success:true,code:'still-running',helperExited:true};
+   if(req.action==='verify-uninstall')return {success:true,code:'inspected',installed};
+   if(req.action==='installed-apps-settings')return {success:true,code:'settings-opened',changed:false};
+   throw Error('unexpected action');
+  }});
+  const inv=await mgr.inventory();
+  assert.equal(inv.apps[0].sizeEstimated,true);
+  assert.equal(inv.apps[0].installDate,'2026-06-01');
+  const appId=inv.apps[0].id;
+
+  // Start uninstall -> results in unconfirmed state
+  await mgr.start([appId],false);
+  await mgr.running;
+  assert.equal(mgr.blocked,true);
+  assert.equal(mgr.job.state,'unconfirmed');
+  assert.equal(mgr.job.items[0].state,'unconfirmed');
+
+  // Duplicate uninstall launch must be strictly blocked
+  await assert.rejects(mgr.start([appId],false),/operation-unconfirmed/);
+
+  // Journal must exist and contain sanitized unconfirmed state
+  const journalFile=path.join(dir,'uninstall-operation.json');
+  assert(fs.existsSync(journalFile));
+  const journalRaw=fs.readFileSync(journalFile,'utf8');
+  assert(!journalRaw.includes('pin')&&!journalRaw.includes('session'),'journal must not leak credentials');
+
+  // Reconciliation while still installed must keep blocked = true for Win32
+  await mgr.reconcile();
+  assert.equal(mgr.blocked,true);
+  assert.equal(mgr.job.items[0].code,'still-installed');
+
+  // Safe recovery across backend restart: new manager reloads journal
+  const recovered=new AppManager({stateDirectory:dir,operation:async req=>{
+   if(req.action==='inventory')return {success:true,apps:[fixtureRow],packagesAvailable:true};
+   if(req.action==='verify-uninstall')return {success:true,code:'inspected',installed};
+   if(req.action==='installed-apps-settings')return {success:true,code:'settings-opened',changed:false};
+   return {success:false};
+  }});
+  assert.equal(recovered.blocked,true);
+  assert.equal(recovered.job?.state,'unconfirmed');
+  assert.equal(recovered.uninstallTargets.length,1);
+
+  // Clearing an unconfirmed uninstall:
+  // Must NEVER claim removal or success; marks failed/still-installed, clears journal, and unblocks
+  await assert.rejects(async()=>recovered.clearUnconfirmed(()=>false),/authentication-required/);
+  const clearedStatus=recovered.clearUnconfirmed(()=>true);
+  assert.equal(clearedStatus.blocked,false);
+  assert.equal(recovered.blocked,false);
+  assert.equal(clearedStatus.job.state,'failed');
+  assert.equal(clearedStatus.job.items[0].state,'failed');
+  assert.equal(clearedStatus.job.items[0].code,'still-installed');
+  assert(!fs.existsSync(journalFile),'clearing unconfirmed deletes journal file');
+
+  // Windows settings handoff
+  const recoveredInv=await recovered.inventory();
+  const recAppId=recoveredInv.apps[0].id;
+  const settingsResult=await recovered.openInstalledAppsSettings(recAppId,()=>true);
+  assert.equal(settingsResult.code,'settings-opened');
+  await assert.rejects(recovered.openInstalledAppsSettings(recAppId,()=>false),/authentication-required/);
+
+  // Unsupported reason classification
+  for(const [reason,props] of [
+   ['system-component',{systemComponent:true}],
+   ['protected-application',{protected:true}],
+   ['missing-executable',{type:'manual',manualReason:'missing-executable'}],
+   ['unsupported-syntax',{type:'manual',manualReason:'unsupported-syntax'}],
+   ['no-uninstall-string',{type:'manual',manualReason:'no-uninstall-string'}],
+   ['outside-system-roots',{type:'manual',manualReason:'outside-system-roots'}]
+  ]){
+   const app=publicApp({...fixtureRow,...props,type:props.type||fixtureRow.type},'id-qa');
+   assert.equal(app.uninstallCapable,false);
+   assert.equal(app.unsupportedReason,reason,`expected ${reason}`);
+  }
+
+  // Force refresh clears cached fingerprints
+  let calls=[];
+  const forcedMgr=new AppManager({operation:async req=>{
+   calls.push(req);
+   return {success:true,apps:[fixtureRow],packagesAvailable:true};
+  }});
+  await forcedMgr.inventory(false);
+  assert(!calls[0].cachedFingerprints);
+  forcedMgr.cache=null;
+  await forcedMgr.inventory(false);
+  assert(calls[1].cachedFingerprints,'incremental inventory sends cached fingerprints');
+  await forcedMgr.inventory(true);
+  assert(!calls[2].cachedFingerprints,'forced refresh must omit cached fingerprints so PowerShell re-reads registry');
+
+  console.log('PASS uninstaller lifecycle, restart recovery, clearing safety, settings handoff, unsupported reasons and forced refresh cache invalidation');
+ }finally{
+  fs.rmSync(dir,{recursive:true,force:true});
+ }
 }
 async function realWindows(){await fixture();const operation=windowsOperation;const manager=new AppManager({operation});let inventory=await manager.inventory();const find=name=>inventory.apps.find(a=>a.name==='Disposable App QA '+name);
  assert.equal(find('individual')?.description,'Local disposable fixture description');assert.equal(find('individual')?.category,'desktop');assert.equal(find('ambiguous')?.sizeKB,null,'absent EstimatedSize is unknown, not zero');assert(!JSON.stringify(inventory).includes('installLocation'));assert(inventory.apps.some(x=>x.category==='desktop'));if(inventory.packagesAvailable)assert(inventory.apps.some(x=>['store','system'].includes(x.category)));
@@ -617,5 +766,5 @@ async function realWindows(){await fixture();const operation=windowsOperation;co
  const qlReal = manager.getQuickLaunch();
  assert(Array.isArray(qlReal.pins));
  assert(untouched.every(id=>inventory.apps.some(a=>a.id===id)),'all unrelated inventory identities remain');console.log('PASS actual HKCU disposable vendor EXE uninstall, metadata-declared quiet batch, partial failure continues, refresh verifies removal, unsafe/ambiguous/own-product refusal, unrelated apps unchanged.');}
-(async()=>{await mocked();await nativePackageResults();if(process.platform==='win32'&&!process.env.ROVARIN_APPS_MOCK_ONLY){await packageMetadata();await nativeStartupState();await realWindows();}})().catch(e=>{console.error(e.stack);process.exitCode=1;}).finally(async()=>{try{if(!process.env.ROVARIN_APPS_MOCK_ONLY)await fixture(true);fs.rmSync(directory,{recursive:true,force:true});console.log(process.env.ROVARIN_APPS_MOCK_ONLY?'PASS mocked Apps regression completed without real uninstallers.':'PASS owned disposable registry/files cleaned.');}catch(_){console.error('Disposable cleanup failed; fixture retained.');process.exitCode=1;}});
+(async()=>{require('./app-manager-dll-smoke-test')();await packagePinRegression();await mocked();await uninstallerReliabilityAndRecoveryRegression();await nativePackageResults();if(process.platform==='win32'&&!process.env.ROVARIN_APPS_MOCK_ONLY){await packageMetadata();await nativeStartupState();await realWindows();}})().catch(e=>{console.error(e.stack);process.exitCode=1;}).finally(async()=>{try{if(!process.env.ROVARIN_APPS_MOCK_ONLY)await fixture(true);fs.rmSync(directory,{recursive:true,force:true});console.log(process.env.ROVARIN_APPS_MOCK_ONLY?'PASS mocked Apps regression completed without real uninstallers.':'PASS owned disposable registry/files cleaned.');}catch(_){console.error('Disposable cleanup failed; fixture retained.');process.exitCode=1;}});
 

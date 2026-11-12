@@ -697,7 +697,8 @@ html:not(.native-shell) body.phone-drawer-dragging .apps-selection-tray {
 .apps-progress-subtext {overflow-wrap:anywhere}
 @media(prefers-reduced-motion:reduce){.apps-progress-bar[data-state="active"]>span{animation:none;width:35%}}
 @media(max-width:699px){
- #appsPage .apps-meta #appsStatus {flex:0 0 100%;order:2;line-height:1.5}
+ #appsPage .apps-meta #appsStatus,
+ #appsPage .apps-meta #startupStatus {flex:0 0 100%;order:2;line-height:1.5;margin:0}
  .apps-progress-header-actions {flex-wrap:wrap;width:100%}
  #appsProgressRows li {flex-wrap:wrap;gap:5px 8px}
  #appsProgressRows li>strong {flex:1;min-width:0}
@@ -720,7 +721,58 @@ html[data-graphics-quality="minimal"] .apps-filter-menu { backdrop-filter: none;
 @media (prefers-contrast: more), (prefers-reduced-transparency: reduce) { .apps-filter-menu { background: #142333; backdrop-filter: none; -webkit-backdrop-filter: none; } }
 @media (forced-colors: active) { .apps-filter-menu { background: Canvas; color: CanvasText; border-color: ButtonText; } }
 
-#appsPage .startup-control-filter { display: flex; flex-direction: row; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; }
-#appsPage .startup-control-filter input { width: 20px; height: 20px; min-height: 0; margin: 0; accent-color: var(--accent-primary); }
+#appsPage .startup-control-filter { display: flex; flex-direction: row; align-items: center; gap: 6px; min-height: 38px; cursor: pointer; flex: 0 0 auto; white-space: nowrap; }
+#appsPage .startup-control-filter input { width: 18px; height: 18px; min-height: 0; margin: 0; accent-color: var(--accent-primary); }
 
-@media (max-width:699px) { #appsPage .startup-toolbar .startup-control-filter { flex-basis: 100%; font-size: 13px; } }
+@media (max-width:699px) { #appsPage .startup-toolbar .startup-control-filter { flex-basis: auto; font-size: 12px; } }
+
+/* Compact Search & Filter Bar + Temporary Expandable View */
+#appsPage .apps-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 6px; }
+#appsPage .apps-toolbar label { display: flex; align-items: center; gap: 0; margin: 0; }
+#appsPage .apps-toolbar .apps-search-field { flex: 2 1 180px; min-width: 140px; }
+#appsPage .apps-toolbar .apps-filter-field { flex: 1 1 115px; min-width: 96px; max-width: 190px; }
+#appsPage .apps-toolbar input[type="search"] { min-height: 38px; padding: 6px 10px; border-radius: 9px; font-size: 13px; }
+#appsPage .apps-filter-trigger,
+#appsPage #appsSortDirection { min-height: 38px; padding: 6px 10px; border-radius: 9px; font-size: 12.5px; }
+#appsPage .apps-system-toggle { min-height: 38px; gap: 6px !important; padding: 0 4px; }
+#appsPage .apps-meta { margin: 2px 0 6px; gap: 6px; }
+#appsPage .apps-meta #startupStatus { flex: 1; margin: 0; min-width: 0; }
+#appsPage .apps-meta > button,
+#appsPage .apps-view-controls button { min-height: 36px; padding: 0 10px; font-size: 12px; }
+#appsPage .quick-launch-section { margin-bottom: 8px; padding: 8px 10px; }
+#appsPage .quick-launch-header { margin-bottom: 4px; }
+#appsPage .apps-subnav { margin-bottom: 6px; }
+#appsPage .apps-subnav-btn { min-height: 34px; padding: 4px 12px; }
+
+/* Temporary Expanded List View */
+#appsPage.is-view-expanded .quick-launch-section { display: none !important; }
+#appsPage.is-view-expanded .apps-subnav { margin-bottom: 4px; }
+#appsPage.is-view-expanded .apps-toolbar { margin-bottom: 4px; }
+#appsPage.is-view-expanded { height: calc(100dvh - 76px) !important; padding-top: 8px; padding-bottom: 8px; }
+#appsPage.is-view-expanded .apps-list:not(.is-grid) .apps-row,
+#appsPage.is-view-expanded .startup-row { padding-block: 6px; }
+#appsPage.is-view-expanded .apps-description { display: none; }
+@media (max-width: 699px) {
+  #appsPage .apps-toolbar input[type="search"] { font-size: 16px; min-height: 40px; }
+  #appsPage .apps-toolbar .apps-search-field { flex-basis: 100%; }
+  #appsPage .apps-toolbar .apps-filter-field { flex: 1 1 calc(50% - 50px); max-width: none; }
+  #appsPage .apps-system-toggle { flex-basis: auto !important; margin-top: 0; }
+  #appsPage .apps-meta > button { padding: 0 8px; }
+  #appsPage .apps-view-controls button { min-width: 38px; padding-inline: 6px; }
+  html:not(.native-shell) #appsPage.is-view-expanded {
+    height: auto !important;
+    padding: 8px 10px;
+  }
+  html:not(.native-shell) #appsPage.is-view-expanded #appsList,
+  html:not(.native-shell) #appsPage.is-view-expanded .startup-list {
+    max-height: none;
+    overflow-y: visible;
+  }
+}
+.apps-expand-btn[aria-pressed="true"] {
+  background: var(--tint-primary);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+

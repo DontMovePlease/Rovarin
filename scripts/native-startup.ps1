@@ -1,6 +1,13 @@
 param([ValidateSet('Status','Enable','Disable')][string]$Action='Status')
 $ErrorActionPreference='Stop'
 try {
+    if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'standby-runtime.ps1')){
+        . (Join-Path $PSScriptRoot 'standby-runtime.ps1')
+        if(Test-StandbyAvailable){
+            if($Action -eq 'Enable'){Set-StandbyStartup $true}elseif($Action -eq 'Disable'){Set-StandbyStartup $false}
+            @{available=$true;enabled=[bool](Get-StandbyStartup)}|ConvertTo-Json -Compress;exit 0
+        }
+    }
     $appDir=Split-Path -Parent $PSScriptRoot
     $installed=Test-Path -LiteralPath (Join-Path $appDir 'installation.json')
     if(-not $installed -and -not (Test-Path -LiteralPath (Join-Path $appDir '.rovarin-development-state.json'))){throw 'Unmarked development startup is unavailable.'}

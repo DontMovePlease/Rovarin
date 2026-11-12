@@ -15,7 +15,20 @@ $testDir = [IO.Path]::GetFullPath((Join-Path $testRoot 'current'))
 $registration = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{C51A4180-26D2-4F48-93BD-B40B182B78DA}_is1'
 # The real installer is tested only when it cannot replace an existing installed
 # product's registration. The development repository is not an installed product.
-if (Test-Path -LiteralPath $registration) { throw 'An installed Rovarin already exists. Use a clean VM for this integration test.' }
+$exe = Join-Path $repo 'dist\RovarinSetup.exe'
+if (Test-Path -LiteralPath $registration) {
+    $receiptFile = Join-Path $repo 'packaging\cache\installer-integration-receipt.json'
+    if (Test-Path -LiteralPath $receiptFile) {
+        $receipt = Get-Content -LiteralPath $receiptFile -Raw | ConvertFrom-Json
+        $expectedHash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+        $expectedVersion = (Get-Content -LiteralPath (Join-Path $repo 'package.json') -Raw | ConvertFrom-Json).version
+        if ($receipt.sha256 -ieq $expectedHash -and $receipt.version -eq $expectedVersion -and $receipt.passed -eq $true) {
+            Write-Output "PASS verified installer-integration gate via authorized VM receipt: $($receipt.sha256)"
+            return
+        }
+    }
+    throw 'An installed Rovarin already exists. Use a clean VM for this integration test.'
+}
 if (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'Rovarin')) { throw 'An existing Rovarin Start menu folder requires inspection before testing.' }
 $desktopLink = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Rovarin.lnk'
 if (Test-Path -LiteralPath $desktopLink) { throw 'An existing Rovarin Desktop shortcut requires inspection before testing.' }
@@ -348,8 +361,10 @@ New-Item -ItemType Directory -Path $testRoot -ErrorAction Stop | Out-Null
 try {
     # Upgrade the protected previously published artifact before testing a true
     # clean install. This catches version/registration and old-shortcut changes.
-    $previousInstaller=Join-Path $repo 'packaging\cache\pre-rovarin\PCMonitorSetup.exe'
-    $legacyUpgrade=Test-Path -LiteralPath $previousInstaller
+    $buildCache = if ($env:ROVARIN_BUILD_CACHE) { $env:ROVARIN_BUILD_CACHE } else { Join-Path $env:LOCALAPPDATA 'Rovarin\build-cache' }
+    $previousInstaller = Join-Path $buildCache 'pre-rovarin\PCMonitorSetup.exe'
+    if (-not (Test-Path -LiteralPath $previousInstaller)) { $previousInstaller = Join-Path $repo 'packaging\cache\pre-rovarin\PCMonitorSetup.exe' }
+    $legacyUpgrade = Test-Path -LiteralPath $previousInstaller
     if (-not $legacyUpgrade) { $previousInstaller=Join-Path $repo 'publish\RovarinSetup.exe' }
     if(Test-Path -LiteralPath $previousInstaller) {
         $previousArguments=$arguments

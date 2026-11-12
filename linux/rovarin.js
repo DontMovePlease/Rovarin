@@ -79,7 +79,7 @@ async function run(args, { platform = process.platform, auth = require('./linux-
       throw new SetupError('Credential setup failed. Check storage ownership and private permissions; no existing credentials were replaced.');
     }
     if (!auth.loadConfig().healthy) throw new SetupError('Credentials could not be validated. No automatic reset was performed.');
-  } finally { pin = confirmation = undefined; }
+  } finally { pin = confirmation = undefined; releaseStdin(); }
   write('PIN configured. Run node linux/rovarin.js start.');
 }
 // The interactive terminal's stdin handle stays referenced after hidden PIN

@@ -30,16 +30,25 @@ const previousTimes = new Map([
 const normalizedSample = normalizeProcessRecords([
   { Id: 42, ProcessName: 'worker', CPU: 10, WorkingSet64: 1024 * 1024, StartedAt: '2026-09-29T12:01:00.0000000Z' },
   { Id: 43, ProcessName: 'protected', CPU: null, WorkingSet64: 2 * 1024 * 1024, StartedAt: null },
+  { Id: 44, ProcessName: 'noram', CPU: 5, WorkingSet64: null, StartedAt: '2026-09-29T12:01:00.0000000Z' },
   { Id: 'bad', ProcessName: 'malformed', CPU: 'NaN', WorkingSet64: 100, StartedAt: 'x' },
   null
 ], previousTimes, 6000, 12);
-assert.strictEqual(normalizedSample.processes.length, 2, 'bad and missing records should not break a snapshot');
-assert.strictEqual(normalizedSample.processes.find(item => item.pid === 42).cpuPercent, 0, 'reused PID must start a fresh CPU baseline');
+assert.strictEqual(normalizedSample.processes.length, 3, 'bad and missing records should not break a snapshot, while missing RAM is preserved');
+assert.strictEqual(normalizedSample.processes.find(item => item.pid === 42).cpuPercent, null, 'reused PID must start a fresh CPU baseline with null first sample, not 0%');
 assert.strictEqual(normalizedSample.processes.find(item => item.pid === 43).cpuPercent, null, 'inaccessible CPU should remain unavailable');
+assert.strictEqual(normalizedSample.processes.find(item => item.pid === 44).ramMB, null, 'inaccessible RAM must be preserved as null rather than dropping the process');
 assert.strictEqual(normalizedSample.nextCpuTimes.has(99), false, 'processes that exited must lose their old CPU baseline');
 assert.strictEqual(normalizedSample.nextCpuTimes.has(43), false, 'inaccessible start time must not keep an unsafe baseline');
 assert.strictEqual(normalizedSample.processes.find(item => item.pid === 42).startedAt, '2026-09-29T12:01:00.0000000Z', 'observed start time must be exposed for kill identity verification');
 assert.strictEqual(normalizedSample.processes.find(item => item.pid === 43).startedAt, null, 'inaccessible start time must remain unavailable rather than guessed');
+
+// A second sample of the same process instance computes valid CPU percent
+const secondSample = normalizeProcessRecords([
+  { Id: 42, ProcessName: 'worker', CPU: 11.2, WorkingSet64: 1024 * 1024, StartedAt: '2026-09-29T12:01:00.0000000Z' }
+], normalizedSample.nextCpuTimes, 7000, 12);
+assert.strictEqual(typeof secondSample.processes.find(item => item.pid === 42).cpuPercent, 'number', 'second sample computes numeric CPU percentage');
+assert(secondSample.processes.find(item => item.pid === 42).cpuPercent > 0, 'positive CPU delta produces positive percentage');
 assert.strictEqual(isProcessSnapshotStale(null, 10000, 15000), true, 'a missing first sample must be stale');
 assert.strictEqual(isProcessSnapshotStale(1000, 16001, 15000), true, 'old process samples must be stale');
 assert.strictEqual(isProcessSnapshotStale(1000, 16000, 15000), false, 'sample exactly at the freshness boundary remains current');
@@ -189,12 +198,16 @@ async function testProcessMonitoring() {
     const first = await waitForSnapshot(cookie, leaseId);
     assert.strictEqual(first.stale, false, 'fresh samples should not be reported as stale');
     assert(Array.isArray(first.processes) && first.processes.length > 0, 'Windows process collection should return process entries');
-    assert(first.processes.length <= 50, 'the cached snapshot should remain bounded');
-    assert(first.processes.some(item => item.cpuPercent !== null), 'at least accessible processes should expose calculated CPU percentages');
+    assert(first.processes.length <= 2048, 'the cached snapshot should remain bounded');
+    assert.strictEqual(typeof first.totalCount, 'number', 'snapshot must include totalCount');
+    assert.strictEqual(typeof first.accessibleCount, 'number', 'snapshot must include accessibleCount');
+    assert(first.totalCount >= first.processes.length);
+    assert(first.accessibleCount >= first.processes.length);
+    assert(first.processes.every(item => item.cpuPercent === null), 'first snapshot without prior sample must report null cpuPercent, not fabricated 0%');
     for (const item of first.processes) {
       assert.strictEqual(typeof item.name, 'string');
       assert(Number.isInteger(item.pid) && item.pid > 0);
-      assert(typeof item.ramMB === 'number' && Number.isFinite(item.ramMB) && item.ramMB >= 0);
+      assert(item.ramMB === null || (typeof item.ramMB === 'number' && Number.isFinite(item.ramMB) && item.ramMB >= 0));
       assert(item.cpuPercent === null || (Number.isFinite(item.cpuPercent) && item.cpuPercent >= 0 && item.cpuPercent <= 100));
       assert(item.startedAt === null || (typeof item.startedAt === 'string' && item.startedAt.length > 0), 'start-time identity must be a string or null');
       assert.deepStrictEqual(Object.keys(item).sort(), ['cpuPercent', 'displayGroup', 'displayName', 'hasFriendlyName', 'name', 'pid', 'ramMB', 'startedAt'], 'only technical identity, metrics and safe display metadata should be returned');
@@ -205,6 +218,7 @@ async function testProcessMonitoring() {
     }
 
     const second = await waitForSnapshot(cookie, leaseId, first.sampledAt);
+    assert(second.processes.some(item => item.cpuPercent !== null), 'subsequent snapshot after baseline must expose calculated CPU percentages');
     const sampleInterval = second.sampledAt - first.sampledAt;
     assert(sampleInterval >= 4500 && sampleInterval <= 9000, `process samples should be near five seconds apart (got ${sampleInterval}ms)`);
     const processesUsage = describeResourceDelta(processesStart, await sampleServerResources());

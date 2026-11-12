@@ -1,4 +1,4 @@
-#define AppVersion "0.6.0"
+#define AppVersion "0.6.2"
 [Setup]
 AppId={{C51A4180-26D2-4F48-93BD-B40B182B78DA}
 AppName=Rovarin
@@ -40,6 +40,7 @@ Name: "core"; Description: "Rovarin (self-contained Node runtime)"; Types: full 
 Name: "enhanced"; Description: "Enhanced CPU Temperature - Recommended (installs the signed PawnIO hardware-access driver; Windows UAC approval required)"; Types: full
 [Tasks]
 Name: "startup"; Description: "Start Rovarin with Windows (quietly at sign-in)"; Flags: checkedonce
+Name: "firewall"; Description: "Configure Tailscale-only remote access (one-time Windows administrator approval)"; Flags: checkedonce
 Name: "desktopPin"; Description: "Require a PIN when opening Rovarin on this PC"; Flags: checkedonce; Check: FreshDesktopPreference
 [Dirs]
 Name: "{app}\data"
@@ -150,6 +151,7 @@ var Extra: String;
 begin
   if CurUninstallStep = usUninstall then begin
     Extra := ''; if FullRemoval then Extra := ' -FullRemoval';
+    if UninstallSilent then Extra := Extra + ' -NoFirewallElevation';
     if not UninstallHelper('Cleanup', Extra) then
       RaiseException('Rovarin data cleanup could not be verified. Uninstall stopped; inspect the installation.');
   end;
@@ -158,6 +160,12 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var Extra, Preference: String; ExitCode: Integer;
 begin
   if CurStep = ssPostInstall then begin
+    { Silent upgrades preserve existing rules and never request elevation. }
+    if WizardIsTaskSelected('firewall') and not WizardSilent then
+      if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+        '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\app\scripts\firewall.ps1') + '" -Action Install',
+        ExpandConstant('{app}\app'), SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
+        MsgBox('Tailscale firewall setup was not completed. Local access remains available. Install Tailscale and run the documented firewall repair command with administrator approval before remote access. Existing firewall protections were retained.', mbInformation, MB_OK);
     { Never overwrite an upgrade/preserved-data PIN or desktop preference. }
     if not ExistingConfiguration then begin
       Preference := '--prepare-pin-on';

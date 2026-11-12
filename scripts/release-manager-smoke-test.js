@@ -299,7 +299,7 @@ async function test(root = path.resolve(__dirname,'..')) {
         fs.writeFileSync(path.join(dir,'packaging/payload-manifest.json'),JSON.stringify({files:[{path:'app/server.js',sha256:hash(fs.readFileSync(path.join(dir,'server.js')))}]}));
         const manifest=hash(fs.readFileSync(path.join(dir,'packaging/payload-manifest.json')));
         const version=JSON.parse(fs.readFileSync(path.join(dir,'package.json'))).version;
-        fs.writeFileSync(path.join(dir,'dist/build.json'),JSON.stringify({version,sha256:digest,payloadManifestSha256:manifest,inputs:['packaging/build.ps1','packaging/Rovarin.iss','packaging/RovarinLauncher.cs','packaging/DesktopShell.cs','packaging/desktop.manifest','packaging/create-icon.ps1'].map(p=>({path:p,sha256:hash(fs.readFileSync(path.join(dir,p)))}))}));
+        fs.writeFileSync(path.join(dir,'dist/build.json'),JSON.stringify({version,sha256:digest,payloadManifestSha256:manifest,inputs:['packaging/build.ps1','packaging/Rovarin.iss','packaging/RovarinLauncher.cs','packaging/DesktopShell.cs','packaging/desktop.manifest','packaging/create-icon.ps1','packaging/StandbySupervisor.cs','scripts/build-standby.ps1'].map(p=>({path:p,sha256:hash(fs.readFileSync(path.join(dir,p)))}))}));
         fs.writeFileSync(path.join(dir,'publish/RovarinSetup.sha256'),digest+'  RovarinSetup.exe\n');
         fs.writeFileSync(path.join(dir,'publish/release.json'),JSON.stringify({version,builtAt:new Date().toISOString(),verifiedAt:new Date().toISOString(),signing:'unsigned',sha256:digest,payloadManifestSha256:manifest,suites:[...SUITES,'installer-integration']}));
         if(editDuringVerify)fs.appendFileSync(path.join(dir,'server.js'),'\n// changed during build\n');
@@ -425,6 +425,14 @@ async function test(root = path.resolve(__dirname,'..')) {
     const coordinated=fixture('0.6.0');
     const linuxDir=path.join(coordinated.dir,'dist/linux-preview');fs.mkdirSync(linuxDir,{recursive:true});
     for(const name of require('./release-linux-preview').names('0.6.0'))fs.copyFileSync(path.join(root,'dist/linux-preview',name),path.join(linuxDir,name));
+    // Release-flow fixture uses the accepted archive's own source, independently
+    // of unreleased frontend edits. Production exact-source checks stay intact.
+    const archiveSource=path.join(coordinated.dir,'accepted-fixture');fs.mkdirSync(archiveSource);
+    execFileSync('tar',['-xzf',path.join(linuxDir,require('./release-linux-preview').archiveName),'-C',archiveSource],{windowsHide:true});
+    const extracted=path.join(archiveSource,'rovarin-0.6.0-linux-preview');
+    for(const folder of ['linux','public'])fs.cpSync(path.join(extracted,folder),path.join(coordinated.dir,folder),{recursive:true});
+    fs.copyFileSync(path.join(extracted,'README.md'),path.join(coordinated.dir,'linux/PREVIEW-README.md'));fs.copyFileSync(path.join(extracted,'LICENSE'),path.join(coordinated.dir,'LICENSE'));
+    fs.rmSync(archiveSource,{recursive:true,force:true});
     fs.appendFileSync(path.join(coordinated.dir,'README.md'),'\nCoordinated fixture source change.\n');
     const combined=await coordinated.manager.operate('Publish',{confirm:true,version:'0.6.0'});
     assert.strictEqual(combined.version,'0.6.0');
@@ -473,10 +481,10 @@ async function test(root = path.resolve(__dirname,'..')) {
     fs.writeFileSync(path.join(gate,'dist/RovarinSetup.exe'),'fixture');fs.writeFileSync(path.join(gate,'packaging/payload-manifest.json'),'{"files":[]}');fs.writeFileSync(path.join(gate,'package.json'),'{"version":"0.1.1"}');
     fs.writeFileSync(path.join(gate,'dist/build.json'),JSON.stringify({sha256:hash(Buffer.from('fixture')),payloadManifestSha256:hash(Buffer.from('{"files":[]}')),inputs:[]}));
     await assert.rejects(verifyAndPublish(gate,async()=>{throw new Error('fixture gate failure');}));assert(!fs.existsSync(path.join(gate,'publish')));
-    let checks=0;await verifyAndPublish(gate,async()=>{checks++;});assert.strictEqual(checks,9);
+    let checks=0;await verifyAndPublish(gate,async()=>{checks++;});assert.strictEqual(checks,SUITES.length+1);
     const previous=fs.readFileSync(path.join(gate,'publish/RovarinSetup.exe'));await assert.rejects(verifyAndPublish(gate,async()=>{throw new Error('fixture regression failure');}));assert(fs.readFileSync(path.join(gate,'publish/RovarinSetup.exe')).equals(previous));
     for(const c of [...f.calls,...g.calls,...release.calls,...r.calls]) assert(!c.args.includes('--force') && !c.args.includes('--force-with-lease') && !c.args.includes('--clobber') && !c.args.includes('--hard'));
-    console.log('PASS existing eight-suite + installer promotion gate unchanged, failed gate preserves prior artifact, no force/clobber');
+    console.log('PASS canonical suite list + installer promotion gate, failed gate preserves prior artifact, no force/clobber');
   } finally { fs.rmSync(temp,{recursive:true,force:true}); }
 }
 if(require.main===module)test().catch(e=>{console.error(e.message);process.exitCode=1;});

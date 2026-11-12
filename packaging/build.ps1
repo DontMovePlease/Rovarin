@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 # built-in modules for the Windows-only packaging toolchain.
 $env:PSModulePath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules'
 $repo = Split-Path -Parent $PSScriptRoot
-$cache = Join-Path $PSScriptRoot 'cache'
+$cache = if ($env:ROVARIN_BUILD_CACHE) { $env:ROVARIN_BUILD_CACHE } else { Join-Path $env:LOCALAPPDATA 'Rovarin\build-cache' }
 $payload = Join-Path $PSScriptRoot 'payload'
 [IO.Directory]::CreateDirectory($cache) | Out-Null
 function Verified-Binary($name,$url,$hash,$publisher) {
@@ -46,11 +46,13 @@ if (Test-Path -LiteralPath $payload) { Remove-Item -LiteralPath $payload -Recurs
 $app = Join-Path $payload 'app'
 $runtime = Join-Path $payload 'runtime'
 New-Item -ItemType Directory -Force -Path $app,$runtime,(Join-Path $app 'scripts'),(Join-Path $app 'public'),(Join-Path $app 'vendor\PawnIO\2.2.0') | Out-Null
-$rootFiles = @('power-controls.js','server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js','update-manager.js','process-stats.js','maintenance.js','temperature-manager.js','cpu-temperature-provider.js','package.json','run_hidden.vbs','LICENSE')
+$runtimeManifest = (& $node (Join-Path $repo 'server-lifecycle.js') --runtime-files | ConvertFrom-Json)
+if ($LASTEXITCODE -ne 0 -or -not $runtimeManifest.root -or -not $runtimeManifest.public) { throw 'Canonical runtime inventory unavailable.' }
+$rootFiles = @($runtimeManifest.root) + @('run_hidden.vbs','LICENSE')
 foreach ($name in $rootFiles) { Copy-Item -LiteralPath (Join-Path $repo $name) -Destination $app }
-$scripts = @('power-control.ps1','start.ps1','stop.ps1','desktop.ps1','desktop-host.ps1','native-trust.ps1','native-startup.ps1','dashboard-runtime.ps1','installed-start.ps1','installed-desktop.ps1','setup.ps1','phone-qr.js','empty-recycle-bin.ps1','maintenance-elevated.cs','install-enhanced.ps1','installed-uninstall.ps1','installed-update.ps1','rebrand-migration.ps1','cpu-temperature-provider.ps1','terminate-process.ps1','process-tree.ps1','process-tree.cs','app-manager.ps1','app-leftovers.ps1','app-leftovers.cs','startup-tasks.ps1','app-uninstall.cs','app-metadata.cs','process-display.ps1','application-display.ps1')
+$scripts = @('firewall.ps1','standby-runtime.ps1','power-control.ps1','start.ps1','stop.ps1','desktop.ps1','desktop-host.ps1','native-trust.ps1','native-startup.ps1','dashboard-runtime.ps1','installed-start.ps1','installed-desktop.ps1','setup.ps1','phone-qr.js','empty-recycle-bin.ps1','maintenance-elevated.cs','install-enhanced.ps1','installed-uninstall.ps1','installed-update.ps1','rebrand-migration.ps1','cpu-temperature-provider.ps1','terminate-process.ps1','process-tree.ps1','process-tree.cs','app-manager.ps1','app-leftovers.ps1','app-leftovers.cs','startup-tasks.ps1','startup-elevated.cs','app-uninstall.cs','app-metadata.cs','process-display.ps1','application-display.ps1')
 foreach ($name in $scripts) { Copy-Item -LiteralPath (Join-Path $repo "scripts\$name") -Destination (Join-Path $app 'scripts') }
-Copy-Item -LiteralPath (Join-Path $repo 'public') -Destination $app -Recurse -Force
+foreach ($name in $runtimeManifest.public) { Copy-Item -LiteralPath (Join-Path $repo "public\$name") -Destination (Join-Path $app 'public') }
 Copy-Item -LiteralPath (Join-Path $repo 'vendor\LibreHardwareMonitor') -Destination (Join-Path $app 'vendor') -Recurse -Force
 $qrSource = Join-Path $repo 'vendor\QRCode\1.8.0\qrcodegen.js'
 if ((Get-FileHash -LiteralPath $qrSource -Algorithm SHA256).Hash.ToLowerInvariant() -ne '6a1116192ed1dd67fa1bf31e77f5817103d71c23bbac24c382e698b7668bdd01') { throw 'Vendored QR encoder hash mismatch.' }
@@ -93,12 +95,9 @@ try {
 } finally {
     if (Test-Path -LiteralPath $serviceStage) { Remove-Item -LiteralPath $serviceStage -Recurse -Force }
 }
-$shellSource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'DesktopShell.cs'))
-$hashAnchor = 'internal const string MaintenanceSetupHash = "";'
-if (-not $shellSource.Contains($hashAnchor)) { throw 'Maintenance installer binding anchor changed.' }
 $boundShell = Join-Path $cache 'DesktopShell.bound.cs'
-[IO.File]::WriteAllText($boundShell,$shellSource.Replace($hashAnchor,('internal const string MaintenanceSetupHash = "'+$maintenanceHash+'";')))
-& $launcherCompiler /nologo /target:winexe /platform:x64 /optimize+ /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll "/r:$(Join-Path $app 'Microsoft.Web.WebView2.Core.dll')" "/r:$(Join-Path $app 'Microsoft.Web.WebView2.WinForms.dll')" "/win32manifest:$(Join-Path $PSScriptRoot 'desktop.manifest')" "/win32icon:$(Join-Path $app 'Rovarin.ico')" "/out:$(Join-Path $app 'Rovarin.exe')" (Join-Path $PSScriptRoot 'RovarinLauncher.cs') $boundShell
+[IO.File]::WriteAllText($boundShell,('internal static partial class DesktopShell { internal const string MaintenanceSetupHash = "'+$maintenanceHash+'"; }'))
+& $launcherCompiler /define:ROVARIN_BOUND_MAINTENANCE /nologo /target:winexe /platform:x64 /optimize+ /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll "/r:$(Join-Path $app 'Microsoft.Web.WebView2.Core.dll')" "/r:$(Join-Path $app 'Microsoft.Web.WebView2.WinForms.dll')" "/win32manifest:$(Join-Path $PSScriptRoot 'desktop.manifest')" "/win32icon:$(Join-Path $app 'Rovarin.ico')" "/out:$(Join-Path $app 'Rovarin.exe')" (Join-Path $PSScriptRoot 'RovarinLauncher.cs') (Join-Path $PSScriptRoot 'DesktopShell.cs') $boundShell
 if ($LASTEXITCODE -ne 0) { throw 'Rovarin launcher compilation failed.' }
 [IO.File]::WriteAllText((Join-Path $app 'Rovarin.exe.config'), '<configuration><startup><supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.8" /></startup></configuration>')
 [IO.File]::WriteAllText((Join-Path $app 'installation.json'), '{"schema":1,"channel":"windows-x64","data":"../data"}')
@@ -125,6 +124,7 @@ The untouched upstream installer internally contains edition choices; Rovarin
 never invokes those choices and does not extract/distribute unsigned drivers.
 '@
 [IO.File]::WriteAllText((Join-Path $app 'vendor\PawnIO\2.2.0\NOTICE.txt'), $pawnNotice)
+& (Join-Path $repo 'scripts\build-standby.ps1') -AppDirectory $app -NodePath (Join-Path $runtime 'node.exe') -ConfigurationFile (Join-Path (Split-Path -Parent $app) 'data\config.json')
 $manifest = @{nodeVersion=$nodeVersion; innoVersion='7.1.0'; pawnIoVersion='2.2.0.0'; files=@()}
 Get-ChildItem -LiteralPath $payload -File -Recurse | Sort-Object FullName | ForEach-Object {
     $manifest.files += @{path=$_.FullName.Substring($payload.Length+1).Replace('\','/'); sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
@@ -147,7 +147,7 @@ try {
 $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText((Join-Path $repo 'dist\RovarinSetup.sha256'), "$hash  RovarinSetup.exe`r`n")
 $buildInfo = @{version=(Get-Content -LiteralPath (Join-Path $repo 'package.json') -Raw | ConvertFrom-Json).version; builtAt=[DateTime]::UtcNow.ToString('o'); sha256=$hash; payloadManifestSha256=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'payload-manifest.json')).Hash.ToLowerInvariant(); inputs=@()}
-foreach ($relative in @('packaging/build.ps1','packaging/Rovarin.iss','packaging/RovarinLauncher.cs','packaging/DesktopShell.cs','packaging/desktop.manifest','packaging/create-icon.ps1')) {
+foreach ($relative in @('packaging/build.ps1','packaging/Rovarin.iss','packaging/RovarinLauncher.cs','packaging/DesktopShell.cs','packaging/desktop.manifest','packaging/create-icon.ps1','packaging/StandbySupervisor.cs','scripts/build-standby.ps1')) {
     $buildInfo.inputs += @{path=$relative;sha256=(Get-FileHash -LiteralPath (Join-Path $repo $relative)).Hash.ToLowerInvariant()}
 }
 [IO.File]::WriteAllText((Join-Path $repo 'dist\build.json'),($buildInfo | ConvertTo-Json -Depth 4))

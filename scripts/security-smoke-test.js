@@ -15,7 +15,7 @@ async function testNativeDesktopSecurity() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rovarin-native-security-'));
   let child, url, captured = '';
   try {
-    for (const name of ['power-controls.js','server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(directory,name));
+    for (const name of [...require('../server-lifecycle').ROOT_SERVER_FILES, 'package.json']) fs.copyFileSync(path.join(root,name),path.join(directory,name));
     fs.mkdirSync(path.join(directory,'scripts'));
     for (const helper of ['native-trust.ps1','dashboard-runtime.ps1']) fs.copyFileSync(path.join(root,'scripts',helper),path.join(directory,'scripts',helper));
     const configFile = path.join(directory,'config.json');
@@ -133,7 +133,7 @@ async function testLocalPinManagement() {
     assert.throws(() => pins.loadConfig(file)); assert.strictEqual(fs.readFileSync(file, 'utf8'), '{broken');
     assert.throws(()=>pins.writeConfig(file,legacy),'normal writes cannot replace corrupt credentials');
     fs.writeFileSync(file,intactCredential); // Restore this fixture's previously verified protected bytes only.
-    for (const name of ['power-controls.js','server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json']) fs.copyFileSync(path.join(root, name), path.join(directory, name));
+    for (const name of [...require('../server-lifecycle').ROOT_SERVER_FILES, 'package.json']) fs.copyFileSync(path.join(root, name), path.join(directory, name));
     fs.mkdirSync(path.join(directory,'public'));
     fs.copyFileSync(path.join(root,'public/login.html'),path.join(directory,'public/login.html'));
     let output = '', url;
@@ -201,7 +201,7 @@ async function testLocalPinManagement() {
 
 async function testPinPersistence(length = 12) {
  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'rovarin-auth-persistence-')),file=path.join(directory,'config.json');let child,base,output='';
- const fixturePin=pins.generatePin(undefined,length),sources=['power-controls.js','server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js','app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js','update-manager.js','temperature-manager.js','cpu-temperature-provider.js','process-stats.js','maintenance.js','package.json'];
+ const fixturePin=pins.generatePin(undefined,length),sources=[...require('../server-lifecycle').ROOT_SERVER_FILES, 'package.json'];
  const copySources=()=>{for(const name of sources)fs.copyFileSync(path.join(root,name),path.join(directory,name));fs.cpSync(path.join(root,'public'),path.join(directory,'public'),{recursive:true});};
  const stop=async()=>{if(child&&child.exitCode===null){const exited=new Promise(r=>child.once('exit',r));child.kill();await exited;}};
  const start=async()=>{let log='';base=null;const env={...process.env,PORT:'0'};delete env.PC_MONITOR_PIN;child=spawn(process.execPath,['server.js'],{cwd:directory,env,windowsHide:true,stdio:['ignore','pipe','pipe']});const take=b=>{log+=b;output+=b;};child.stdout.on('data',take);child.stderr.on('data',take);for(let i=0;i<200;i++){const found=log.match(/Localhost access: http:\/\/127\.0\.0\.1:(\d+)/);if(found){base='http://127.0.0.1:'+found[1];return;}if(child.exitCode!==null)break;await new Promise(r=>setTimeout(r,100));}throw Error('Protected fixture startup failed');};
@@ -486,6 +486,12 @@ async function testSessionsLeasesAndSse() {
   assert.strictEqual(invalidAction.status, 400, 'unknown maintenance actions must never dispatch');
   const arbitraryPath = await request('/api/maintenance/run', { method: 'POST', cookie: firstCookie, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clean_temp', path: 'C:\\' }) });
   assert.strictEqual(arbitraryPath.status, 400, 'client-supplied paths must be rejected');
+  const boostBody=JSON.stringify({action:'boost',confirmed:true});
+  assert.strictEqual((await request('/api/maintenance/run',{method:'POST',headers:{'Content-Type':'application/json'},body:boostBody})).status,401,'Boost requires a session');
+  assert.strictEqual((await request('/api/maintenance/run',{method:'POST',cookie:firstCookie,headers:{'Content-Type':'application/json',Origin:'https://attacker.invalid'},body:boostBody})).status,403,'Boost requires same origin');
+  for(const payload of [{action:'boost'},{action:'boost',confirmed:false},{action:'boost',confirmed:true,pids:[process.pid]},{action:'boost',confirmed:true,path:'C:\\'},{action:'boost',confirmed:true,command:'anything'}]) {
+    assert.strictEqual((await request('/api/maintenance/run',{method:'POST',cookie:firstCookie,headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).status,400,'Boost requires confirmation and rejects client-supplied targets/commands');
+  }
   for (const payload of [{action:'dism_check'}, {action:'dism_check',confirmed:false}, {action:'dism_check',confirmed:true,command:'whoami'}, {action:'dism_check',confirmed:true,path:'C:\\Windows'}, {action:'dism_check',confirmed:true,args:['/other']}, {action:'dism_check',confirmed:true,env:{PATH:'bad'}}]) {
     const response=await request('/api/maintenance/run',{method:'POST',cookie:firstCookie,headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     assert.strictEqual(response.status,400,'privileged actions require explicit confirmation and reject command/path/args/environment injection');

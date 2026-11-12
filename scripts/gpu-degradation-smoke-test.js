@@ -331,9 +331,7 @@ async function testCollectorFailures(kind) {
 function testLocaleParsers() {
   const vm = require('vm');
   const source = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
-  const context = {};
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('function parseNetworkCounters'), source.indexOf('function hasActiveMonitoringLease')), context);
+  const context = require('../hardware-telemetry');
   for (const label of ['Bytes', 'Octets', 'Empfangene Bytes', '字节']) {
     assert.deepStrictEqual(JSON.parse(JSON.stringify(context.parseNetworkCounters(`Statistics\n Received Sent\n ${label}\t123\t456\n Packets 9 10`))), { rx: 123, tx: 456 });
   }
@@ -345,7 +343,7 @@ function testLocaleParsers() {
   const gpuSource = source.slice(source.indexOf('function sampleGpu()'), source.indexOf('// Isolated PORT 0 smoke servers'));
   for (const stdout of ['', 'garbage', 'NVIDIA, broken, 1, nope, 1, 1, 50']) {
     const state = { available: true };
-    const gpuContext = { currentGpuData: state, NVIDIA_SMI_COMMAND: 'test-only', runTelemetryCommand(_name, _command, _args, _options, done) { done(null, stdout); }, temperatureManager: { setUnavailable() {}, setReading() { throw new Error('Malformed GPU sample cannot be a reading'); } }, publishMetricsSnapshot() {} };
+    const gpuContext = { parseGpuTelemetry: context.parseGpuTelemetry, currentGpuData: state, NVIDIA_SMI_COMMAND: 'test-only', runTelemetryCommand(_name, _command, _args, _options, done) { done(null, stdout); }, temperatureManager: { setUnavailable() {}, setReading() { throw new Error('Malformed GPU sample cannot be a reading'); } }, publishMetricsSnapshot() {} };
     vm.runInNewContext(gpuSource + '\nsampleGpu();', gpuContext);
     assert.strictEqual(state.available, false);
     assert(state.sampledAt);

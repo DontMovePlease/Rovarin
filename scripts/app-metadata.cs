@@ -306,3 +306,14 @@ public static class RovarinAppMetadata {
     }
 }
 
+
+// Inventory workers share these immutable resource helpers; compile them once
+// with metadata support instead of racing two lazy Add-Type invocations.
+public static class RovarinDisplayResources {
+    [System.Runtime.InteropServices.DllImport("shlwapi.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int SHLoadIndirectString(string source,System.Text.StringBuilder output,uint length,IntPtr reserved);
+    public static string Resolve(string source) { var output=new System.Text.StringBuilder(1024); return SHLoadIndirectString(source,output,1024,IntPtr.Zero)==0?output.ToString():null; }
+}
+public static class RovarinAppDescriptionResources {
+    public static string Resolve(string source) { return RovarinDisplayResources.Resolve(source); }
+}

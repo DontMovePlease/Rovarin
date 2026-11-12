@@ -18,4 +18,22 @@ foreach ($name in @('server.log','server-error.log')) {
         Remove-Item -LiteralPath $file -Force
     }
 }
-Start-Process -FilePath $node -ArgumentList ('"'+(Join-Path $appDir 'server.js')+'"') -WorkingDirectory $appDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $dataDir 'server.log') -RedirectStandardError (Join-Path $dataDir 'server-error.log') | Out-Null
+$watcherScript = Join-Path $appDir 'scripts\dev-watcher.js'
+$serverScript = Join-Path $appDir 'server.js'
+
+if (Test-Path -LiteralPath $watcherScript) {
+    try {
+        $proc = Start-Process -FilePath $node -ArgumentList ('"'+$watcherScript+'"') -WorkingDirectory $appDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $dataDir 'server.log') -RedirectStandardError (Join-Path $dataDir 'server-error.log') -PassThru
+        Start-Sleep -Milliseconds 400
+        if ($proc.HasExited -and $proc.ExitCode -ne 0) {
+            Write-Warning "[dev] Development watcher failed to start (exit code $($proc.ExitCode)); falling back to direct server launch."
+            Start-Process -FilePath $node -ArgumentList ('"'+$serverScript+'"') -WorkingDirectory $appDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $dataDir 'server.log') -RedirectStandardError (Join-Path $dataDir 'server-error.log') | Out-Null
+        }
+    } catch {
+        Write-Warning "[dev] Could not launch dev-watcher.js ($($_.Exception.Message)); falling back to direct server launch."
+        Start-Process -FilePath $node -ArgumentList ('"'+$serverScript+'"') -WorkingDirectory $appDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $dataDir 'server.log') -RedirectStandardError (Join-Path $dataDir 'server-error.log') | Out-Null
+    }
+} else {
+    Write-Warning '[dev] scripts\dev-watcher.js was not found; falling back to direct server launch.'
+    Start-Process -FilePath $node -ArgumentList ('"'+$serverScript+'"') -WorkingDirectory $appDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $dataDir 'server.log') -RedirectStandardError (Join-Path $dataDir 'server-error.log') | Out-Null
+}

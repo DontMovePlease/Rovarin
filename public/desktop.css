@@ -333,3 +333,99 @@
 
 /* A1 Live Dashboard brand: decorative identity, shared across desktop and phone. */
 .native-app-identity .rovarin-brand-mark,.sidebar-phone-brand .rovarin-brand-mark{width:28px;height:28px;min-width:28px;stroke:none}.desktop-brand,.mobile-brand,.sidebar-phone-brand>span{font-family:"Trebuchet MS","Segoe UI",sans-serif;letter-spacing:-.035em;font-weight:700}
+
+/* Desktop navigation: one calm anchored rail, deliberate expansion and a real content gutter. */
+@media(min-width:700px){
+ body{--sidebar-width:60px;--desktop-nav-gutter:76px}
+ body.sidebar-expanded{--sidebar-width:204px;--desktop-nav-gutter:220px}
+ .app-sidebar.page-nav,html.liquid-theme.native-shell .app-sidebar.page-nav{left:0;top:var(--app-bar-height);bottom:0;border-radius:0;border:0;border-right:1px solid rgba(166,189,210,.16);padding:16px 8px;background:rgba(12,22,36,.96);box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;gap:8px;transition:width .18s ease}
+ .dashboard-container,.native-shell .dashboard-container{margin-left:var(--desktop-nav-gutter);width:calc(100% - var(--desktop-nav-gutter) - 16px);max-width:1360px;padding-top:18px;transition:margin-left .18s ease,width .18s ease}
+ .app-sidebar .page-nav-button,.native-shell .app-sidebar .page-nav-button{min-height:44px;padding:10px 12px;gap:14px;border-radius:10px}
+ .app-sidebar .page-nav-button.is-active,html.liquid-theme .app-sidebar .page-nav-button.is-active{background:rgba(130,206,255,.12);border-color:rgba(130,206,255,.18);box-shadow:none;color:#edf3fa}
+ .metric-card,.health-card,.system-specs-card{border-radius:16px;padding:20px}
+ .metrics-grid{gap:16px}.card-top{margin-bottom:12px}.liquid-overview{margin-bottom:18px}
+ .val-large{line-height:1.1}.app-page>.maint-section,.apps-shell{border-radius:16px}
+ .page-nav-button>span{transition:opacity .12s ease}
+ body:not(.sidebar-expanded) .app-sidebar .page-nav-button>span{opacity:0}
+ body.sidebar-expanded .app-sidebar .page-nav-button>span{opacity:1}
+}
+@media(prefers-reduced-motion:reduce){.app-sidebar.page-nav,.dashboard-container,.page-nav-button>span{transition:none!important}}
+
+@media(min-width:700px){
+ .native-shell #dashboardPage .overview-cpu-card>#cpuModelText{grid-column:1 / -1;font-size:12px;line-height:1.45;margin-bottom:4px}
+ .native-shell #dashboardPage .overview-ram-card>.val-sub{font-size:12px;line-height:1.45}
+ .native-shell .liquid-overview h1{font-size:22px;letter-spacing:-.025em;line-height:1.25}
+}
+
+@media(min-width:700px){
+ .native-shell #dashboardPage :is(#cpuModelText,#gpuNameText,#ramSubText){text-wrap:balance}
+ .native-shell .liquid-orbit{width:36px;height:36px;border-radius:10px;transform:none;box-shadow:none;background:transparent}
+ .native-shell .liquid-orbit svg{width:20px;height:20px;transform:none}
+}
+@container dashboard (max-width:720px){
+ .native-shell #dashboardPage .overview-cpu-card>.temperature-explanation,
+ .native-shell #dashboardPage .overview-cpu-card>.cpu-detail-open-button{grid-column:1 / -1}
+ .native-shell #dashboardPage .overview-cpu-card>.cpu-detail-open-button{margin-bottom:6px}
+}
+/* A single readable desktop label, beside its highlighted icon. No layout shift. */
+.desktop-nav-hint[hidden] { display: none; }
+.desktop-nav-hint {
+  pointer-events: none;
+  position: fixed; z-index: 10020; padding: 11px 16px;
+  border: 1px solid rgba(130,206,255,.3); border-radius: 12px;
+  background: #17283a; color: #f1f7fc;
+  box-shadow: 0 6px 18px rgba(0,0,0,.22);
+  font: 600 14px/20px 'Segoe UI', sans-serif;
+  max-width: calc(100vw - 24px); white-space: nowrap;
+  transform-origin: left center;
+  animation: nav-label-pop 220ms cubic-bezier(.16,1,.3,1) both;
+}
+@keyframes nav-label-pop {
+  from { opacity: 0; transform: translateX(-7px) scale(.9); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+@media (min-width: 700px) {
+  body:not(.sidebar-expanded) .app-sidebar.page-nav { padding-inline: 6px; }
+  .app-sidebar .page-nav-button.nav-hint-active {
+    background: rgba(130,206,255,.15); border-color: rgba(130,206,255,.3);
+    color: #c0e7ff;
+  }
+}
+@media (max-width: 699px) { .desktop-nav-hint { display: none; } }
+@media (prefers-reduced-motion: reduce) { .desktop-nav-hint { animation: none; } }
+
+.dev-freshness-banner {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: rgba(30, 20, 10, 0.94);
+  border: 1px solid rgba(255, 170, 0, 0.45);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 99999;
+  font-family: inherit;
+  font-size: 13px;
+  color: #ffcc66;
+  backdrop-filter: blur(8px);
+}
+.dev-freshness-banner .dev-freshness-icon {
+  font-size: 14px;
+}
+.dev-freshness-banner .dev-freshness-action {
+  background: #ffaa00;
+  color: #111;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+.dev-freshness-banner .dev-freshness-action:hover {
+  background: #ffbb22;
+}

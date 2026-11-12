@@ -40,12 +40,18 @@ packaging/payload-manifest.json
 packaging/test-install/
 packaging/test-install-legacy/
 desktop-trust.bin
+standby-state.bin
+standby-write-*
+standby-runtime.json
+RovarinStandby.exe
 
 # Non-secret local developer storage policy; never ship/publish it.
 .rovarin-development-state.json
 .rovarin-development-state.json.tmp
 
 # Private VM/session diagnostics: retained locally, excluded from publication.
+scripts/autonomous-acceptance-test.js
+scripts/cargo-dev.ps1
 scripts/check-maint-status.ps1
 scripts/diagnose-service.ps1
 scripts/execute-crash-recovery-interactive.ps1
@@ -56,7 +62,10 @@ scripts/guest-test-e2e-api.ps1
 scripts/guest-test-network-reset.ps1
 scripts/install-maintenance-interactive.ps1
 scripts/maintenance-release-vm-validation.ps1
+scripts/measure-owned-memory.ps1
+scripts/measure-standby-policy.ps1
 scripts/run-guest-cmd.ps1
+scripts/setup-rust-env.ps1
 scripts/test-clean-install.ps1
 scripts/test-crash-recovery.ps1
 scripts/test-elevation.ps1
@@ -67,3 +76,10 @@ scripts/test-upgrade-scenario.ps1
 scripts/update-guest-service.ps1
 scripts/upload-maint-fixtures.ps1
 scripts/vm-control.ps1
+
+# Rust build artifacts
+target/
+rust/target/
+rust/**/target/
+*.pdb
+*.rs.bk

@@ -66,6 +66,9 @@ async function testPackagedRuntime() {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'rovarin-release-qa-'));
   const app = path.join(temp, 'app');
   fs.cpSync(payload, temp, { recursive: true });
+  // Retain the existing always-running launcher/fallback regression. Smart
+  // Standby has its own real supervisor + native desktop lifecycle fixtures.
+  for(const name of ['RovarinStandby.exe','standby-runtime.json']){const file=path.join(app,name);if(fs.existsSync(file))fs.unlinkSync(file);}
   const foreignOwner = path.join(temp,'data/server.instance.json');
   fs.mkdirSync(path.dirname(foreignOwner),{recursive:true});
   fs.writeFileSync(foreignOwner,JSON.stringify({pid:process.pid}));
@@ -367,6 +370,7 @@ async function testBundledNodeSecurityPin() {
 }
 
 async function main() {
+  execFileSync(process.execPath,[path.join(__dirname,'firewall-smoke-test.js')],{stdio:'inherit',timeout:90000});
   await testBundledNodeSecurityPin();
   await testMigrationPreflight();
   await testFixtureCleanup();
@@ -376,6 +380,14 @@ async function main() {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'packaging', 'payload-manifest.json')));
   for (const file of manifest.files) assert.strictEqual(hash(path.join(payload, file.path)), file.sha256, file.path);
   const files = manifest.files.map(file => file.path);
+  if (files.includes('app/RovarinStandby.exe')) {
+    for(const file of ['app/RovarinStandby.exe','app/standby-runtime.json','app/scripts/standby-runtime.ps1'])assert(files.includes(file),'native standby runtime must ship: '+file);
+    const standby=JSON.parse(fs.readFileSync(path.join(payload,'app/standby-runtime.json')));
+    assert.equal(standby.schema,1);assert.equal(standby.root,'.');assert.equal(standby.node,'..\\runtime\\node.exe');assert.equal(standby.config,'..\\data\\config.json');assert.equal(standby.port,7331);assert.equal(standby.timeoutMs,45000);
+    assert.equal(standby.nodeHash,hash(path.join(payload,'runtime/node.exe')));
+    for(const [relative,digest] of Object.entries(standby.files)){assert(!path.isAbsolute(relative)&&!relative.split(/[\\/]/).includes('..'));assert.equal(hash(path.join(payload,'app',relative)),digest);}
+    assert(!files.some(file=>/(?:standby-state\.bin|standby-write-)/.test(file)),'recipient-only standby state never ships');
+  }
   // Current product text must be Rovarin. Opaque protocols and the dedicated
   // legacy migration helper are intentional compatibility, not visible branding.
   // Reviewed migration-only safety guards: exact complete lines for each
@@ -387,8 +399,8 @@ async function main() {
   "app/scripts/terminate-process.ps1": ["4d4d3a970c1804ff016cd339820096110ffd1fa207fa51c18fe970b424a1616b"],
   "app/server.js": ["a6f79e93bd4b701e8c215ca933b55b1e388595b39d4e6d8525b7fd9ce305bd08"],
   "app/scripts/app-manager.ps1": [
-    "aa7490602e22db2ad40ffccb54fe7faeafac54539fa981d1ec7531a71ad92b41",
-    "525b01a0c8e0d24b53cecdcf86fdfdefcca8459cc5889a8300b434c0c8141fa3"
+    "b7313f41b276d2b2e3782040949cbc173e9b352c9556f0a614d9b30cf808d5d5",
+    "1e6464ee3c611d52a29a206dbfb648fcee76e21950a48422f4222689f672fa96"
   ],
   "app/scripts/process-tree.cs": [
     "d61fa68dedf425782abb352835011869026fd63d8c94fd53bda848c195ca8f47",
@@ -615,7 +627,7 @@ async function main() {
     fs.writeFileSync(path.join(releaseRoot,'dist/RovarinSetup.exe'),'test fixture only');fs.writeFileSync(path.join(releaseRoot,'packaging/payload-manifest.json'),'{"files":[]}');fs.writeFileSync(path.join(releaseRoot,'package.json'),'{"version":"1.0.0"}');
     fs.writeFileSync(path.join(releaseRoot,'dist/build.json'),JSON.stringify({sha256:hash(path.join(releaseRoot,'dist/RovarinSetup.exe')),payloadManifestSha256:hash(path.join(releaseRoot,'packaging/payload-manifest.json')),inputs:[]}));
     await assert.rejects(verifyAndPublish(releaseRoot,async()=>{throw new Error('mock regression failed');}),/mock regression failed/);assert(!fs.existsSync(path.join(releaseRoot,'publish')));
-    let calls=0;const published=await verifyAndPublish(releaseRoot,async()=>{calls++;});assert.strictEqual(calls,9);assert.strictEqual(published,hash(path.join(releaseRoot,'publish/RovarinSetup.exe')));
+    let calls=0;const published=await verifyAndPublish(releaseRoot,async()=>{calls++;});assert.strictEqual(calls,10);assert.strictEqual(published,hash(path.join(releaseRoot,'publish/RovarinSetup.exe')));
     const prior=fs.readFileSync(path.join(releaseRoot,'publish/RovarinSetup.exe'));
     await assert.rejects(verifyAndPublish(releaseRoot,async()=>{throw new Error('mock installer failed');}),/mock installer failed/);assert(fs.readFileSync(path.join(releaseRoot,'publish/RovarinSetup.exe')).equals(prior));
     await assert.rejects(verifyAndPublish(releaseRoot,async()=>{fs.writeFileSync(path.join(releaseRoot,'dist/RovarinSetup.exe'),'changed during verification');}),/Build changed/);assert(fs.readFileSync(path.join(releaseRoot,'publish/RovarinSetup.exe')).equals(prior));
@@ -662,7 +674,7 @@ async function main() {
     console.log('PASS payload hashes/licenses/no secrets, signed production package selection, fixed UAC flags, local address enforcement, result mapping and in-flight guard');
     // Isolated installed structure, random port, no startup/driver changes.
     const app = path.join(temp, 'app'); fs.mkdirSync(app);
-    for (const name of ['power-controls.js','server.js','diagnostics.js','maintenance-service.js','server-lifecycle.js','pin-manager.js','process-termination.js', 'app-manager.js','leftover-manager.js','enhanced-support.js','uninstall-manager.js', 'update-manager.js','cpu-temperature-provider.js','temperature-manager.js','maintenance.js','process-stats.js','package.json']) fs.copyFileSync(path.join(root,name),path.join(app,name));
+    for (const name of [...require('../server-lifecycle').ROOT_SERVER_FILES, 'package.json']) fs.copyFileSync(path.join(root,name),path.join(app,name));
     fs.writeFileSync(path.join(app,'installation.json'),'{}');
     fs.mkdirSync(path.join(temp,'data'),{recursive:true});
     const fixturePins=require('../pin-manager');fixturePins.writeConfig(path.join(temp,'data/config.json'),{pin:fixturePins.generatePin()});
