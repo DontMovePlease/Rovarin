@@ -15,7 +15,7 @@
 ![Source available](https://img.shields.io/badge/license-PolyForm_Noncommercial-617184)
 
 
-[**Download for Windows**](https://github.com/DontMovePlease/Rovarin/releases/download/v0.6.0/RovarinSetup.exe) · [Release notes](https://github.com/DontMovePlease/Rovarin/releases) · [Website](https://rovarinofficial.com/) · [Report a bug](https://github.com/DontMovePlease/Rovarin/issues/new/choose)
+[**Download for Windows**](https://github.com/DontMovePlease/Rovarin/releases/download/v0.6.2/RovarinSetup.exe) · [Release notes](https://github.com/DontMovePlease/Rovarin/releases) · [Website](https://rovarinofficial.com/) · [Report a bug](https://github.com/DontMovePlease/Rovarin/issues/new/choose)
 
 
 </div>
@@ -100,14 +100,14 @@ Vendor uninstallers may require interaction or local Windows administrator appro
 
 ## Install on Windows
 
-Current version: 0.6.0 Experimental Alpha (prerelease)
+Current Windows version: 0.6.2 Experimental Alpha (prerelease)
 
 
 
 **Requirements:** Windows 11 x64, a standard Windows user account, and Microsoft's WebView2 Runtime. The Node.js runtime is bundled; no separate Node/npm installation is needed. If WebView2 is missing, the app links to Microsoft's official runtime installer.
 
 
-1. Download **RovarinSetup.exe** under **Assets** on the [newest published release](https://github.com/DontMovePlease/Rovarin/releases). Do not use GitHub's source ZIP as the installer.
+1. Download **RovarinSetup.exe** under **Assets** on the [v0.6.2 Windows prerelease](https://github.com/DontMovePlease/Rovarin/releases/tag/v0.6.2). Do not use GitHub's source ZIP as the installer.
 2. Run it under the Windows account that will use Rovarin. The unsigned installer may trigger SmartScreen; inspect the source/release and checksum before deciding whether to run it. No signing or reputation guarantee is claimed.
 3. Choose whether to start Rovarin with Windows. This is enabled by default and runs the backend quietly at sign-in, without a Windows service or scheduled task.
 4. Optional **Enhanced CPU Temperature** installs the signed PawnIO driver through Windows UAC. You may skip it; Rovarin remains usable without CPU temperature.
@@ -249,7 +249,7 @@ The published v0.6.0 prerelease includes a separate [portable Linux preview](htt
 
 The current source is available for inspection and noncommercial modifications. Runtime, frontend and native-shell sources are in this repository; no separate desktop dashboard is maintained. Personal planning and coding-agent documents are kept local.
 
-Source may include newer branding and development improvements than the published v0.6.0 downloads. Those downloads remain the exact verified release; newer source is not automatically a new accepted package.
+Source may include changes that are not in the published packages. The Windows installer and the separate Linux preview are versioned independently; newer source is not automatically a new accepted package.
 
 
 <details>
